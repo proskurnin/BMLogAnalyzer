@@ -5,23 +5,32 @@ CLI-first analyzer for BM PaymentStart response logs.
 ## Run
 
 ```bash
-python main.py --path ./_workdir/input
+python3 main.py --path ./_workdir/input
 ```
 
 Optional filters:
 
 ```bash
-python main.py --path ./_workdir/input --date 2026-04-29 --reader TT --bm 4.4.12
+python3 main.py --path ./_workdir/input --date 2026-04-29 --reader TT --bm 4.4.12
 ```
+
+Archives are extracted into `_workdir/extracted` before analysis. The scanner reads `.log`, `.gz`, and `.zip` sources.
 
 Generated reports:
 
 * `_workdir/reports/parsed_events.csv`
 * `_workdir/reports/summary_by_code.csv`
 * `_workdir/reports/summary_by_bm_version.csv`
+* `_workdir/reports/summary_by_reader_type.csv`
+* `_workdir/reports/summary_by_reader_firmware.csv`
+* `_workdir/reports/summary_by_classification.csv`
+* `_workdir/reports/summary_by_duration_bucket.csv`
+* `_workdir/reports/unknown_codes.csv`
+* `_workdir/reports/diagnostics.csv`
 
 ## Tests
 
 ```bash
-python -m pytest
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pytest
 ```

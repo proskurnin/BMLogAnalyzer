@@ -12,6 +12,22 @@ class LogLine:
 
 
 @dataclass(frozen=True)
+class DiagnosticLine:
+    source_file: str
+    line_number: int
+    reason: str
+    raw_line: str
+
+
+@dataclass(frozen=True)
+class ExtractionResult:
+    input_path: str
+    extracted_dir: str
+    extracted_files: list[str] = field(default_factory=list)
+    skipped_files: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class PaymentEvent:
     source_file: str
     line_number: int
@@ -48,3 +64,11 @@ class AnalysisResult:
     duration_buckets: dict[str, int] = field(default_factory=dict)
     p90_ms: float | None = None
     p95_ms: float | None = None
+
+
+@dataclass(frozen=True)
+class PipelineStats:
+    scanned_lines: int
+    malformed_payment_lines: int
+    extracted_files: int
+    diagnostics: list[DiagnosticLine] = field(default_factory=list)

@@ -15,7 +15,7 @@ DURATION_RE = re.compile(r"\bduration\s*=\s*(?P<duration>\d+)\s*ms\b", re.IGNORE
 
 
 def parse_payment_start_response(line: str, source_file: str = "", line_number: int = 0) -> PaymentEvent | None:
-    if not PAYMENT_RESP_RE.search(line):
+    if not is_payment_start_response_line(line):
         return None
 
     timestamp_match = TIMESTAMP_RE.search(line)
@@ -23,6 +23,9 @@ def parse_payment_start_response(line: str, source_file: str = "", line_number: 
     message_match = MESSAGE_RE.search(line)
     duration_match = DURATION_RE.search(line)
     package_info = parse_package(line)
+
+    if code_match is None and message_match is None:
+        return None
 
     timestamp = parse_timestamp(timestamp_match.group("timestamp")) if timestamp_match else None
     code = int(code_match.group("code")) if code_match else None
@@ -49,3 +52,7 @@ def parse_payment_start_response(line: str, source_file: str = "", line_number: 
 def _clean_message(value: str) -> str | None:
     cleaned = value.strip()
     return cleaned or None
+
+
+def is_payment_start_response_line(line: str) -> bool:
+    return PAYMENT_RESP_RE.search(line) is not None
