@@ -1,0 +1,3 @@
+input_path: ./_workdir/input
+reports_dir: ./_workdir/reports
+extracted_dir: ./_workdir/extracted

@@ -1,0 +1,51 @@
+from __future__ import annotations
+
+import re
+
+from core.models import PaymentEvent
+from parsers.reader_parser import parse_reader_firmware
+from parsers.timestamp_parser import parse_timestamp
+from parsers.version_parser import parse_package
+
+TIMESTAMP_RE = re.compile(r"^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?)")
+PAYMENT_RESP_RE = re.compile(r"\bPaymentStart\s*,?\s*resp\b", re.IGNORECASE)
+CODE_RE = re.compile(r"\bCode\s*:\s*(?P<code>-?\d+)\b")
+MESSAGE_RE = re.compile(r"\bMessage\s*:\s*(?P<message>.*?)(?:\s*}\s*|\s+duration\s*=|\s+p\s*:|$)")
+DURATION_RE = re.compile(r"\bduration\s*=\s*(?P<duration>\d+)\s*ms\b", re.IGNORECASE)
+
+
+def parse_payment_start_response(line: str, source_file: str = "", line_number: int = 0) -> PaymentEvent | None:
+    if not PAYMENT_RESP_RE.search(line):
+        return None
+
+    timestamp_match = TIMESTAMP_RE.search(line)
+    code_match = CODE_RE.search(line)
+    message_match = MESSAGE_RE.search(line)
+    duration_match = DURATION_RE.search(line)
+    package_info = parse_package(line)
+
+    timestamp = parse_timestamp(timestamp_match.group("timestamp")) if timestamp_match else None
+    code = int(code_match.group("code")) if code_match else None
+    message = _clean_message(message_match.group("message")) if message_match else None
+    duration_ms = int(duration_match.group("duration")) if duration_match else None
+
+    return PaymentEvent(
+        source_file=source_file,
+        line_number=line_number,
+        timestamp=timestamp,
+        event_type="PaymentStart resp",
+        code=code,
+        message=message,
+        duration_ms=duration_ms,
+        package=package_info.package if package_info else None,
+        bm_type=package_info.bm_type if package_info else None,
+        bm_version=package_info.bm_version if package_info else None,
+        reader_type=package_info.reader_type if package_info else None,
+        reader_firmware=parse_reader_firmware(line),
+        raw_line=line,
+    )
+
+
+def _clean_message(value: str) -> str | None:
+    cleaned = value.strip()
+    return cleaned or None
