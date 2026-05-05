@@ -15,6 +15,6 @@ htmlcov/
 .idea/
 .DS_Store
 
-_workdir/*
+_workdir/**
 !_workdir/*/
 !_workdir/*/.gitkeep

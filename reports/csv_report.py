@@ -16,6 +16,7 @@ def write_csv_reports(
     output_dir.mkdir(parents=True, exist_ok=True)
     write_parsed_events(events, output_dir / "parsed_events.csv")
     write_summary(result.by_code, output_dir / "summary_by_code.csv", "code")
+    write_summary(result.by_message, output_dir / "summary_by_message.csv", "message")
     write_summary(result.by_bm_version, output_dir / "summary_by_bm_version.csv", "bm_version")
     write_summary(result.by_reader_type, output_dir / "summary_by_reader_type.csv", "reader_type")
     write_summary(result.by_reader_firmware, output_dir / "summary_by_reader_firmware.csv", "reader_firmware")
@@ -53,7 +54,7 @@ def write_parsed_events(events: list[PaymentEvent], path: Path) -> None:
                     "event_type": event.event_type,
                     "code": event.code if event.code is not None else "",
                     "message": event.message or "",
-                    "duration_ms": event.duration_ms if event.duration_ms is not None else "",
+                    "duration_ms": _format_number(event.duration_ms),
                     "package": event.package or "",
                     "bm_type": event.bm_type or "",
                     "bm_version": event.bm_version or "",
@@ -95,3 +96,11 @@ def write_diagnostics(diagnostics: list[DiagnosticLine], path: Path) -> None:
                     "raw_line": item.raw_line,
                 }
             )
+
+
+def _format_number(value: float | None) -> str:
+    if value is None:
+        return ""
+    if value.is_integer():
+        return str(int(value))
+    return str(value)

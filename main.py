@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from time import perf_counter
 
+from core.models import PipelineStepResult
 from core.pipeline import run_analysis
 from reports.console_report import render_console_summary
 from reports.csv_report import write_csv_reports
+from reports.pipeline_report import ConsolePipelineReporter
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,6 +27,7 @@ def main() -> int:
     input_path = Path(args.path)
     reports_dir = Path(args.reports_dir)
     extracted_dir = Path(args.extracted_dir)
+    pipeline_reporter = ConsolePipelineReporter()
 
     events, result, stats = run_analysis(
         input_path,
@@ -31,10 +35,38 @@ def main() -> int:
         date_filter=args.date,
         reader_filter=args.reader,
         bm_filter=args.bm,
+        progress_callback=pipeline_reporter.callback,
     )
-    write_csv_reports(events, result, reports_dir, diagnostics=stats.diagnostics)
+    csv_started_at = perf_counter()
+    try:
+        pipeline_reporter.callback("start", "write_csv_reports")
+        write_csv_reports(events, result, reports_dir, diagnostics=stats.diagnostics)
+        csv_step = PipelineStepResult(
+            name="write_csv_reports",
+            status="ok",
+            duration_ms=(perf_counter() - csv_started_at) * 1000,
+            errors=0,
+            details={
+                "reports_dir": str(reports_dir),
+                "files": 9,
+            },
+        )
+        pipeline_reporter.callback("finish", csv_step)
+        stats.steps.append(csv_step)
+    except Exception as exc:
+        csv_step = PipelineStepResult(
+            name="write_csv_reports",
+            status="failed",
+            duration_ms=(perf_counter() - csv_started_at) * 1000,
+            errors=1,
+            details={"reports_dir": str(reports_dir), "error": str(exc)},
+        )
+        pipeline_reporter.callback("finish", csv_step)
+        stats.steps.append(csv_step)
+        raise
     print(render_console_summary(result, stats=stats))
     print(f"CSV reports: {reports_dir}")
+    pipeline_reporter.print_total()
     return 0
 
 

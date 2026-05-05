@@ -20,6 +20,7 @@ Generated reports:
 
 * `_workdir/reports/parsed_events.csv`
 * `_workdir/reports/summary_by_code.csv`
+* `_workdir/reports/summary_by_message.csv`
 * `_workdir/reports/summary_by_bm_version.csv`
 * `_workdir/reports/summary_by_reader_type.csv`
 * `_workdir/reports/summary_by_reader_firmware.csv`

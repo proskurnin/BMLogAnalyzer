@@ -22,3 +22,12 @@ def test_pipeline_collects_diagnostics_for_malformed_payment_resp(tmp_path):
     assert stats.scanned_lines == 2
     assert stats.malformed_payment_lines == 1
     assert stats.diagnostics[0].reason == "payment_start_resp_parse_failed"
+    assert [step.name for step in stats.steps] == [
+        "extract_archives",
+        "scan_and_parse_logs",
+        "aggregate_statistics",
+    ]
+    assert stats.steps[1].status == "completed_with_errors"
+    assert stats.steps[1].errors == 1
+    assert stats.steps[1].details["scanned_lines"] == 2
+    assert stats.steps[1].details["parsed_events"] == 1

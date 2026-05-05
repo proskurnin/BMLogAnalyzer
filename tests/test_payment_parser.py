@@ -49,5 +49,37 @@ def test_handles_missing_duration():
     assert event.code == 17
 
 
+def test_parses_structured_bm_log_format():
+    line = (
+        'time="2026-04-25 11:30:13.686" level=info msg="PaymentStart, resp: 508.11597ms, '
+        "{BmTrxId:[49] Code:3 MessageRus:Ошибка чтения карты MessageEng:Card reading error "
+        "VirtualCard:{VirtualUid:[]} BmSign:[109]}}, error: no error "
+        'p: mgt_nbs-oti-4.4.7, v: .20260127.120207"'
+    )
+
+    event = parse_payment_start_response(line)
+
+    assert event is not None
+    assert event.timestamp.isoformat(sep=" ") == "2026-04-25 11:30:13.686000"
+    assert event.code == 3
+    assert event.message == "Ошибка чтения карты"
+    assert event.duration_ms == 508.11597
+    assert event.bm_version == "4.4.7"
+    assert event.reader_type == "OTI"
+
+
+def test_parses_seconds_duration_as_ms():
+    line = (
+        'time="2026-04-25 09:01:32.337" level=info msg="PaymentStart, resp: 2.396398195s, '
+        "{Code:0 MessageRus:Проходите MessageEng:Go VirtualCard:{VirtualUid:[]}}, "
+        'error: no error p: mgt_nbs-oti-4.4.7"'
+    )
+
+    event = parse_payment_start_response(line)
+
+    assert event is not None
+    assert event.duration_ms == 2396.398195
+
+
 def test_malformed_non_payment_line_returns_none():
     assert parse_payment_start_response("not a payment line") is None

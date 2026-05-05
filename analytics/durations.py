@@ -3,7 +3,7 @@ from __future__ import annotations
 BUCKETS = ("<300 ms", "300-500 ms", "500-1000 ms", "1000-2000 ms", ">2000 ms", "missing duration")
 
 
-def duration_bucket(duration_ms: int | None) -> str:
+def duration_bucket(duration_ms: float | None) -> str:
     if duration_ms is None:
         return "missing duration"
     if duration_ms < 300:
@@ -17,7 +17,7 @@ def duration_bucket(duration_ms: int | None) -> str:
     return ">2000 ms"
 
 
-def percentile(values: list[int], percentile_value: int) -> float | None:
+def percentile(values: list[float], percentile_value: int) -> float | None:
     if not values:
         return None
     ordered = sorted(values)

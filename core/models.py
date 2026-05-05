@@ -67,8 +67,19 @@ class AnalysisResult:
 
 
 @dataclass(frozen=True)
+class PipelineStepResult:
+    name: str
+    status: str
+    duration_ms: float
+    errors: int
+    details: dict[str, str | int | float | None] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class PipelineStats:
     scanned_lines: int
     malformed_payment_lines: int
     extracted_files: int
+    skipped_archives: int = 0
     diagnostics: list[DiagnosticLine] = field(default_factory=list)
+    steps: list[PipelineStepResult] = field(default_factory=list)
