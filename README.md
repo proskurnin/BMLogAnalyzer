@@ -30,6 +30,10 @@ Generated reports:
 * `_workdir/reports/unknown_codes.csv`
 * `_workdir/reports/diagnostics.csv`
 * `_workdir/reports/file_diagnostics.csv`
+* `_workdir/reports/error_events.csv`
+* `_workdir/reports/technical_error_events.csv`
+* `_workdir/reports/errors_by_file.csv`
+* `_workdir/reports/file_error_overview.csv`
 * `_workdir/reports/comparison_by_bm_version.csv`
 * `_workdir/reports/comparison_by_reader_type.csv`
 * `_workdir/reports/matrix_bm_version_by_code.csv`

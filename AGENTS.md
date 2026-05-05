@@ -197,6 +197,14 @@ Use language like:
 
 Never mix facts and assumptions.
 
+Reports must make it easy to answer:
+
+* which exact source log file was analyzed
+* which error codes and messages were found in that file
+* which line numbers contain those errors
+* which events are declines, technical errors, or unknowns
+* what raw log line supports each reported error
+
 ## Code Analysis Future
 
 The project may later inspect a local Git repository behind OpenVPN to find code related to log errors.

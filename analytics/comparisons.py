@@ -69,6 +69,65 @@ def classification_matrix_rows(events: list[PaymentEvent], dimension: str) -> li
     return rows
 
 
+def error_summary_rows(events: list[PaymentEvent]) -> list[dict[str, object]]:
+    groups: dict[tuple[str, str, int | str, str], int] = defaultdict(int)
+
+    for event in events:
+        classification = classify_code(event.code)
+        if classification == "success":
+            continue
+        key = (
+            event.source_file,
+            classification,
+            event.code if event.code is not None else MISSING,
+            event.message or MISSING,
+        )
+        groups[key] += 1
+
+    rows = []
+    for (source_file, classification, code, message), count in sorted(groups.items()):
+        rows.append(
+            {
+                "source_file": source_file,
+                "classification": classification,
+                "code": code,
+                "message": message,
+                "count": count,
+            }
+        )
+    return rows
+
+
+def file_error_overview_rows(events: list[PaymentEvent]) -> list[dict[str, object]]:
+    classifications = ("success", "decline", "technical_error", "unknown")
+    groups: dict[str, dict[str, int]] = defaultdict(lambda: {classification: 0 for classification in classifications})
+    groups_with_errors: set[str] = set()
+
+    for event in events:
+        classification = classify_code(event.code)
+        groups[event.source_file][classification] += 1
+        if classification != "success":
+            groups_with_errors.add(event.source_file)
+
+    rows = []
+    for source_file in sorted(groups_with_errors):
+        counts = groups[source_file]
+        total = sum(counts.values())
+        error_total = counts["decline"] + counts["technical_error"] + counts["unknown"]
+        rows.append(
+            {
+                "source_file": source_file,
+                "total_events": total,
+                "error_events": error_total,
+                "success": counts["success"],
+                "decline": counts["decline"],
+                "technical_error": counts["technical_error"],
+                "unknown": counts["unknown"],
+            }
+        )
+    return rows
+
+
 def _dimension_value(event: PaymentEvent, dimension: str) -> str:
     value = getattr(event, dimension)
     return str(value) if value else MISSING

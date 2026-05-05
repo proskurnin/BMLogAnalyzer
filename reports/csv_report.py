@@ -3,8 +3,14 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from analytics.classifiers import CODE_CLASSIFICATIONS, CODE_DESCRIPTIONS, is_known_code
-from analytics.comparisons import classification_matrix_rows, code_matrix_rows, comparison_rows
+from analytics.classifiers import CODE_CLASSIFICATIONS, CODE_DESCRIPTIONS, classify_code, is_known_code
+from analytics.comparisons import (
+    classification_matrix_rows,
+    code_matrix_rows,
+    comparison_rows,
+    error_summary_rows,
+    file_error_overview_rows,
+)
 from core.models import AnalysisResult, DiagnosticLine, PaymentEvent
 
 
@@ -29,6 +35,10 @@ def write_csv_reports(
     write_known_codes(output_dir / "known_codes.csv")
     write_diagnostics(diagnostics or [], output_dir / "diagnostics.csv")
     write_file_diagnostics(file_stats or [], output_dir / "file_diagnostics.csv")
+    write_error_events(events, output_dir / "error_events.csv")
+    write_technical_error_events(events, output_dir / "technical_error_events.csv")
+    write_error_summary_by_file(events, output_dir / "errors_by_file.csv")
+    write_file_error_overview(events, output_dir / "file_error_overview.csv")
     write_comparison_report(events, output_dir / "comparison_by_bm_version.csv", "bm_version")
     write_comparison_report(events, output_dir / "comparison_by_reader_type.csv", "reader_type")
     write_code_matrix_report(events, output_dir / "matrix_bm_version_by_code.csv", "bm_version")
@@ -136,6 +146,67 @@ def write_file_diagnostics(file_stats, path: Path) -> None:
         writer.writeheader()
         for item in file_stats:
             writer.writerow({field: getattr(item, field) for field in fieldnames})
+
+
+def write_error_events(events: list[PaymentEvent], path: Path) -> None:
+    write_filtered_events(
+        [event for event in events if classify_code(event.code) != "success"],
+        path,
+        include_classification=True,
+    )
+
+
+def write_technical_error_events(events: list[PaymentEvent], path: Path) -> None:
+    write_filtered_events(
+        [event for event in events if classify_code(event.code) == "technical_error"],
+        path,
+        include_classification=True,
+    )
+
+
+def write_filtered_events(events: list[PaymentEvent], path: Path, *, include_classification: bool = False) -> None:
+    fieldnames = [
+        "source_file",
+        "line_number",
+        "timestamp",
+        "classification",
+        "code",
+        "message",
+        "duration_ms",
+        "bm_version",
+        "reader_type",
+        "reader_firmware",
+        "raw_line",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for event in events:
+            writer.writerow(
+                {
+                    "source_file": event.source_file,
+                    "line_number": event.line_number,
+                    "timestamp": event.timestamp.isoformat(sep=" ") if event.timestamp else "",
+                    "classification": classify_code(event.code) if include_classification else "",
+                    "code": event.code if event.code is not None else "",
+                    "message": event.message or "",
+                    "duration_ms": _format_number(event.duration_ms),
+                    "bm_version": event.bm_version or "",
+                    "reader_type": event.reader_type or "",
+                    "reader_firmware": event.reader_firmware or "",
+                    "raw_line": event.raw_line,
+                }
+            )
+
+
+def write_error_summary_by_file(events: list[PaymentEvent], path: Path) -> None:
+    fieldnames = ["source_file", "classification", "code", "message", "count"]
+    _write_dict_rows(path, fieldnames, error_summary_rows(events))
+
+
+def write_file_error_overview(events: list[PaymentEvent], path: Path) -> None:
+    fieldnames = ["source_file", "total_events", "error_events", "success", "decline", "technical_error", "unknown"]
+    _write_dict_rows(path, fieldnames, file_error_overview_rows(events))
 
 
 def write_comparison_report(events: list[PaymentEvent], path: Path, dimension: str) -> None:
