@@ -14,7 +14,11 @@ from reports.pipeline_report import ConsolePipelineReporter
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Analyze BM PaymentStart response logs.")
-    parser.add_argument("--path", default="./_workdir/input", help="Input file or folder with .log, .gz, .zip sources.")
+    parser.add_argument(
+        "--path",
+        default="./_workdir/input",
+        help="Input file or folder with .log, .gz, .zip, .tar.gz, .tgz, .rar sources.",
+    )
     parser.add_argument("--date", help="Filter by event date in YYYY-MM-DD format.")
     parser.add_argument("--reader", choices=["OTI", "TT", "oti", "tt"], help="Filter by reader type.")
     parser.add_argument("--bm", help="Filter by BM version, for example 4.4.12.")
