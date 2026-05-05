@@ -40,7 +40,14 @@ def main() -> int:
     csv_started_at = perf_counter()
     try:
         pipeline_reporter.callback("start", "write_csv_reports")
-        write_csv_reports(events, result, reports_dir, diagnostics=stats.diagnostics, file_stats=stats.files)
+        write_csv_reports(
+            events,
+            result,
+            reports_dir,
+            diagnostics=stats.diagnostics,
+            file_stats=stats.files,
+            pipeline_stats=stats,
+        )
         csv_step = PipelineStepResult(
             name="write_csv_reports",
             status="ok",
@@ -48,7 +55,7 @@ def main() -> int:
             errors=0,
             details={
                 "reports_dir": str(reports_dir),
-                "files": 22,
+                "files": 24,
             },
         )
         pipeline_reporter.callback("finish", csv_step)

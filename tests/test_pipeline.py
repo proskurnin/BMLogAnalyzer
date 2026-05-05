@@ -1,4 +1,5 @@
 from core.pipeline import run_analysis
+import zipfile
 
 
 def test_pipeline_collects_diagnostics_for_malformed_payment_resp(tmp_path):
@@ -37,3 +38,24 @@ def test_pipeline_collects_diagnostics_for_malformed_payment_resp(tmp_path):
     assert stats.files[0].parsed_payment_resp_lines == 1
     assert stats.files[0].selected_payment_resp_events == 1
     assert stats.files[0].malformed_payment_resp_lines == 1
+    assert stats.input_files == [str(input_dir / "sample.log")]
+    assert stats.analyzed_files == [str(input_dir / "sample.log")]
+
+
+def test_pipeline_does_not_analyze_zip_twice(tmp_path):
+    input_dir = tmp_path / "input"
+    extracted_dir = tmp_path / "extracted"
+    input_dir.mkdir()
+    archive_path = input_dir / "logs.zip"
+    line = "2026-04-29 20:50:41.343 PaymentStart, resp: {Code:0 Message:OK} duration=412 ms p: mgt_nbs-oti-4.4.12"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("nested/a.log", line)
+
+    events, result, stats = run_analysis(input_dir, extracted_dir=extracted_dir)
+
+    assert len(events) == 1
+    assert result.total == 1
+    assert stats.input_files == [str(archive_path)]
+    assert stats.extracted_file_paths == [str(extracted_dir / "logs.zip" / "nested" / "a.log")]
+    assert stats.analyzed_files == [str(extracted_dir / "logs.zip" / "nested" / "a.log")]
+    assert all("!" not in source for source in stats.analyzed_files)

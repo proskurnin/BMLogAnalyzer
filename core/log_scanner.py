@@ -7,23 +7,26 @@ from pathlib import Path
 
 from core.models import LogLine
 
-SUPPORTED_SUFFIXES = {".log", ".gz", ".zip"}
+ARCHIVE_SUFFIXES = {".gz", ".zip"}
+SUPPORTED_SUFFIXES = {".log", *ARCHIVE_SUFFIXES}
 
 
-def scan_logs(path: Path | str) -> Iterator[LogLine]:
+def scan_logs(path: Path | str, *, include_archives: bool = True) -> Iterator[LogLine]:
     root = Path(path)
-    for source in _iter_sources(root):
+    for source in iter_log_sources(root, include_archives=include_archives):
         yield from _read_source(source)
 
 
-def _iter_sources(root: Path) -> Iterable[Path]:
-    if root.is_file() and root.suffix.lower() in SUPPORTED_SUFFIXES:
+def iter_log_sources(root: Path | str, *, include_archives: bool = True) -> Iterable[Path]:
+    root = Path(root)
+    suffixes = SUPPORTED_SUFFIXES if include_archives else {".log"}
+    if root.is_file() and root.suffix.lower() in suffixes and not _is_tar_gz(root):
         yield root
         return
 
     if root.is_dir():
         for path in sorted(root.rglob("*")):
-            if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES:
+            if path.is_file() and path.suffix.lower() in suffixes and not _is_tar_gz(path):
                 yield path
 
 
@@ -35,6 +38,11 @@ def _read_source(path: Path) -> Iterator[LogLine]:
         yield from _iter_text_lines(path, gzip.open(path, "rt", encoding="utf-8", errors="replace"))
     else:
         yield from _iter_text_lines(path, path.open("rt", encoding="utf-8", errors="replace"))
+
+
+def _is_tar_gz(path: Path) -> bool:
+    name = path.name.lower()
+    return name.endswith(".tar.gz") or name.endswith(".tgz")
 
 
 def _read_zip(path: Path) -> Iterator[LogLine]:

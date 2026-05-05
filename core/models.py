@@ -23,6 +23,7 @@ class DiagnosticLine:
 class ExtractionResult:
     input_path: str
     extracted_dir: str
+    source_archives: list[str] = field(default_factory=list)
     extracted_files: list[str] = field(default_factory=list)
     skipped_files: list[str] = field(default_factory=list)
 
@@ -91,6 +92,10 @@ class PipelineStats:
     malformed_payment_lines: int
     extracted_files: int
     skipped_archives: int = 0
+    input_files: list[str] = field(default_factory=list)
+    analyzed_files: list[str] = field(default_factory=list)
+    extracted_file_paths: list[str] = field(default_factory=list)
+    skipped_archive_paths: list[str] = field(default_factory=list)
     diagnostics: list[DiagnosticLine] = field(default_factory=list)
     steps: list[PipelineStepResult] = field(default_factory=list)
     files: list[FileProcessingStats] = field(default_factory=list)

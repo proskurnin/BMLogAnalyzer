@@ -30,6 +30,8 @@ Generated reports:
 * `_workdir/reports/unknown_codes.csv`
 * `_workdir/reports/diagnostics.csv`
 * `_workdir/reports/file_diagnostics.csv`
+* `_workdir/reports/bundle_manifest.csv`
+* `_workdir/reports/bundle_manifest.json`
 * `_workdir/reports/error_events.csv`
 * `_workdir/reports/technical_error_events.csv`
 * `_workdir/reports/errors_by_file.csv`

@@ -17,8 +17,10 @@ def extract_archives(input_path: Path | str, extracted_dir: Path | str) -> Extra
 
     extracted_files: list[str] = []
     skipped_files: list[str] = []
+    source_archives: list[str] = []
 
     for archive_path in _iter_archives(root):
+        source_archives.append(str(archive_path))
         try:
             if archive_path.suffix.lower() == ".zip":
                 extracted_files.extend(_extract_zip(archive_path, output_root))
@@ -30,6 +32,7 @@ def extract_archives(input_path: Path | str, extracted_dir: Path | str) -> Extra
     return ExtractionResult(
         input_path=str(root),
         extracted_dir=str(output_root),
+        source_archives=source_archives,
         extracted_files=extracted_files,
         skipped_files=skipped_files,
     )
@@ -56,7 +59,7 @@ def _extract_zip(path: Path, output_root: Path) -> list[str]:
             if member.is_dir():
                 continue
             member_path = Path(member.filename)
-            if member_path.suffix.lower() not in {".log", ".gz"}:
+            if not _is_supported_log_member(member_path):
                 continue
             target_path = _safe_join(target_root, member_path)
             target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -72,6 +75,13 @@ def _extract_gz(path: Path, output_root: Path) -> Path:
     with gzip.open(path, "rb") as source, target_path.open("wb") as target:
         shutil.copyfileobj(source, target)
     return target_path
+
+
+def _is_supported_log_member(path: Path) -> bool:
+    name = path.name.lower()
+    if name.endswith(".tar.gz") or name.endswith(".tgz"):
+        return False
+    return path.suffix.lower() in {".log", ".gz"}
 
 
 def _safe_stem(path: Path) -> str:

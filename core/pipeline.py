@@ -8,7 +8,7 @@ from typing import Any
 
 from analytics.counters import analyze_events
 from core.archive_extractor import extract_archives
-from core.log_scanner import scan_logs
+from core.log_scanner import iter_log_sources, scan_logs
 from core.models import (
     AnalysisResult,
     DiagnosticLine,
@@ -85,9 +85,10 @@ def run_analysis(
             )
         )
 
-    scan_roots = [Path(input_path)]
+    input_direct_files = [str(path) for path in iter_log_sources(input_path, include_archives=False)]
+    scan_roots: list[tuple[Path, bool]] = [(Path(input_path), False)]
     if extraction.extracted_files:
-        scan_roots.append(Path(extraction.extracted_dir))
+        scan_roots.append((Path(extraction.extracted_dir), True))
 
     events: list[PaymentEvent] = []
     diagnostics: list[DiagnosticLine] = []
@@ -95,8 +96,8 @@ def run_analysis(
     scanned_lines = 0
 
     with _Stage("scan_and_parse_logs", progress_callback) as stage:
-        for scan_root in scan_roots:
-            for log_line in scan_logs(scan_root):
+        for scan_root, include_archives in scan_roots:
+            for log_line in scan_logs(scan_root, include_archives=include_archives):
                 scanned_lines += 1
                 stats_for_file = file_stats.setdefault(
                     log_line.source_file,
@@ -157,6 +158,10 @@ def run_analysis(
         malformed_payment_lines=len(diagnostics),
         extracted_files=len(extraction.extracted_files),
         skipped_archives=len(extraction.skipped_files),
+        input_files=sorted([*input_direct_files, *extraction.source_archives]),
+        analyzed_files=sorted(file_stats),
+        extracted_file_paths=sorted(extraction.extracted_files),
+        skipped_archive_paths=sorted(extraction.skipped_files),
         diagnostics=diagnostics,
         steps=steps,
         files=sorted(file_stats.values(), key=lambda item: item.source_file),

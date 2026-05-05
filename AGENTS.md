@@ -205,6 +205,14 @@ Reports must make it easy to answer:
 * which events are declines, technical errors, or unknowns
 * what raw log line supports each reported error
 
+Archive handling rules:
+
+* do not analyze the same uploaded archive both as `input.zip!...` and as extracted files
+* if an archive is extracted, analyze the extracted log files as the factual source files
+* direct `.log` files in the input folder may be analyzed directly
+* `.tar.gz` / `.tgz` must not be treated as plain gzip text logs; add explicit tar extraction support before analyzing them
+* generated manifests must list input files, extracted files, analyzed files, and skipped archives separately
+
 ## Code Analysis Future
 
 The project may later inspect a local Git repository behind OpenVPN to find code related to log errors.

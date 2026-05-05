@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 
 from analytics.classifiers import CODE_CLASSIFICATIONS, CODE_DESCRIPTIONS, classify_code, is_known_code
@@ -11,7 +12,7 @@ from analytics.comparisons import (
     error_summary_rows,
     file_error_overview_rows,
 )
-from core.models import AnalysisResult, DiagnosticLine, PaymentEvent
+from core.models import AnalysisResult, DiagnosticLine, PaymentEvent, PipelineStats
 
 
 def write_csv_reports(
@@ -20,6 +21,7 @@ def write_csv_reports(
     reports_dir: Path | str,
     diagnostics: list[DiagnosticLine] | None = None,
     file_stats=None,
+    pipeline_stats: PipelineStats | None = None,
 ) -> None:
     output_dir = Path(reports_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -35,6 +37,8 @@ def write_csv_reports(
     write_known_codes(output_dir / "known_codes.csv")
     write_diagnostics(diagnostics or [], output_dir / "diagnostics.csv")
     write_file_diagnostics(file_stats or [], output_dir / "file_diagnostics.csv")
+    write_bundle_manifest(pipeline_stats, output_dir / "bundle_manifest.csv")
+    write_bundle_manifest_json(pipeline_stats, output_dir / "bundle_manifest.json")
     write_error_events(events, output_dir / "error_events.csv")
     write_technical_error_events(events, output_dir / "technical_error_events.csv")
     write_error_summary_by_file(events, output_dir / "errors_by_file.csv")
@@ -146,6 +150,39 @@ def write_file_diagnostics(file_stats, path: Path) -> None:
         writer.writeheader()
         for item in file_stats:
             writer.writerow({field: getattr(item, field) for field in fieldnames})
+
+
+def write_bundle_manifest(stats: PipelineStats | None, path: Path) -> None:
+    fieldnames = ["kind", "path"]
+    rows = _manifest_rows(stats)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def write_bundle_manifest_json(stats: PipelineStats | None, path: Path) -> None:
+    data = {
+        "input_files": stats.input_files if stats else [],
+        "extracted_files": stats.extracted_file_paths if stats else [],
+        "analyzed_files": stats.analyzed_files if stats else [],
+        "skipped_archives": stats.skipped_archive_paths if stats else [],
+    }
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _manifest_rows(stats: PipelineStats | None) -> list[dict[str, str]]:
+    if stats is None:
+        return []
+    rows: list[dict[str, str]] = []
+    for kind, paths in (
+        ("input", stats.input_files),
+        ("extracted", stats.extracted_file_paths),
+        ("analyzed", stats.analyzed_files),
+        ("skipped_archive", stats.skipped_archive_paths),
+    ):
+        rows.extend({"kind": kind, "path": path} for path in paths)
+    return rows
 
 
 def write_error_events(events: list[PaymentEvent], path: Path) -> None:
