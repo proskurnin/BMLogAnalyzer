@@ -14,7 +14,7 @@ Optional filters:
 python3 main.py --path ./_workdir/input --date 2026-04-29 --reader TT --bm 4.4.12
 ```
 
-Archives are extracted into `_workdir/extracted` before analysis. The scanner reads `.log`, `.gz`, and `.zip` sources.
+Archives are extracted into `_workdir/extracted` before analysis. The scanner reads `.log`, `.gz`, `.zip`, `.tar.gz`, `.tgz`, and `.rar` sources. RAR extraction requires `bsdtar`.
 
 Generated reports:
 
@@ -38,6 +38,7 @@ Generated reports:
 * `_workdir/reports/summary_repeat_attempts_after_failure.csv`
 * `_workdir/reports/check_results.csv`
 * `_workdir/reports/check_summary.csv`
+* `_workdir/reports/analysis_report.html`
 * `_workdir/reports/errors_by_file.csv`
 * `_workdir/reports/file_error_overview.csv`
 * `_workdir/reports/comparison_by_bm_version.csv`

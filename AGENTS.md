@@ -22,7 +22,7 @@ BM Log Analyzer should:
 
 1. Accept folders with BM logs and archives.
 2. Unpack archives.
-3. Scan `.log`, `.gz`, `.zip` sources.
+3. Scan `.log`, `.gz`, `.zip`, `.tar.gz`, `.tgz`, `.rar` sources.
 4. Parse PaymentStart events.
 5. Extract codes, messages, durations, BM versions, reader types and reader firmware versions.
 6. Aggregate statistics.

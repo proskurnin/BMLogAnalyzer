@@ -8,6 +8,7 @@ from core.models import PipelineStepResult
 from core.pipeline import run_analysis
 from reports.console_report import render_console_summary
 from reports.csv_report import write_csv_reports
+from reports.html_report import write_html_report
 from reports.pipeline_report import ConsolePipelineReporter
 
 
@@ -39,7 +40,7 @@ def main() -> int:
     )
     csv_started_at = perf_counter()
     try:
-        pipeline_reporter.callback("start", "write_csv_reports")
+        pipeline_reporter.callback("start", "write_reports")
         write_csv_reports(
             events,
             result,
@@ -48,21 +49,22 @@ def main() -> int:
             file_stats=stats.files,
             pipeline_stats=stats,
         )
+        write_html_report(events, result, reports_dir / "analysis_report.html", stats=stats)
         csv_step = PipelineStepResult(
-            name="write_csv_reports",
+            name="write_reports",
             status="ok",
             duration_ms=(perf_counter() - csv_started_at) * 1000,
             errors=0,
             details={
                 "reports_dir": str(reports_dir),
-                "files": 28,
+                "files": 29,
             },
         )
         pipeline_reporter.callback("finish", csv_step)
         stats.steps.append(csv_step)
     except Exception as exc:
         csv_step = PipelineStepResult(
-            name="write_csv_reports",
+            name="write_reports",
             status="failed",
             duration_ms=(perf_counter() - csv_started_at) * 1000,
             errors=1,
@@ -72,7 +74,7 @@ def main() -> int:
         stats.steps.append(csv_step)
         raise
     print(render_console_summary(result, stats=stats))
-    print(f"CSV reports: {reports_dir}")
+    print(f"Reports: {reports_dir}")
     pipeline_reporter.print_total()
     return 0
 
