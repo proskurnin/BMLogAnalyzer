@@ -7,13 +7,13 @@ from pathlib import Path
 
 from core.models import ExtractionResult
 
-ARCHIVE_SUFFIXES = {".zip", ".gz"}
+ARCHIVE_SUFFIXES = {".zip", ".gz", ".tgz"}
 
 
 def extract_archives(input_path: Path | str, extracted_dir: Path | str) -> ExtractionResult:
     root = Path(input_path)
     output_root = Path(extracted_dir)
-    output_root.mkdir(parents=True, exist_ok=True)
+    _prepare_extracted_dir(output_root)
 
     extracted_files: list[str] = []
     skipped_files: list[str] = []
@@ -22,7 +22,9 @@ def extract_archives(input_path: Path | str, extracted_dir: Path | str) -> Extra
     for archive_path in _iter_archives(root):
         source_archives.append(str(archive_path))
         try:
-            if archive_path.suffix.lower() == ".zip":
+            if _is_tar_gz(archive_path):
+                skipped_files.append(str(archive_path))
+            elif archive_path.suffix.lower() == ".zip":
                 extracted_files.extend(_extract_zip(archive_path, output_root))
             elif archive_path.suffix.lower() == ".gz":
                 extracted_files.append(str(_extract_gz(archive_path, output_root)))
@@ -38,14 +40,20 @@ def extract_archives(input_path: Path | str, extracted_dir: Path | str) -> Extra
     )
 
 
+def _prepare_extracted_dir(output_root: Path) -> None:
+    if output_root.exists():
+        shutil.rmtree(output_root)
+    output_root.mkdir(parents=True, exist_ok=True)
+
+
 def _iter_archives(root: Path):
-    if root.is_file() and root.suffix.lower() in ARCHIVE_SUFFIXES:
+    if root.is_file() and _is_archive_candidate(root):
         yield root
         return
 
     if root.is_dir():
         for path in sorted(root.rglob("*")):
-            if path.is_file() and path.suffix.lower() in ARCHIVE_SUFFIXES:
+            if path.is_file() and _is_archive_candidate(path):
                 yield path
 
 
@@ -79,9 +87,18 @@ def _extract_gz(path: Path, output_root: Path) -> Path:
 
 def _is_supported_log_member(path: Path) -> bool:
     name = path.name.lower()
-    if name.endswith(".tar.gz") or name.endswith(".tgz"):
+    if _is_tar_gz(path):
         return False
     return path.suffix.lower() in {".log", ".gz"}
+
+
+def _is_archive_candidate(path: Path) -> bool:
+    return path.suffix.lower() in ARCHIVE_SUFFIXES or _is_tar_gz(path)
+
+
+def _is_tar_gz(path: Path) -> bool:
+    name = path.name.lower()
+    return name.endswith(".tar.gz") or name.endswith(".tgz")
 
 
 def _safe_stem(path: Path) -> str:

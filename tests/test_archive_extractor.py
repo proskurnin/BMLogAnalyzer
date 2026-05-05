@@ -43,3 +43,30 @@ def test_skips_tar_gz_members_from_zip(tmp_path):
 
     assert result.extracted_files == [str(extracted / "logs.zip" / "bm-rotate.log.gz")]
     assert not (extracted / "logs.zip" / "bm.tar.gz").exists()
+
+
+def test_cleans_extracted_dir_before_extracting(tmp_path):
+    source = tmp_path / "logs.zip"
+    extracted = tmp_path / "extracted"
+    extracted.mkdir()
+    (extracted / "stale.log").write_text("old", encoding="utf-8")
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr("fresh.log", "new\n")
+
+    result = extract_archives(source, extracted)
+
+    assert not (extracted / "stale.log").exists()
+    assert result.extracted_files == [str(extracted / "logs.zip" / "fresh.log")]
+
+
+def test_skips_input_tar_gz_archive(tmp_path):
+    source = tmp_path / "bm.tar.gz"
+    extracted = tmp_path / "extracted"
+    with gzip.open(source, "wt", encoding="utf-8") as handle:
+        handle.write("tar payload should not be treated as a log\n")
+
+    result = extract_archives(source, extracted)
+
+    assert result.source_archives == [str(source)]
+    assert result.extracted_files == []
+    assert result.skipped_files == [str(source)]

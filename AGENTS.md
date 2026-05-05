@@ -70,6 +70,8 @@ This needs architectural design before implementation. Initial concepts:
 
 Admin-managed cases must not replace factual reports. They should add a separate validation layer on top of parsed facts.
 
+Before the web admin exists, CLI may provide built-in check cases as a first implementation of the same concept. Built-in checks must still produce evidence-backed results with source file, line number and raw log line.
+
 ## Architecture Principle
 The analysis engine must not depend on the web layer.
 

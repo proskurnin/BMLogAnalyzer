@@ -99,3 +99,28 @@ class PipelineStats:
     diagnostics: list[DiagnosticLine] = field(default_factory=list)
     steps: list[PipelineStepResult] = field(default_factory=list)
     files: list[FileProcessingStats] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class CheckCase:
+    check_id: str
+    title: str
+    description: str
+    severity: str
+    enabled: bool = True
+    version: str = "1"
+
+
+@dataclass(frozen=True)
+class CheckResult:
+    check_id: str
+    title: str
+    severity: str
+    status: str
+    source_file: str
+    line_number: int | None
+    timestamp: datetime | None
+    code: int | None
+    message: str | None
+    evidence: str
+    raw_line: str

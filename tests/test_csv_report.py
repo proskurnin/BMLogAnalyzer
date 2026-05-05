@@ -30,6 +30,8 @@ def test_writes_extended_csv_reports(tmp_path):
     assert (tmp_path / "technical_error_events.csv").exists()
     assert (tmp_path / "repeat_attempts_after_failure.csv").exists()
     assert (tmp_path / "summary_repeat_attempts_after_failure.csv").exists()
+    assert (tmp_path / "check_results.csv").exists()
+    assert (tmp_path / "check_summary.csv").exists()
     assert (tmp_path / "errors_by_file.csv").exists()
     assert (tmp_path / "file_error_overview.csv").exists()
     assert (tmp_path / "bundle_manifest.csv").exists()

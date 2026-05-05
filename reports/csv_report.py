@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from analytics.classifiers import CODE_CLASSIFICATIONS, CODE_DESCRIPTIONS, classify_code, is_known_code
+from analytics.check_cases import run_builtin_checks
 from analytics.comparisons import (
     classification_matrix_rows,
     code_matrix_rows,
@@ -13,7 +14,7 @@ from analytics.comparisons import (
     file_error_overview_rows,
 )
 from analytics.repeats import repeat_attempt_rows, repeat_attempt_summary_rows
-from core.models import AnalysisResult, DiagnosticLine, PaymentEvent, PipelineStats
+from core.models import AnalysisResult, CheckResult, DiagnosticLine, PaymentEvent, PipelineStats
 
 
 def write_csv_reports(
@@ -45,6 +46,7 @@ def write_csv_reports(
     write_error_summary_by_file(events, output_dir / "errors_by_file.csv")
     write_file_error_overview(events, output_dir / "file_error_overview.csv")
     write_repeat_attempt_reports(events, output_dir)
+    write_check_reports(events, output_dir)
     write_comparison_report(events, output_dir / "comparison_by_bm_version.csv", "bm_version")
     write_comparison_report(events, output_dir / "comparison_by_reader_type.csv", "reader_type")
     write_code_matrix_report(events, output_dir / "matrix_bm_version_by_code.csv", "bm_version")
@@ -273,6 +275,68 @@ def write_repeat_attempt_reports(events: list[PaymentEvent], output_dir: Path) -
         ["metric", "value", "message"],
         repeat_attempt_summary_rows(rows),
     )
+
+
+def write_check_reports(events: list[PaymentEvent], output_dir: Path) -> None:
+    results = run_builtin_checks(events)
+    write_check_results(results, output_dir / "check_results.csv")
+    write_check_summary(results, output_dir / "check_summary.csv")
+
+
+def write_check_results(results: list[CheckResult], path: Path) -> None:
+    fieldnames = [
+        "check_id",
+        "title",
+        "severity",
+        "status",
+        "source_file",
+        "line_number",
+        "timestamp",
+        "code",
+        "message",
+        "evidence",
+        "raw_line",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for result in results:
+            writer.writerow(
+                {
+                    "check_id": result.check_id,
+                    "title": result.title,
+                    "severity": result.severity,
+                    "status": result.status,
+                    "source_file": result.source_file,
+                    "line_number": result.line_number if result.line_number is not None else "",
+                    "timestamp": result.timestamp.isoformat(sep=" ") if result.timestamp else "",
+                    "code": result.code if result.code is not None else "",
+                    "message": result.message or "",
+                    "evidence": result.evidence,
+                    "raw_line": result.raw_line,
+                }
+            )
+
+
+def write_check_summary(results: list[CheckResult], path: Path) -> None:
+    counts: dict[tuple[str, str, str, str], int] = {}
+    for result in results:
+        key = (result.check_id, result.title, result.severity, result.status)
+        counts[key] = counts.get(key, 0) + 1
+
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["check_id", "title", "severity", "status", "count"])
+        writer.writeheader()
+        for (check_id, title, severity, status), count in sorted(counts.items()):
+            writer.writerow(
+                {
+                    "check_id": check_id,
+                    "title": title,
+                    "severity": severity,
+                    "status": status,
+                    "count": count,
+                }
+            )
 
 
 def write_comparison_report(events: list[PaymentEvent], path: Path, dimension: str) -> None:

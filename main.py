@@ -55,7 +55,7 @@ def main() -> int:
             errors=0,
             details={
                 "reports_dir": str(reports_dir),
-                "files": 26,
+                "files": 28,
             },
         )
         pipeline_reporter.callback("finish", csv_step)
