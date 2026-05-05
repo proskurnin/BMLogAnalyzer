@@ -31,6 +31,9 @@ def test_console_summary_has_structured_sections():
     assert "=== By Code ===" in summary
     assert "=== By BM version ===" in summary
     assert "=== Unknown codes ===" in summary
-    assert "• 55: 1" in summary
+    assert "• 3 (technical_error: Ошибка чтения карты): 2" in summary
+    assert "• 4 (decline: Карта в стоп-листе): 1" in summary
+    assert "• 55 (unknown): 1" in summary
     unknown_section = summary.split("=== Unknown codes ===", maxsplit=1)[1]
+    assert "• 55: 1" in unknown_section
     assert "• 4: 1" not in unknown_section

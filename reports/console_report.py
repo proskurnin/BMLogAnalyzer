@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from analytics.classifiers import is_known_code
+from analytics.classifiers import CODE_CLASSIFICATIONS, CODE_DESCRIPTIONS, is_known_code
 from core.models import AnalysisResult, PipelineStats
 from reports.pipeline_report import format_pipeline_step
 
@@ -35,7 +35,7 @@ def render_console_summary(
     if stats and stats.steps:
         lines.extend(["", "=== Pipeline steps ==="])
         lines.extend(f"• {format_pipeline_step(step).removeprefix('[PIPELINE] ')}" for step in stats.steps)
-    lines.extend(_render_mapping_section("By Code", result.by_code))
+    lines.extend(_render_mapping_section("By Code", result.by_code, formatter=_format_code_label))
     lines.extend(_render_mapping_section("By BM version", result.by_bm_version))
     unknown_codes = {
         code: count
@@ -54,11 +54,23 @@ def _format_optional(value: float | None) -> str:
     return f"{value:.2f}"
 
 
-def _render_mapping_section(title: str, values: dict[int | str, int]) -> list[str]:
+def _render_mapping_section(title: str, values: dict[int | str, int], formatter=str) -> list[str]:
     lines = ["", f"=== {title} ==="]
     if not values:
         lines.append("• no data")
         return lines
     for key, count in sorted(values.items(), key=lambda item: str(item[0])):
-        lines.append(f"• {key}: {count}")
+        lines.append(f"• {formatter(key)}: {count}")
     return lines
+
+
+def _format_code_label(code: int | str) -> str:
+    try:
+        normalized = int(code)
+    except (TypeError, ValueError):
+        return f"{code} (unknown)"
+    classification = CODE_CLASSIFICATIONS.get(normalized, "unknown")
+    description = CODE_DESCRIPTIONS.get(normalized)
+    if description:
+        return f"{normalized} ({classification}: {description})"
+    return f"{normalized} ({classification})"
