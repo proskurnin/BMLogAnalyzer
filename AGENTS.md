@@ -32,6 +32,27 @@ BM Log Analyzer should:
 10. Later connect to local Git repositories for read-only code analysis.
 11. Later integrate with Codex only for analysis, not for code changes.
 
+## Web Product Vision
+
+The future web product must work as a log archive and analysis workspace.
+
+The organization often requests logs from real BM devices. After authorization, one group of users should be able to upload logs and archives into the system for later analysis. For these users, the product is primarily a file storage/archive for operational log handoff.
+
+Another group of users should be able to open the uploaded logs, download them when needed, and immediately view analytics generated from the same stored files. For these users, the product is both a log archive and an analytics tool.
+
+Core web concepts:
+
+* authenticated access
+* uploaded log/archive storage
+* separation between upload-only and analysis users
+* list/search/filter uploaded log bundles
+* download original uploaded files
+* run analysis on selected uploaded files
+* view factual analytics reports from stored logs
+* keep uploaded raw logs and generated reports connected
+
+The web layer must still call the same core analysis engine that CLI uses.
+
 ## Architecture Principle
 The analysis engine must not depend on the web layer.
 
