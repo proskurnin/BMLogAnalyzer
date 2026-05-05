@@ -12,6 +12,7 @@ from analytics.comparisons import (
     error_summary_rows,
     file_error_overview_rows,
 )
+from analytics.repeats import repeat_attempt_rows, repeat_attempt_summary_rows
 from core.models import AnalysisResult, DiagnosticLine, PaymentEvent, PipelineStats
 
 
@@ -43,6 +44,7 @@ def write_csv_reports(
     write_technical_error_events(events, output_dir / "technical_error_events.csv")
     write_error_summary_by_file(events, output_dir / "errors_by_file.csv")
     write_file_error_overview(events, output_dir / "file_error_overview.csv")
+    write_repeat_attempt_reports(events, output_dir)
     write_comparison_report(events, output_dir / "comparison_by_bm_version.csv", "bm_version")
     write_comparison_report(events, output_dir / "comparison_by_reader_type.csv", "reader_type")
     write_code_matrix_report(events, output_dir / "matrix_bm_version_by_code.csv", "bm_version")
@@ -244,6 +246,33 @@ def write_error_summary_by_file(events: list[PaymentEvent], path: Path) -> None:
 def write_file_error_overview(events: list[PaymentEvent], path: Path) -> None:
     fieldnames = ["source_file", "total_events", "error_events", "success", "decline", "technical_error", "unknown"]
     _write_dict_rows(path, fieldnames, file_error_overview_rows(events))
+
+
+def write_repeat_attempt_reports(events: list[PaymentEvent], output_dir: Path) -> None:
+    rows = repeat_attempt_rows(events)
+    fieldnames = [
+        "source_file",
+        "failure_line_number",
+        "failure_timestamp",
+        "failure_classification",
+        "failure_code",
+        "failure_message",
+        "repeat_found_within_3s",
+        "repeat_delay_seconds",
+        "repeat_line_number",
+        "repeat_timestamp",
+        "repeat_code",
+        "repeat_message",
+        "repeat_classification",
+        "failure_raw_line",
+        "repeat_raw_line",
+    ]
+    _write_dict_rows(output_dir / "repeat_attempts_after_failure.csv", fieldnames, rows)
+    _write_dict_rows(
+        output_dir / "summary_repeat_attempts_after_failure.csv",
+        ["metric", "value", "message"],
+        repeat_attempt_summary_rows(rows),
+    )
 
 
 def write_comparison_report(events: list[PaymentEvent], path: Path, dimension: str) -> None:

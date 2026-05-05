@@ -28,6 +28,8 @@ def test_writes_extended_csv_reports(tmp_path):
     assert (tmp_path / "matrix_bm_version_by_classification.csv").exists()
     assert (tmp_path / "error_events.csv").exists()
     assert (tmp_path / "technical_error_events.csv").exists()
+    assert (tmp_path / "repeat_attempts_after_failure.csv").exists()
+    assert (tmp_path / "summary_repeat_attempts_after_failure.csv").exists()
     assert (tmp_path / "errors_by_file.csv").exists()
     assert (tmp_path / "file_error_overview.csv").exists()
     assert (tmp_path / "bundle_manifest.csv").exists()

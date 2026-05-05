@@ -204,6 +204,7 @@ Reports must make it easy to answer:
 * which line numbers contain those errors
 * which events are declines, technical errors, or unknowns
 * what raw log line supports each reported error
+* whether another `PaymentStart resp` happened in the same source log in the same second or within 3 seconds after each non-success event
 
 Archive handling rules:
 

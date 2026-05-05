@@ -34,6 +34,8 @@ Generated reports:
 * `_workdir/reports/bundle_manifest.json`
 * `_workdir/reports/error_events.csv`
 * `_workdir/reports/technical_error_events.csv`
+* `_workdir/reports/repeat_attempts_after_failure.csv`
+* `_workdir/reports/summary_repeat_attempts_after_failure.csv`
 * `_workdir/reports/errors_by_file.csv`
 * `_workdir/reports/file_error_overview.csv`
 * `_workdir/reports/comparison_by_bm_version.csv`
