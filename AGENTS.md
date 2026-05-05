@@ -50,8 +50,25 @@ Core web concepts:
 * run analysis on selected uploaded files
 * view factual analytics reports from stored logs
 * keep uploaded raw logs and generated reports connected
+* admin area for managing reusable validation/check cases
 
 The web layer must still call the same core analysis engine that CLI uses.
+
+## Web Admin Future
+
+The web product should include an admin area where maintainers can add and manage different check cases for log validation and analysis.
+
+This needs architectural design before implementation. Initial concepts:
+
+* check case catalog
+* case title, description, severity and expected evidence
+* configurable matching rules based on parsed facts such as code, message, timing, BM version, reader type and source log
+* checks for sequence/timing patterns, for example repeat tap within 0-3 seconds after a failed event
+* enable/disable cases without code changes
+* versioned case definitions where possible
+* case results linked back to source file, line numbers and raw log evidence
+
+Admin-managed cases must not replace factual reports. They should add a separate validation layer on top of parsed facts.
 
 ## Architecture Principle
 The analysis engine must not depend on the web layer.
