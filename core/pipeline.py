@@ -9,7 +9,14 @@ from typing import Any
 from analytics.counters import analyze_events
 from core.archive_extractor import extract_archives
 from core.log_scanner import scan_logs
-from core.models import AnalysisResult, DiagnosticLine, PaymentEvent, PipelineStats, PipelineStepResult
+from core.models import (
+    AnalysisResult,
+    DiagnosticLine,
+    FileProcessingStats,
+    PaymentEvent,
+    PipelineStats,
+    PipelineStepResult,
+)
 from parsers.payment_parser import is_payment_start_response_line, parse_payment_start_response
 
 PipelineProgressCallback = Callable[[str, PipelineStepResult | str], None]
@@ -84,15 +91,25 @@ def run_analysis(
 
     events: list[PaymentEvent] = []
     diagnostics: list[DiagnosticLine] = []
+    file_stats: dict[str, FileProcessingStats] = {}
     scanned_lines = 0
 
     with _Stage("scan_and_parse_logs", progress_callback) as stage:
         for scan_root in scan_roots:
             for log_line in scan_logs(scan_root):
                 scanned_lines += 1
+                stats_for_file = file_stats.setdefault(
+                    log_line.source_file,
+                    FileProcessingStats(source_file=log_line.source_file),
+                )
+                stats_for_file.scanned_lines += 1
+                is_payment_resp = is_payment_start_response_line(log_line.text)
+                if is_payment_resp:
+                    stats_for_file.payment_resp_lines += 1
                 event = parse_payment_start_response(log_line.text, log_line.source_file, log_line.line_number)
                 if event is None:
-                    if is_payment_start_response_line(log_line.text):
+                    if is_payment_resp:
+                        stats_for_file.malformed_payment_resp_lines += 1
                         diagnostics.append(
                             DiagnosticLine(
                                 source_file=log_line.source_file,
@@ -102,7 +119,9 @@ def run_analysis(
                             )
                         )
                     continue
+                stats_for_file.parsed_payment_resp_lines += 1
                 if matches_filters(event, date_filter, reader_filter, bm_filter):
+                    stats_for_file.selected_payment_resp_events += 1
                     events.append(event)
 
         steps.append(
@@ -140,6 +159,7 @@ def run_analysis(
         skipped_archives=len(extraction.skipped_files),
         diagnostics=diagnostics,
         steps=steps,
+        files=sorted(file_stats.values(), key=lambda item: item.source_file),
     )
     return events, result, stats
 

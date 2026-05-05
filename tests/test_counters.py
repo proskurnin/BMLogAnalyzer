@@ -23,9 +23,13 @@ def make_event(code, duration_ms=None, bm_version="4.4.12", reader_type="OTI", m
 
 def test_classifies_known_codes():
     assert classify_code(0) == "success"
+    assert classify_code(1) == "decline"
     assert classify_code(3) == "technical_error"
+    assert classify_code(4) == "decline"
+    assert classify_code(6) == "decline"
     assert classify_code(16) == "technical_error"
     assert classify_code(17) == "technical_error"
+    assert classify_code(255) == "decline"
     assert classify_code(999) == "unknown"
     assert classify_code(None) == "unknown"
 
@@ -35,7 +39,7 @@ def test_calculates_counts_percentages_and_p90_p95():
         make_event(0, 100, "4.4.12"),
         make_event(3, 412, "4.4.12"),
         make_event(16, 1200, "4.4.6", "TT"),
-        make_event(999, None, "4.4.6", "TT"),
+        make_event(255, None, "4.4.6", "TT"),
     ]
 
     result = analyze_events(events)
@@ -43,14 +47,16 @@ def test_calculates_counts_percentages_and_p90_p95():
     assert result.total == 4
     assert result.success_count == 1
     assert result.success_percent == 25.0
+    assert result.decline_count == 1
+    assert result.decline_percent == 25.0
     assert result.technical_error_count == 2
     assert result.technical_error_percent == 50.0
-    assert result.unknown_count == 1
-    assert result.unknown_percent == 25.0
+    assert result.unknown_count == 0
+    assert result.unknown_percent == 0.0
     assert result.by_code[0] == 1
     assert result.by_code[3] == 1
     assert result.by_code[16] == 1
-    assert result.by_code[999] == 1
+    assert result.by_code[255] == 1
     assert result.by_bm_version["4.4.12"] == 2
     assert result.by_bm_version["4.4.6"] == 2
     assert result.duration_buckets["<300 ms"] == 1

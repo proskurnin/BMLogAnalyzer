@@ -26,8 +26,16 @@ Generated reports:
 * `_workdir/reports/summary_by_reader_firmware.csv`
 * `_workdir/reports/summary_by_classification.csv`
 * `_workdir/reports/summary_by_duration_bucket.csv`
+* `_workdir/reports/known_codes.csv`
 * `_workdir/reports/unknown_codes.csv`
 * `_workdir/reports/diagnostics.csv`
+* `_workdir/reports/file_diagnostics.csv`
+* `_workdir/reports/comparison_by_bm_version.csv`
+* `_workdir/reports/comparison_by_reader_type.csv`
+* `_workdir/reports/matrix_bm_version_by_code.csv`
+* `_workdir/reports/matrix_reader_type_by_code.csv`
+* `_workdir/reports/matrix_bm_version_by_classification.csv`
+* `_workdir/reports/matrix_reader_type_by_classification.csv`
 
 ## Tests
 

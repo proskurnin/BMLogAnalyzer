@@ -13,7 +13,7 @@ def test_console_summary_has_structured_sections():
         technical_error_percent=50.0,
         unknown_count=1,
         unknown_percent=25.0,
-        by_code={3: 2, 0: 1, 55: 1},
+        by_code={3: 2, 0: 1, 4: 1, 55: 1},
         by_bm_version={"4.4.12": 3, "4.4.6": 1},
         p90_ms=412.0,
         p95_ms=600.0,
@@ -32,3 +32,5 @@ def test_console_summary_has_structured_sections():
     assert "=== By BM version ===" in summary
     assert "=== Unknown codes ===" in summary
     assert "• 55: 1" in summary
+    unknown_section = summary.split("=== Unknown codes ===", maxsplit=1)[1]
+    assert "• 4: 1" not in unknown_section

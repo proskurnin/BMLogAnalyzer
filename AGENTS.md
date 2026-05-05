@@ -131,9 +131,13 @@ Reader type can be inferred from package:
 Known result codes:
 
 * `Code:0` -> success
+* `Code:1` -> decline / Следующий проход через 20 минут
 * `Code:3` -> technical_error
+* `Code:4` -> decline / Карта в стоп-листе
+* `Code:6` -> decline / Приложите одну карту
 * `Code:16` -> technical_error
 * `Code:17` -> technical_error
+* `Code:255` -> decline / Операция отклонена
 
 Other codes should not be thrown away. They must be stored and reported as separate codes.
 

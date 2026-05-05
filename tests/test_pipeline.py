@@ -31,3 +31,9 @@ def test_pipeline_collects_diagnostics_for_malformed_payment_resp(tmp_path):
     assert stats.steps[1].errors == 1
     assert stats.steps[1].details["scanned_lines"] == 2
     assert stats.steps[1].details["parsed_events"] == 1
+    assert len(stats.files) == 1
+    assert stats.files[0].scanned_lines == 2
+    assert stats.files[0].payment_resp_lines == 2
+    assert stats.files[0].parsed_payment_resp_lines == 1
+    assert stats.files[0].selected_payment_resp_events == 1
+    assert stats.files[0].malformed_payment_resp_lines == 1

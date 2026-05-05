@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from analytics.classifiers import is_known_code
 from core.models import AnalysisResult, PipelineStats
 from reports.pipeline_report import format_pipeline_step
 
@@ -39,7 +40,7 @@ def render_console_summary(
     unknown_codes = {
         code: count
         for code, count in result.by_code.items()
-        if str(code) not in {"0", "3", "16", "17"}
+        if not is_known_code(code)
     }
     lines.extend(_render_mapping_section("Unknown codes", unknown_codes))
     return "\n".join(lines)

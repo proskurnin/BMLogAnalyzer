@@ -35,7 +35,7 @@ class PaymentEvent:
     event_type: str
     code: int | None
     message: str | None
-    duration_ms: int | None
+    duration_ms: float | None
     package: str | None
     bm_type: str | None
     bm_version: str | None
@@ -75,6 +75,16 @@ class PipelineStepResult:
     details: dict[str, str | int | float | None] = field(default_factory=dict)
 
 
+@dataclass
+class FileProcessingStats:
+    source_file: str
+    scanned_lines: int = 0
+    payment_resp_lines: int = 0
+    parsed_payment_resp_lines: int = 0
+    selected_payment_resp_events: int = 0
+    malformed_payment_resp_lines: int = 0
+
+
 @dataclass(frozen=True)
 class PipelineStats:
     scanned_lines: int
@@ -83,3 +93,4 @@ class PipelineStats:
     skipped_archives: int = 0
     diagnostics: list[DiagnosticLine] = field(default_factory=list)
     steps: list[PipelineStepResult] = field(default_factory=list)
+    files: list[FileProcessingStats] = field(default_factory=list)
