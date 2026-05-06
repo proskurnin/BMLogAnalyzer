@@ -1,4 +1,5 @@
 from core.models import AnalysisResult, PipelineStats
+from core.version import format_version
 from reports.console_report import render_console_summary
 
 
@@ -27,6 +28,7 @@ def test_console_summary_has_structured_sections():
     summary = render_console_summary(result, stats=stats)
 
     assert "=== Pipeline ===" in summary
+    assert f"Analyzer version: {format_version()}" in summary
     assert "=== Result ===" in summary
     assert "=== By Code ===" in summary
     assert "=== By BM version ===" in summary

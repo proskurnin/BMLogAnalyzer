@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+from analytics.archive_inventory import (
+    archive_category_date_range,
+    archive_category_totals,
+    bm_log_count,
+    explicit_reader_log_count,
+    explicit_system_log_count,
+    stopper_log_count,
+)
 from analytics.classifiers import CODE_CLASSIFICATIONS, CODE_DESCRIPTIONS, is_known_code
 from core.models import AnalysisResult, PipelineStats
+from core.version import format_version
 from reports.pipeline_report import format_pipeline_step
 
 
@@ -16,6 +25,7 @@ def render_console_summary(
     skipped_archives = stats.skipped_archives if stats else 0
     lines = [
         "Факт из логов:",
+        f"Analyzer version: {format_version()}",
         "",
         "=== Pipeline ===",
         f"• Extracted files                   : {extracted_files}",
@@ -35,6 +45,18 @@ def render_console_summary(
     if stats and stats.steps:
         lines.extend(["", "=== Pipeline steps ==="])
         lines.extend(f"• {format_pipeline_step(step).removeprefix('[PIPELINE] ')}" for step in stats.steps)
+    if stats:
+        lines.extend(["", "=== Archive inventory ==="])
+        lines.append(f"• Archives processed: {len(stats.input_files)}")
+        lines.append(f"• BM logs           : {bm_log_count(stats.archive_inventory)}")
+        lines.append(f"• Stopper logs      : {stopper_log_count(stats.archive_inventory)}")
+        lines.append(f"• Reader logs       : {explicit_reader_log_count(stats.archive_inventory)}")
+        lines.append(f"• System logs       : {explicit_system_log_count(stats.archive_inventory)}")
+        lines.append(
+            "• BM log dates      : "
+            f"{archive_category_date_range(stats.archive_inventory, {'BM rotate', 'BM stdout'})}"
+        )
+        lines.extend(_render_mapping_section("Archive categories", archive_category_totals(stats.archive_inventory)))
     lines.extend(_render_mapping_section("By Code", result.by_code, formatter=_format_code_label))
     lines.extend(_render_mapping_section("By BM version", result.by_bm_version))
     unknown_codes = {

@@ -25,13 +25,14 @@ def test_pipeline_collects_diagnostics_for_malformed_payment_resp(tmp_path):
     assert stats.diagnostics[0].reason == "payment_start_resp_parse_failed"
     assert [step.name for step in stats.steps] == [
         "extract_archives",
+        "inventory_archives",
         "scan_and_parse_logs",
         "aggregate_statistics",
     ]
-    assert stats.steps[1].status == "completed_with_errors"
-    assert stats.steps[1].errors == 1
-    assert stats.steps[1].details["scanned_lines"] == 2
-    assert stats.steps[1].details["parsed_events"] == 1
+    assert stats.steps[2].status == "completed_with_errors"
+    assert stats.steps[2].errors == 1
+    assert stats.steps[2].details["scanned_lines"] == 2
+    assert stats.steps[2].details["parsed_events"] == 1
     assert len(stats.files) == 1
     assert stats.files[0].scanned_lines == 2
     assert stats.files[0].payment_resp_lines == 2
@@ -40,6 +41,10 @@ def test_pipeline_collects_diagnostics_for_malformed_payment_resp(tmp_path):
     assert stats.files[0].malformed_payment_resp_lines == 1
     assert stats.input_files == [str(input_dir / "sample.log")]
     assert stats.analyzed_files == [str(input_dir / "sample.log")]
+    assert stats.archive_inventory == []
+    assert len(stats.log_inventory) == 1
+    assert stats.log_inventory[0].log_type == "bm"
+    assert stats.log_inventory[0].bm_versions == ["4.4.12"]
 
 
 def test_pipeline_does_not_analyze_zip_twice(tmp_path):
@@ -59,3 +64,6 @@ def test_pipeline_does_not_analyze_zip_twice(tmp_path):
     assert stats.extracted_file_paths == [str(extracted_dir / "logs.zip" / "nested" / "a.log")]
     assert stats.analyzed_files == [str(extracted_dir / "logs.zip" / "nested" / "a.log")]
     assert all("!" not in source for source in stats.analyzed_files)
+    assert stats.log_inventory[0].log_type == "bm"
+    assert stats.archive_inventory[0].archive == str(archive_path)
+    assert stats.archive_inventory[0].category == "Other log-like"

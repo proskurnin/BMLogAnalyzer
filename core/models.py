@@ -87,6 +87,29 @@ class FileProcessingStats:
 
 
 @dataclass(frozen=True)
+class LogFileInventory:
+    source_file: str
+    log_type: str
+    detection_method: str
+    evidence: str
+    dates: list[str] = field(default_factory=list)
+    bm_versions: list[str] = field(default_factory=list)
+    reader_models: list[str] = field(default_factory=list)
+    reader_firmware_versions: list[str] = field(default_factory=list)
+    error_status_counts: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ArchiveInventoryRow:
+    archive: str
+    category: str
+    count: int
+    date_from: str | None = None
+    date_to: str | None = None
+    examples: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class PipelineStats:
     scanned_lines: int
     malformed_payment_lines: int
@@ -99,6 +122,8 @@ class PipelineStats:
     diagnostics: list[DiagnosticLine] = field(default_factory=list)
     steps: list[PipelineStepResult] = field(default_factory=list)
     files: list[FileProcessingStats] = field(default_factory=list)
+    log_inventory: list[LogFileInventory] = field(default_factory=list)
+    archive_inventory: list[ArchiveInventoryRow] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

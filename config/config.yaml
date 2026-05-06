@@ -1,3 +1,67 @@
 input_path: ./_workdir/input
 reports_dir: ./_workdir/reports
 extracted_dir: ./_workdir/extracted
+
+reports:
+  report_metadata: true
+  parsed_events: true
+  summary_by_code: true
+  summary_by_message: true
+  summary_by_bm_version: true
+  summary_by_reader_type: true
+  summary_by_reader_firmware: true
+  summary_by_classification: true
+  summary_by_duration_bucket: true
+  known_codes: true
+  unknown_codes: true
+  diagnostics: true
+  file_diagnostics: true
+  bundle_manifest: true
+  bundle_manifest_json: true
+  archive_inventory: true
+  summary_by_archive_category: true
+  log_inventory: true
+  summary_by_log_type: true
+  bm_log_versions: true
+  bm_status_summary: true
+  reader_models: true
+  reader_firmware_versions: true
+  reader_firmware_timeline: true
+  summary_reader_firmware_timeline: true
+  reader_error_summary: true
+  system_error_summary: true
+  other_logs: true
+  error_events: true
+  technical_error_events: true
+  errors_by_file: true
+  file_error_overview: true
+  repeat_attempts_after_failure: true
+  summary_repeat_attempts_after_failure: true
+  read_error_repeat_outcomes: true
+  summary_read_error_repeat_outcomes: true
+  timeout_repeat_outcomes: true
+  summary_timeout_repeat_outcomes: true
+  no_card_repeat_outcomes: true
+  summary_no_card_repeat_outcomes: true
+  card_check_markers: true
+  summary_card_check_markers: true
+  oda_cda_repeat_outcomes: true
+  summary_oda_cda_repeat_outcomes: true
+  card_identity_markers: true
+  summary_card_identity_markers: true
+  card_fingerprint_events: true
+  read_error_card_history: true
+  summary_read_error_card_history: true
+  timeout_card_history: true
+  summary_timeout_card_history: true
+  no_card_card_history: true
+  summary_no_card_card_history: true
+  check_results: true
+  check_summary: true
+  analysis_report_html: true
+  comparison_by_bm_version: true
+  comparison_by_reader_type: true
+  matrix_bm_version_by_code: true
+  matrix_reader_type_by_code: true
+  matrix_bm_version_by_classification: true
+  matrix_reader_type_by_classification: true

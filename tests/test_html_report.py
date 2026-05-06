@@ -1,4 +1,5 @@
 from core.models import PipelineStats
+from core.version import __version__
 from analytics.counters import analyze_events
 from reports.html_report import write_html_report
 from tests.test_counters import make_event
@@ -22,6 +23,12 @@ def test_writes_html_report_with_sources_errors_and_checks(tmp_path):
 
     html = (tmp_path / "analysis_report.html").read_text(encoding="utf-8")
     assert "Факт из логов" in html
+    assert f"version {__version__}" in html
+    assert "Коротко" in html
+    assert "Состав архива" in html
+    assert "Статусы BM" in html
+    assert "Главные сигналы" in html
+    assert "<details" in html
     assert "input/sample.log" in html
     assert "Ошибка чтения карты" in html
     assert "technical_error_code_3" in html
