@@ -3,9 +3,10 @@ from tests.test_counters import make_event
 
 
 def test_classifies_supported_bm_statuses_from_codes_and_markers():
-    assert classify_bm_status(make_event(0, message="online MIR")) == "Успешный онлайн МИР"
     assert classify_bm_status(make_event(0, message="offline")) == "Успешный оффлайн"
-    assert classify_bm_status(make_event(0, message="online VISA")) == "Успешный онлайн (БЕЗ МИР)"
+    assert classify_bm_status(make_event(0, message="Проходите", payment_type=0, auth_type=0)) == "Успешный онлайн (БЕЗ МИР)"
+    assert classify_bm_status(make_event(0, message="ОДОБРЕНО\nПРОХОДИТЕ", payment_type=2, auth_type=0)) == "Успешный онлайн (БЕЗ МИР)"
+    assert classify_bm_status(make_event(0, message="Авторизация, не убирайте карту", payment_type=0, auth_type=1)) == "Успешный онлайн МИР"
     assert classify_bm_status(make_event(1, message="Следующий проход через 20 минут")) == "Отказ, повторное предъявление"
     assert classify_bm_status(make_event(3, message="Ошибка чтения карты")) == "Отказ, ошибка чтения карты"
     assert classify_bm_status(make_event(4, message="Карта в стоп-листе")) == "Отказ, карта в стоп листе"

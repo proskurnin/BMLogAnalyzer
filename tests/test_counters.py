@@ -3,7 +3,15 @@ from analytics.classifiers import classify_code
 from analytics.counters import analyze_events
 
 
-def make_event(code, duration_ms=None, bm_version="4.4.12", reader_type="OTI", message="msg"):
+def make_event(
+    code,
+    duration_ms=None,
+    bm_version="4.4.12",
+    reader_type="OTI",
+    message="msg",
+    payment_type=None,
+    auth_type=None,
+):
     return PaymentEvent(
         source_file="test.log",
         line_number=1,
@@ -18,6 +26,8 @@ def make_event(code, duration_ms=None, bm_version="4.4.12", reader_type="OTI", m
         reader_type=reader_type,
         reader_firmware=None,
         raw_line="raw",
+        payment_type=payment_type,
+        auth_type=auth_type,
     )
 
 

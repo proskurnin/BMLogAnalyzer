@@ -2,7 +2,7 @@
 
 CLI-first analyzer for BM PaymentStart response logs.
 
-Current analyzer version: `0.12.0`.
+Current analyzer version: `0.15.0`.
 
 ## Run
 
@@ -208,6 +208,7 @@ For the archive as a whole, reports answer:
 
 The BM status summary contains `status`, `count`, and `percent` columns.
 Statuses are assigned only when the parsed event line contains a supported code or explicit text marker.
+For `Code:0`, the analyzer also uses the explicit response template together with `PaymentType` and `AuthType` values when they are present in the log line.
 Events that cannot be mapped factually are reported as `Не классифицировано`.
 
 Current BM status rows:

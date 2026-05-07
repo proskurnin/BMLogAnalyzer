@@ -22,6 +22,9 @@ UNCLASSIFIED_STATUS = "Не классифицировано"
 ONLINE_RE = re.compile(r"\bonline\b|онлайн", re.IGNORECASE)
 OFFLINE_RE = re.compile(r"\boffline\b|оффлайн", re.IGNORECASE)
 MIR_RE = re.compile(r"\bmir\b|мир", re.IGNORECASE)
+APPROVED_RE = re.compile(r"\bодобрено\b|\bapproved\b", re.IGNORECASE)
+PASS_RE = re.compile(r"\bпроходите\b|\bpass\b", re.IGNORECASE)
+AUTHORIZATION_RE = re.compile(r"авторизац", re.IGNORECASE)
 NO_CONFIRM_RE = re.compile(r"confirm|конфирм", re.IGNORECASE)
 REPEAT_RE = re.compile(r"повтор|следующий проход|repeat", re.IGNORECASE)
 READ_ERROR_RE = re.compile(r"чтени[яе] карт|read", re.IGNORECASE)
@@ -49,13 +52,19 @@ def bm_status_summary_rows(events: list[PaymentEvent]) -> list[dict[str, object]
 def classify_bm_status(event: PaymentEvent) -> str:
     text = " ".join(part for part in [event.message, event.raw_line] if part)
     code = event.code
+    payment_type = event.payment_type
+    auth_type = event.auth_type
 
     if code == 0:
         if OFFLINE_RE.search(text):
             return "Успешный оффлайн"
         if MIR_RE.search(text):
             return "Успешный онлайн МИР"
-        if ONLINE_RE.search(text):
+        if "error: no error" in text.lower() or ONLINE_RE.search(text) or PASS_RE.search(text) or APPROVED_RE.search(text) or AUTHORIZATION_RE.search(text):
+            if payment_type == 2 and auth_type == 0:
+                return "Успешный онлайн (БЕЗ МИР)"
+            if auth_type == 1 or AUTHORIZATION_RE.search(text):
+                return "Успешный онлайн МИР"
             return "Успешный онлайн (БЕЗ МИР)"
         return UNCLASSIFIED_STATUS
 

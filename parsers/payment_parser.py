@@ -12,6 +12,8 @@ TIMESTAMP_RE = re.compile(r"^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?
 QUOTED_TIMESTAMP_RE = re.compile(r"\btime=\"(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?)\"")
 PAYMENT_RESP_RE = re.compile(r"\bPaymentStart\s*,?\s*resp\b", re.IGNORECASE)
 CODE_RE = re.compile(r"\bCode\s*:\s*(?P<code>-?\d+)\b")
+AUTH_TYPE_RE = re.compile(r"\bAuthType\s*:\s*(?P<auth_type>-?\d+)\b")
+PAYMENT_TYPE_RE = re.compile(r"\bPaymentType\s*:\s*(?P<payment_type>-?\d+)\b")
 MESSAGE_RE = re.compile(
     r"\b(?:Message|MessageRus)\s*:\s*(?P<message>.*?)(?=\s+(?:MessageEng|VirtualCard|BmSign|PaymentType|PassengerId)\s*:|\s*}\s*|\s+duration\s*=|\s+p\s*:|,\s*error:|$)"
 )
@@ -28,6 +30,8 @@ def parse_payment_start_response(line: str, source_file: str = "", line_number: 
 
     timestamp_match = TIMESTAMP_RE.search(line) or QUOTED_TIMESTAMP_RE.search(line)
     code_match = CODE_RE.search(line)
+    auth_type_match = AUTH_TYPE_RE.search(line)
+    payment_type_match = PAYMENT_TYPE_RE.search(line)
     message_match = MESSAGE_RE.search(line)
     package_info = parse_package(line)
 
@@ -53,6 +57,8 @@ def parse_payment_start_response(line: str, source_file: str = "", line_number: 
         reader_type=package_info.reader_type if package_info else None,
         reader_firmware=parse_reader_firmware(line),
         raw_line=line,
+        payment_type=int(payment_type_match.group("payment_type")) if payment_type_match else None,
+        auth_type=int(auth_type_match.group("auth_type")) if auth_type_match else None,
     )
 
 

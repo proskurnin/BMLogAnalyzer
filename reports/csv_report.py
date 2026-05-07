@@ -135,6 +135,8 @@ def write_parsed_events(events: list[PaymentEvent], path: Path) -> None:
         "bm_version",
         "reader_type",
         "reader_firmware",
+        "payment_type",
+        "auth_type",
         "raw_line",
     ]
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -155,6 +157,8 @@ def write_parsed_events(events: list[PaymentEvent], path: Path) -> None:
                     "bm_version": event.bm_version or "",
                     "reader_type": event.reader_type or "",
                     "reader_firmware": event.reader_firmware or "",
+                    "payment_type": event.payment_type if event.payment_type is not None else "",
+                    "auth_type": event.auth_type if event.auth_type is not None else "",
                     "raw_line": event.raw_line,
                 }
             )
@@ -425,6 +429,8 @@ def write_filtered_events(events: list[PaymentEvent], path: Path, *, include_cla
         "bm_version",
         "reader_type",
         "reader_firmware",
+        "payment_type",
+        "auth_type",
         "raw_line",
     ]
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -443,6 +449,8 @@ def write_filtered_events(events: list[PaymentEvent], path: Path, *, include_cla
                     "bm_version": event.bm_version or "",
                     "reader_type": event.reader_type or "",
                     "reader_firmware": event.reader_firmware or "",
+                    "payment_type": event.payment_type if event.payment_type is not None else "",
+                    "auth_type": event.auth_type if event.auth_type is not None else "",
                     "raw_line": event.raw_line,
                 }
             )

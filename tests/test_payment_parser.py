@@ -66,6 +66,8 @@ def test_parses_structured_bm_log_format():
     assert event.duration_ms == 508.11597
     assert event.bm_version == "4.4.7"
     assert event.reader_type == "OTI"
+    assert event.payment_type is None
+    assert event.auth_type is None
 
 
 def test_parses_seconds_duration_as_ms():
@@ -79,6 +81,22 @@ def test_parses_seconds_duration_as_ms():
 
     assert event is not None
     assert event.duration_ms == 2396.398195
+    assert event.payment_type is None
+    assert event.auth_type is None
+
+
+def test_parses_payment_and_auth_types_from_structured_line():
+    line = (
+        'time="2026-04-25 09:01:32.337" level=info msg="PaymentStart, resp: 2.396398195s, '
+        "{Code:0 MessageRus:Авторизация, не убирайте карту MessageEng:Authorization. Do not remove the card "
+        "PaymentType:2 AuthType:1 VirtualCard:{VirtualUid:[]}}, error: no error p: mgt_nbs-oti-4.4.7\""
+    )
+
+    event = parse_payment_start_response(line)
+
+    assert event is not None
+    assert event.payment_type == 2
+    assert event.auth_type == 1
 
 
 def test_malformed_non_payment_line_returns_none():

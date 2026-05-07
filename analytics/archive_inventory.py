@@ -75,24 +75,27 @@ def stopper_log_count(rows: list[ArchiveInventoryRow]) -> int:
 
 def _inventory_for_archive(path: Path) -> list[ArchiveInventoryRow]:
     members = _archive_members(path)
-    grouped: dict[str, list[str]] = defaultdict(list)
-    for member in members:
-        grouped[classify_archive_member(member)].append(member)
+    grouped: dict[str, list[tuple[str, int]]] = defaultdict(list)
+    for member_name, member_size in members:
+        grouped[classify_archive_member(member_name)].append((member_name, member_size))
 
     rows: list[ArchiveInventoryRow] = []
     for category in CATEGORY_ORDER:
         names = grouped.get(category, [])
         if not names:
             continue
-        dates = sorted(date for name in names if (date := _date_from_name(name)))
+        dates = sorted(date for name, _ in names if (date := _date_from_name(name)))
         rows.append(
             ArchiveInventoryRow(
                 archive=str(path),
                 category=category,
                 count=len(names),
+                size_bytes=sum(size for _, size in names),
                 date_from=dates[0] if dates else None,
                 date_to=dates[-1] if dates else None,
-                examples=sorted(names)[:3],
+                examples=sorted(name for name, _ in names)[:3],
+                files=sorted(name for name, _ in names),
+                file_sizes={name: size for name, size in sorted(names)},
             )
         )
     return rows
@@ -125,17 +128,23 @@ def classify_archive_member(name: str) -> str:
     return "Other"
 
 
-def _archive_members(path: Path) -> list[str]:
+def _archive_members(path: Path) -> list[tuple[str, int]]:
     try:
         if path.suffix.lower() == ".zip":
             with zipfile.ZipFile(path) as archive:
-                return sorted(name for name in archive.namelist() if name and not name.endswith("/"))
+                return sorted(
+                    ((info.filename, int(info.file_size)) for info in archive.infolist() if info.filename and not info.is_dir()),
+                    key=lambda item: item[0],
+                )
         if _is_tar_gz(path):
             with tarfile.open(path, "r:*") as archive:
-                return sorted(member.name for member in archive.getmembers() if member.isfile())
+                return sorted(
+                    ((member.name, int(member.size)) for member in archive.getmembers() if member.isfile()),
+                    key=lambda item: item[0],
+                )
     except (OSError, zipfile.BadZipFile, tarfile.TarError):
         return []
-    return [str(path)] if path.is_file() else []
+    return [(str(path), path.stat().st_size)] if path.is_file() else []
 
 
 def _date_from_name(name: str) -> str | None:

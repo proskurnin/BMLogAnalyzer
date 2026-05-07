@@ -56,7 +56,9 @@ def render_console_summary(
             "• BM log dates      : "
             f"{archive_category_date_range(stats.archive_inventory, {'BM rotate', 'BM stdout'})}"
         )
-        lines.extend(_render_mapping_section("Archive categories", archive_category_totals(stats.archive_inventory)))
+        visible_categories = archive_category_totals(stats.archive_inventory)
+        visible_categories.pop("Other", None)
+        lines.extend(_render_mapping_section("Archive categories", visible_categories))
     lines.extend(_render_mapping_section("By Code", result.by_code, formatter=_format_code_label))
     lines.extend(_render_mapping_section("By BM version", result.by_bm_version))
     unknown_codes = {

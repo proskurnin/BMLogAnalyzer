@@ -43,6 +43,8 @@ class PaymentEvent:
     reader_type: str | None
     reader_firmware: str | None
     raw_line: str
+    payment_type: int | None = None
+    auth_type: int | None = None
 
 
 @dataclass(frozen=True)
@@ -104,9 +106,12 @@ class ArchiveInventoryRow:
     archive: str
     category: str
     count: int
+    size_bytes: int = 0
     date_from: str | None = None
     date_to: str | None = None
     examples: list[str] = field(default_factory=list)
+    files: list[str] = field(default_factory=list)
+    file_sizes: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

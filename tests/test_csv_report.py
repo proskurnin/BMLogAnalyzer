@@ -32,6 +32,9 @@ def test_writes_extended_csv_reports(tmp_path):
 
     assert (tmp_path / "report_metadata.csv").exists()
     assert (tmp_path / "parsed_events.csv").exists()
+    parsed_header = (tmp_path / "parsed_events.csv").read_text(encoding="utf-8").splitlines()[0]
+    assert "payment_type" in parsed_header
+    assert "auth_type" in parsed_header
     assert (tmp_path / "summary_by_reader_type.csv").exists()
     assert (tmp_path / "summary_by_duration_bucket.csv").exists()
     assert (tmp_path / "known_codes.csv").exists()
