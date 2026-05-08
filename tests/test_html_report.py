@@ -60,7 +60,9 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
         make_event(3, 412, "4.4.12", message="Ошибка чтения карты"),
     ]
     events[0] = replace(events[0], timestamp=datetime(2026, 5, 4, 10, 0))
+    events[0] = replace(events[0], raw_line="2026-05-04 PaymentStart, resp: {Code:0 Message:OK error: no error}")
     events[1] = replace(events[1], timestamp=datetime(2026, 5, 5, 14, 0))
+    events[1] = replace(events[1], raw_line="2026-05-05 PaymentStart, resp: {Code:3 Message:Ошибка чтения карты}")
     result = analyze_events(events)
     write_html_report(events, result, tmp_path / "analysis_report.html", stats=stats)
 
@@ -84,6 +86,7 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert "class=\"bar-row\"" in html
     assert "class=\"metric metric--button\"" in html
     assert "class=\"bm-meta-card bm-meta-card--button\"" in html
+    assert "data-kind=\"meta\"" in html
     assert "class=\"status-table\"" in html
     assert "class=\"status-table status-table--grouped\"" in html
     assert "class=\"status-table status-table--diagnostic\"" in html
@@ -103,12 +106,13 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert "data-format=\"records\"" in html
     assert "data-kind=\"status\"" in html
     assert "data-kind=\"group\"" in html
-    assert "data-focus-group=\"versions\"" in html
+    assert "data-meta-kind=\"versions\"" in html
     assert "class=\"modal-files\"" in html
     assert "class=\"modal-lines\"" in html
+    assert "line-highlight" in html
     assert "class=\"filter-panel\"" in html
     assert "filter-option-grid" in html
-    assert "data-focus-group=" in html
+    assert "data-meta-kind=" in html
     assert "Успех" in html
     assert "Ошибки" in html
     assert "Отказы" in html

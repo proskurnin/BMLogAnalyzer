@@ -186,7 +186,7 @@ def _bm_meta_cards(
         ("Даты", period or "missing", date_records, "dates"),
     ]
     return "".join(
-        _bm_meta_card(label, value, payload, focus_group=focus_group)
+        _bm_meta_card(label, value, payload, meta_kind=focus_group)
         for label, value, payload, focus_group in items
     )
 
@@ -196,11 +196,11 @@ def _bm_meta_card(
     value: object,
     payload: list[dict[str, object]],
     *,
-    focus_group: str,
+    meta_kind: str,
 ) -> str:
     return (
         f'<button type="button" class="bm-meta-card bm-meta-card--button" '
-        f'data-focus-group="{escape(focus_group)}" data-label="{escape(label)}" '
+        f'data-kind="meta" data-meta-kind="{escape(meta_kind)}" data-label="{escape(label)}" '
         f'data-payload="{escape(json.dumps(payload, ensure_ascii=False))}">'
         f"<span>{escape(label)}</span>"
         f"<strong>{escape(str(value))}</strong>"
@@ -384,6 +384,7 @@ def _report_data(
                 "group": _bm_group_label(status),
                 "code": event.code if event.code is not None else "",
                 "message": event.message or "",
+                "decision_terms": _bm_status_decision_terms(event),
                 "raw_line": event.raw_line,
             }
         )
@@ -632,11 +633,56 @@ def _bm_group_payloads(events: list[PaymentEvent], archive_names: set[str]) -> d
                         "timestamp": event.timestamp.isoformat(sep=" ") if event.timestamp else "",
                         "code": event.code if event.code is not None else "",
                         "message": event.message or "",
+                        "decision_terms": _bm_status_decision_terms(event),
                         "raw_line": event.raw_line,
                     }
                 )
                 break
     return payloads
+
+
+def _bm_status_decision_terms(event: PaymentEvent) -> list[str]:
+    text = " ".join(part for part in [event.message, event.raw_line] if part)
+    lowered = text.lower()
+    terms: list[str] = []
+    code = event.code
+
+    if code == 0:
+        if "error: no error" in lowered:
+            terms.append("error: no error")
+        for term in ("ОДОБРЕНО", "ПРОХОДИТЕ", "Авторизация", "online", "offline", "mir", "мир"):
+            if term.lower() in lowered:
+                terms.append(term)
+    elif code == 1:
+        for term in ("Следующий проход", "повтор", "repeat"):
+            if term.lower() in lowered:
+                terms.append(term)
+    elif code == 3:
+        if "ошибка чтения карты" in lowered:
+            terms.append("Ошибка чтения карты")
+        elif "read" in lowered:
+            terms.append("read")
+    elif code == 4:
+        if "стоп" in lowered:
+            terms.append("стоп")
+    elif code == 6:
+        for term in ("одну карту", "коллизи"):
+            if term in lowered:
+                terms.append(term)
+    elif code == 16:
+        for term in ("истек таймаут", "timeout"):
+            if term in lowered:
+                terms.append(term)
+    elif code == 17:
+        if "нет карты" in lowered:
+            terms.append("Нет карты")
+    if "oda" in lowered:
+        terms.append("ODA")
+    if "cda" in lowered:
+        terms.append("CDA")
+    if "конфирм" in lowered or "confirm" in lowered:
+        terms.append("конфирм")
+    return list(dict.fromkeys(term for term in terms if term))
 
 
 def _bm_group_label(status: str) -> str:
@@ -1164,6 +1210,7 @@ def _script() -> str:
     const kind = target.dataset.kind || 'files';
     const format = target.dataset.format || 'files';
     const label = target.dataset.label || 'Данные';
+    const metaKind = target.dataset.metaKind || '';
     const payload = JSON.parse(target.dataset.payload || '[]');
     title.textContent = label;
     subtitle.textContent = kind === 'status'
@@ -1171,7 +1218,7 @@ def _script() -> str:
       : kind === 'group'
       ? 'Полные строки логов для выбранной группы'
       : kind === 'meta'
-      ? 'Выберите элементы, чтобы применить фильтр'
+      ? 'Подробная информация по выбранному блоку'
       : format === 'records'
       ? 'Записи для выбранной сводки'
       : 'Файлы этого типа, сгруппированные по архивам';
@@ -1180,7 +1227,7 @@ def _script() -> str:
       : kind === 'group'
       ? renderStatusItems(payload)
       : kind === 'meta'
-      ? renderMetaItems(label, payload)
+      ? renderMetaDetails(label, metaKind, payload)
       : format === 'records'
       ? renderRecordItems(payload)
       : renderFileItems(payload);
@@ -1246,7 +1293,7 @@ def _script() -> str:
             <span>${escapeHtml(String(source))}</span>
             <em>${escapeHtml(String(line.line_number || ''))}${line.timestamp ? ` · ${escapeHtml(String(line.timestamp))}` : ''}</em>
           </div>
-          <code>${escapeHtml(String(line.raw_line || ''))}</code>
+          <code>${highlightLine(String(line.raw_line || ''), line.decision_terms || [])}</code>
         </li>`).join('');
       return `
         <div class="modal-item">
@@ -1282,43 +1329,60 @@ def _script() -> str:
     }).join('');
   }
 
-  function renderMetaItems(label, items) {
+  function highlightLine(rawLine, terms) {
+    const text = escapeHtml(String(rawLine || ''));
+    const uniqueTerms = [...new Set((terms || []).map((term) => String(term || '').trim()).filter(Boolean))]
+      .sort((a, b) => b.length - a.length);
+    let highlighted = text;
+    uniqueTerms.forEach((term) => {
+      const escapedTerm = escapeHtml(term);
+      const pattern = new RegExp(escapeRegExp(escapedTerm), 'g');
+      highlighted = highlighted.replace(pattern, `<mark class="line-highlight">$&</mark>`);
+    });
+    return highlighted;
+  }
+
+  function escapeRegExp(text) {
+    return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function renderMetaDetails(label, metaKind, items) {
     if (!items || !items.length) {
       return '<p class="muted">Нет данных</p>';
     }
-    const group = metaGroupForLabel(label);
-    const allowed = allowedArchivesForGroup(group.name);
-    const renderedItems = [];
+    const normalizedKind = String(metaKind || '').toLowerCase();
+    const total = items.reduce((sum, item) => sum + Number(item.count || 0), 0);
+    const introMap = {
+      versions: 'Найденные версии BM и архивы, где они встречаются.',
+      carriers: 'Перевозчики, найденные в логах, и признаки, по которым они определены.',
+      readers: 'Типы ридеров и архивы, в которых они встречаются.',
+      dates: 'Даты из логов и количество событий на каждой дате.'
+    };
     const rendered = items.map((item) => {
-      const key = String(item[group?.key || ''] || '');
-      const selected = filterState[group.name].has(key);
-      const itemArchives = archivesForItem(item);
-      const visible = selected || allowed === null || intersects(itemArchives, allowed);
-      if (!visible) {
-        return '';
-      }
-      renderedItems.push(item);
-      const archives = (item.archives || []).map((archive) => `<li>${escapeHtml(String(archive.archive || ''))} · ${escapeHtml(String(archive.count || 0))}</li>`).join('');
-      const extra = group.name === 'carriers' && item.markers && item.markers.length
+      const titleValue = item.version || item.carrier || item.reader || item.date || 'Данные';
+      const count = Number(item.count || 0);
+      const archiveRows = (item.archives || []).map((archive) => {
+        return `<li>${escapeHtml(String(archive.archive || ''))} · ${escapeHtml(String(archive.count || 0))}</li>`;
+      }).join('');
+      const markerRows = item.markers && item.markers.length
         ? `<ul class="modal-files">${item.markers.map((value) => `<li>${escapeHtml(String(value))}</li>`).join('')}</ul>`
-        : archives
-        ? `<ul class="modal-files">${archives}</ul>`
-        : '<p class="muted">Нет данных</p>';
+        : '';
       return `
-        <button type="button" class="modal-item modal-select${selected ? ' modal-select--active' : ''}" data-filter-group="${escapeHtml(group.name)}" data-filter-key="${escapeHtml(key)}">
+        <div class="modal-item">
           <div class="modal-item-head">
-            <strong>${escapeHtml(String(item[group.key] || ''))}</strong>
-            <span>${escapeHtml(String(item.count || 0))} событий</span>
+            <strong>${escapeHtml(String(titleValue))}</strong>
+            <span>${escapeHtml(String(count))} событий</span>
           </div>
-          ${extra}
-        </button>`;
-    }).filter(Boolean).join('');
-    const toolbar = `
+          ${normalizedKind === 'carriers' && markerRows ? markerRows : ''}
+          ${archiveRows ? `<ul class="modal-files">${archiveRows}</ul>` : '<p class="muted">Нет данных по архивам</p>'}
+        </div>`;
+    }).join('');
+    return `
       <div class="modal-toolbar">
-        <span class="muted">Показано ${renderedItems.length} из ${items.length}</span>
-        <button type="button" class="modal-toolbar__clear" data-filter-group-reset="${escapeHtml(group.name)}">Сбросить группу</button>
-      </div>`;
-    return toolbar + (rendered || '<p class="muted">Нет доступных значений для текущего набора фильтров.</p>');
+        <span class="muted">${escapeHtml(introMap[normalizedKind] || 'Подробная информация по выбранному блоку.')}</span>
+        <span class="muted">Всего: ${escapeHtml(String(total))}</span>
+      </div>
+      ${rendered}`;
   }
 
   function renderFilterPanel() {
@@ -1339,15 +1403,11 @@ def _script() -> str:
         <div class="filter-panel__body">
           <div class="filter-panel__head">
             <div class="muted">Сейчас видно только совместимые варианты.</div>
-            <button type="button" class="filter-clear" id="clear-filters">Сбросить все</button>
+            <button type="button" class="filter-clear" data-action="clear-all-filters">Сбросить все</button>
           </div>
           <div class="filter-panel__groups">${sections}</div>
         </div>
       </details>`;
-    const clearButton = document.getElementById('clear-filters');
-    if (clearButton) {
-      clearButton.addEventListener('click', clearFilters);
-    }
   }
 
   function countActiveFilters() {
@@ -1552,12 +1612,8 @@ def _script() -> str:
       });
     });
     activeFiltersRoot.innerHTML = chips.length
-      ? `<div class="active-filters__row">${chips.join('')}<button type="button" class="filter-clear" id="clear-filters">Сбросить</button></div>`
+      ? `<div class="active-filters__row">${chips.join('')}<button type="button" class="filter-clear" data-action="clear-active-filters">Сбросить</button></div>`
       : '<div class="active-filters__empty muted">Фильтры не выбраны</div>';
-    const clearButton = document.getElementById('clear-filters');
-    if (clearButton) {
-      clearButton.addEventListener('click', clearFilters);
-    }
   }
 
   function filterArchiveGroups(groups, allowed) {
@@ -1890,6 +1946,7 @@ def _script() -> str:
     const kind = target.dataset.kind || 'files';
     const format = target.dataset.format || 'files';
     const label = target.dataset.label || 'Данные';
+    const metaKind = target.dataset.metaKind || '';
     const payload = JSON.parse(target.dataset.payload || '[]');
     title.textContent = label;
     subtitle.textContent = kind === 'status'
@@ -1897,7 +1954,7 @@ def _script() -> str:
       : kind === 'group'
       ? 'Полные строки логов для выбранной группы'
       : kind === 'meta'
-      ? 'Выберите элементы, чтобы применить фильтр'
+      ? 'Подробная информация по выбранному блоку'
       : format === 'records'
       ? 'Записи для выбранной сводки'
       : 'Файлы этого типа, сгруппированные по архивам';
@@ -1906,7 +1963,7 @@ def _script() -> str:
       : kind === 'group'
       ? renderStatusItems(payload)
       : kind === 'meta'
-      ? renderMetaItems(label, payload)
+      ? renderMetaDetails(label, metaKind, payload)
       : format === 'records'
       ? renderRecordItems(payload)
       : renderFileItems(payload);
@@ -1939,6 +1996,20 @@ def _script() -> str:
     openModal(interactive);
   });
   document.addEventListener('click', (event) => {
+    const clearAll = event.target.closest('[data-action="clear-all-filters"]');
+    if (clearAll) {
+      event.preventDefault();
+      event.stopPropagation();
+      clearFilters();
+      return;
+    }
+    const clearActive = event.target.closest('[data-action="clear-active-filters"]');
+    if (clearActive) {
+      event.preventDefault();
+      event.stopPropagation();
+      clearFilters();
+      return;
+    }
     const focusGroup = event.target.closest('[data-focus-group]');
     if (focusGroup) {
       event.preventDefault();
@@ -2118,6 +2189,7 @@ h1, h2, p { margin: 0; }
 .modal-line-head span { font-weight: 600; }
 .modal-line-head em { color: var(--muted); font-style: normal; font-size: 12px; white-space: nowrap; }
 .modal-lines code { display: block; white-space: pre-wrap; word-break: break-word; background: #fff; border: 1px solid #e8edf2; border-radius: 8px; padding: 8px 10px; }
+.line-highlight { background: #fff2a8; color: inherit; padding: 0 2px; border-radius: 3px; }
 .modal-open { overflow: hidden; }
 .notes { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 .notes h2 { margin-bottom: 8px; font-size: 16px; }
