@@ -1,5 +1,5 @@
 SUCCESS_CODES = {0}
-DECLINE_CODES = {1, 4, 6, 255}
+DECLINE_CODES = {1, 4, 6, 12, 14, 255}
 TECHNICAL_ERROR_CODES = {3, 16, 17}
 
 CODE_CLASSIFICATIONS = {
@@ -11,6 +11,8 @@ CODE_CLASSIFICATIONS = {
 CODE_DESCRIPTIONS = {
     0: "success",
     1: "Следующий проход через 20 минут",
+    12: "QR-КОД НЕДЕЙСТВИТЕЛЕН",
+    14: "Операция отклонена",
     3: "Ошибка чтения карты",
     4: "Карта в стоп-листе",
     6: "Приложите одну карту",

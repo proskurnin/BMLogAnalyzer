@@ -15,6 +15,9 @@ BM_STATUS_ORDER = [
     "Отказ, карта в стоп листе",
     "Отказ, коллизия",
     "Отказ, ошибка ODA/CDA",
+    "Отказ, QR-код недействителен",
+    "Отказ, операция отклонена",
+    "Отказ, истек таймаут",
     "Отказ, нет карты в поле",
 ]
 UNCLASSIFIED_STATUS = "Не классифицировано"
@@ -80,6 +83,12 @@ def classify_bm_status(event: PaymentEvent) -> str:
         return "Отказ, коллизия"
     if ODA_CDA_RE.search(text):
         return "Отказ, ошибка ODA/CDA"
+    if code == 12 or "qr-код недействител" in text.lower() or "qr code invalid" in text.lower():
+        return "Отказ, QR-код недействителен"
+    if code in {14, 255} or "операция отклонена" in text.lower():
+        return "Отказ, операция отклонена"
+    if code == 16 or "timeout expired" in text.lower() or "истек таймаут" in text.lower():
+        return "Отказ, истек таймаут"
     if code == 17 or NO_CARD_RE.search(text):
         return "Отказ, нет карты в поле"
 

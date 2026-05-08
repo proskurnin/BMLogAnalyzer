@@ -590,12 +590,15 @@ def _bm_status_groups(events: list[PaymentEvent]) -> list[dict[str, object]]:
                 "Отказ, коллизия",
             ],
         ),
+        ("Отказ, истек таймаут", ["Отказ, истек таймаут"]),
         (
             "Отказы",
             [
                 "Проход зафейлен (онлайн - не получили конфирм и зарегали как фейл)",
                 "Отказ, повторное предъявление",
                 "Отказ, карта в стоп листе",
+                "Отказ, QR-код недействителен",
+                "Отказ, операция отклонена",
             ],
         ),
         ("Не классифицировано", [UNCLASSIFIED_STATUS]),
@@ -617,7 +620,8 @@ def _bm_group_payloads(events: list[PaymentEvent], archive_names: set[str]) -> d
     summary = {
         "Успех": {"Успешный онлайн (БЕЗ МИР)", "Успешный онлайн МИР", "Успешный оффлайн"},
         "Ошибки": {"Отказ, ошибка чтения карты", "Отказ, нет карты в поле", "Отказ, ошибка ODA/CDA", "Отказ, коллизия"},
-        "Отказы": {"Проход зафейлен (онлайн - не получили конфирм и зарегали как фейл)", "Отказ, повторное предъявление", "Отказ, карта в стоп листе"},
+        "Отказ, истек таймаут": {"Отказ, истек таймаут"},
+        "Отказы": {"Проход зафейлен (онлайн - не получили конфирм и зарегали как фейл)", "Отказ, повторное предъявление", "Отказ, карта в стоп листе", "Отказ, QR-код недействителен", "Отказ, операция отклонена"},
         "Не классифицировано": {UNCLASSIFIED_STATUS},
     }
     payloads: dict[str, list[dict[str, object]]] = {label: [] for label in summary}
@@ -670,12 +674,20 @@ def _bm_status_decision_terms(event: PaymentEvent) -> list[str]:
             if term in lowered:
                 terms.append(term)
     elif code == 16:
-        for term in ("истек таймаут", "timeout"):
+        for term in ("истек таймаут", "timeout expired", "timeout"):
             if term in lowered:
                 terms.append(term)
     elif code == 17:
         if "нет карты" in lowered:
             terms.append("Нет карты")
+    elif code == 12:
+        for term in ("qr-код недейств", "qr code invalid"):
+            if term in lowered:
+                terms.append("QR-КОД НЕДЕЙСТВИТЕЛЕН")
+                break
+    elif code in {14, 255}:
+        if "операция отклонена" in lowered:
+            terms.append("Операция отклонена")
     if "oda" in lowered:
         terms.append("ODA")
     if "cda" in lowered:
@@ -693,12 +705,15 @@ def _bm_group_label(status: str) -> str:
         "Отказ, нет карты в поле",
         "Отказ, ошибка ODA/CDA",
         "Отказ, коллизия",
+        "Отказ, истек таймаут",
     }:
         return "Ошибки"
     if status in {
         "Проход зафейлен (онлайн - не получили конфирм и зарегали как фейл)",
         "Отказ, повторное предъявление",
         "Отказ, карта в стоп листе",
+        "Отказ, QR-код недействителен",
+        "Отказ, операция отклонена",
     }:
         return "Отказы"
     return "Не классифицировано"
@@ -1158,6 +1173,9 @@ def _script() -> str:
     'Отказ, карта в стоп листе',
     'Отказ, коллизия',
     'Отказ, ошибка ODA/CDA',
+    'Отказ, QR-код недействителен',
+    'Отказ, операция отклонена',
+    'Отказ, истек таймаут',
     'Отказ, нет карты в поле'
   ];
   const successStatuses = new Set([
@@ -1169,12 +1187,15 @@ def _script() -> str:
     'Отказ, ошибка чтения карты',
     'Отказ, нет карты в поле',
     'Отказ, ошибка ODA/CDA',
-    'Отказ, коллизия'
+    'Отказ, коллизия',
+    'Отказ, истек таймаут'
   ]);
   const declineStatuses = new Set([
     'Проход зафейлен (онлайн - не получили конфирм и зарегали как фейл)',
     'Отказ, повторное предъявление',
-    'Отказ, карта в стоп листе'
+    'Отказ, карта в стоп листе',
+    'Отказ, QR-код недействителен',
+    'Отказ, операция отклонена'
   ]);
   const filterLabels = {
     versions: 'Версии БМ',
@@ -1784,6 +1805,9 @@ def _script() -> str:
     if (successStatuses.has(status)) {
       return 'Успех';
     }
+    if (status === 'Отказ, истек таймаут') {
+      return 'Отказ, истек таймаут';
+    }
     if (errorStatuses.has(status)) {
       return 'Ошибки';
     }
@@ -1866,6 +1890,9 @@ def _script() -> str:
     const grouped = {};
     events.forEach((event) => {
       if (!event.timestamp) {
+        return;
+      }
+      if (event.status === 'Отказ, истек таймаут') {
         return;
       }
       const date = String(event.timestamp).slice(0, 10);

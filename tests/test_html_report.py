@@ -115,5 +115,6 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert "data-meta-kind=" in html
     assert "Успех" in html
     assert "Ошибки" in html
+    assert "Отказ, истек таймаут" in html
     assert "Отказы" in html
     assert "Не классифицировано" in html

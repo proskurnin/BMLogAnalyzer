@@ -11,6 +11,10 @@ def test_classifies_supported_bm_statuses_from_codes_and_markers():
     assert classify_bm_status(make_event(3, message="Ошибка чтения карты")) == "Отказ, ошибка чтения карты"
     assert classify_bm_status(make_event(4, message="Карта в стоп-листе")) == "Отказ, карта в стоп листе"
     assert classify_bm_status(make_event(6, message="Приложите одну карту")) == "Отказ, коллизия"
+    assert classify_bm_status(make_event(12, message="QR-КОД НЕДЕЙСТВИТЕЛЕН")) == "Отказ, QR-код недействителен"
+    assert classify_bm_status(make_event(14, message="Операция отклонена")) == "Отказ, операция отклонена"
+    assert classify_bm_status(make_event(16, message="Истек таймаут")) == "Отказ, истек таймаут"
+    assert classify_bm_status(make_event(255, message="Операция отклонена")) == "Отказ, операция отклонена"
     assert classify_bm_status(make_event(17, message="Нет карты. Приложите еще раз")) == "Отказ, нет карты в поле"
     assert classify_bm_status(make_event(999, message="ODA failed")) == "Отказ, ошибка ODA/CDA"
 

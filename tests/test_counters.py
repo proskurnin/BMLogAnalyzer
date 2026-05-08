@@ -37,6 +37,8 @@ def test_classifies_known_codes():
     assert classify_code(3) == "technical_error"
     assert classify_code(4) == "decline"
     assert classify_code(6) == "decline"
+    assert classify_code(12) == "decline"
+    assert classify_code(14) == "decline"
     assert classify_code(16) == "technical_error"
     assert classify_code(17) == "technical_error"
     assert classify_code(255) == "decline"
