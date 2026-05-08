@@ -2,7 +2,7 @@
 
 CLI-first analyzer for BM PaymentStart response logs.
 
-Current analyzer version: `0.15.0`.
+Current analyzer version: `0.24.0`.
 
 ## Run
 
@@ -45,6 +45,35 @@ python3 tools/bump_version.py patch
 python3 tools/bump_version.py minor
 python3 tools/bump_version.py major
 ```
+
+## Web
+
+The project now has a web service layer in `web/` that reuses the same core analysis engine as the CLI.
+It exposes a snapshot API for later UI work and a lightweight health/readiness surface.
+
+The web adapter is currently optional and expects `fastapi` and `uvicorn` to be installed in the runtime environment.
+Without those packages, the core service layer still works and is covered by tests.
+
+Install the runtime dependencies:
+
+```bash
+python3 -m pip install -r requirements-web.txt
+```
+
+Run the web service after installing the optional dependencies:
+
+```bash
+python3 -m web --host 127.0.0.1 --port 8000
+```
+
+On shells where `python3` still resolves to the system interpreter, use:
+
+```bash
+.venv/bin/python -m web --host 127.0.0.1 --port 8000
+```
+
+The web page now uses a single upload flow: choose files or a folder, click `Загрузить`, watch the progress bar, then open the generated report from the link.
+Every upload session is stored in `_workdir/web_history`, and the HTML report is served from `/report/{run_id}`.
 
 Archives are extracted into `_workdir/extracted` before analysis. The scanner reads `.log`, `.gz`, `.zip`, `.tar.gz`, `.tgz`, and `.rar` sources. RAR extraction requires `bsdtar`.
 
