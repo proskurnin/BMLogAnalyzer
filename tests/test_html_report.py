@@ -76,6 +76,7 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert "Перевозчики" in html
     assert "Ридеры" in html
     assert "Даты" in html
+    assert "id=\"bm-filter-root\"" in html
     assert "BM logs" in html
     assert "Stopper logs" in html
     assert "Reader logs" in html
@@ -102,11 +103,12 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert "data-format=\"records\"" in html
     assert "data-kind=\"status\"" in html
     assert "data-kind=\"group\"" in html
-    assert "data-kind=\"meta\"" in html
+    assert "data-focus-group=\"versions\"" in html
     assert "class=\"modal-files\"" in html
     assert "class=\"modal-lines\"" in html
-    assert "class=\"modal-toolbar\"" in html
-    assert "data-filter-group-reset=" in html
+    assert "class=\"filter-panel\"" in html
+    assert "filter-option-grid" in html
+    assert "data-focus-group=" in html
     assert "Успех" in html
     assert "Ошибки" in html
     assert "Отказы" in html

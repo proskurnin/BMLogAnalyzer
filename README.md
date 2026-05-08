@@ -363,3 +363,11 @@ For explicit card-type markers and technical card fields, the analyzer answers:
 .venv/bin/python -m pip install -r requirements-dev.txt
 .venv/bin/python -m pytest
 ```
+
+## Verification
+
+For a single post-change check that prints tests, healthchecks, and readiness status:
+
+```bash
+.venv/bin/python tools/verify.py
+```

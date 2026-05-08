@@ -125,6 +125,7 @@ def render_html_report(
             "</div>",
             _bm_meta_grid(bm_meta_cards),
             '<div id="active-filters" class="active-filters"></div>',
+            '<div id="bm-filter-root" class="bm-filter-root"></div>',
             "</section>",
             '<section class="section section--chart">',
             '<div class="section-title">',
@@ -179,14 +180,14 @@ def _bm_meta_cards(
     date_records: list[dict[str, object]],
 ) -> str:
     items = [
-        ("Версии БМ", versions or "missing", version_records, "records"),
-        ("Перевозчики", carriers or "missing", carrier_records, "records"),
-        ("Ридеры", readers or "missing", reader_records, "records"),
-        ("Даты", period or "missing", date_records, "records"),
+        ("Версии БМ", versions or "missing", version_records, "versions"),
+        ("Перевозчики", carriers or "missing", carrier_records, "carriers"),
+        ("Ридеры", readers or "missing", reader_records, "readers"),
+        ("Даты", period or "missing", date_records, "dates"),
     ]
     return "".join(
-        _bm_meta_card(label, value, payload, payload_format=payload_format)
-        for label, value, payload, payload_format in items
+        _bm_meta_card(label, value, payload, focus_group=focus_group)
+        for label, value, payload, focus_group in items
     )
 
 
@@ -195,11 +196,11 @@ def _bm_meta_card(
     value: object,
     payload: list[dict[str, object]],
     *,
-    payload_format: str,
+    focus_group: str,
 ) -> str:
     return (
         f'<button type="button" class="bm-meta-card bm-meta-card--button" '
-        f'data-kind="meta" data-format="{escape(payload_format)}" data-label="{escape(label)}" '
+        f'data-focus-group="{escape(focus_group)}" data-label="{escape(label)}" '
         f'data-payload="{escape(json.dumps(payload, ensure_ascii=False))}">'
         f"<span>{escape(label)}</span>"
         f"<strong>{escape(str(value))}</strong>"
@@ -1100,6 +1101,7 @@ def _script() -> str:
   const bmDateChartRoot = document.getElementById('bm-date-chart-root');
   const bmUnclassifiedRoot = document.getElementById('bm-unclassified-root');
   const activeFiltersRoot = document.getElementById('active-filters');
+  const bmFilterRoot = document.getElementById('bm-filter-root');
   const statusOrder = [
     'Успешный онлайн (БЕЗ МИР)',
     'Успешный онлайн МИР',
@@ -1134,6 +1136,12 @@ def _script() -> str:
     readers: 'Ридеры',
     dates: 'Даты'
   };
+  const filterGroupOrder = [
+    { name: 'versions', label: 'Версии БМ' },
+    { name: 'carriers', label: 'Перевозчики' },
+    { name: 'readers', label: 'Ридеры' },
+    { name: 'dates', label: 'Даты' }
+  ];
   const filterState = {
     versions: new Set(),
     carriers: new Set(),
@@ -1179,6 +1187,16 @@ def _script() -> str:
     modal.hidden = false;
     document.body.classList.add('modal-open');
     syncFilterButtonState();
+  }
+
+  function focusFilterGroup(groupName) {
+    const target = document.getElementById(`filter-group-${groupName}`);
+    if (!target) {
+      return;
+    }
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    target.classList.add('filter-group--flash');
+    window.setTimeout(() => target.classList.remove('filter-group--flash'), 900);
   }
 
   function renderFileItems(items) {
@@ -1303,6 +1321,80 @@ def _script() -> str:
     return toolbar + (rendered || '<p class="muted">Нет доступных значений для текущего набора фильтров.</p>');
   }
 
+  function renderFilterPanel() {
+    if (!bmFilterRoot) {
+      return;
+    }
+    const isOpen = bmFilterRoot.querySelector('details')?.open ?? false;
+    const sections = filterGroupOrder.map((group) => renderFilterGroup(group)).join('');
+    bmFilterRoot.innerHTML = `
+      <details class="filter-panel" ${isOpen ? 'open' : ''}>
+        <summary class="filter-panel__summary">
+          <span>
+            <strong>Фильтры</strong>
+            <em>Выбирайте значения здесь. Доступные варианты пересчитываются на лету.</em>
+          </span>
+          <b>${countActiveFilters()}</b>
+        </summary>
+        <div class="filter-panel__body">
+          <div class="filter-panel__head">
+            <div class="muted">Сейчас видно только совместимые варианты.</div>
+            <button type="button" class="filter-clear" id="clear-filters">Сбросить все</button>
+          </div>
+          <div class="filter-panel__groups">${sections}</div>
+        </div>
+      </details>`;
+    const clearButton = document.getElementById('clear-filters');
+    if (clearButton) {
+      clearButton.addEventListener('click', clearFilters);
+    }
+  }
+
+  function countActiveFilters() {
+    return Object.values(filterState).reduce((sum, bucket) => sum + bucket.size, 0);
+  }
+
+  function renderFilterGroup(group) {
+    const items = Array.from((metaIndex[group.name] || new Map()).values());
+    const allowed = allowedArchivesForGroup(group.name);
+    const selected = filterState[group.name];
+    const visibleItems = items.filter((item) => {
+      const key = String(item[groupKey(group.name)] || '');
+      const itemArchives = archivesForItem(item);
+      return selected.has(key) || allowed === null || intersects(itemArchives, allowed);
+    });
+    const options = visibleItems.map((item) => renderFilterOption(group.name, group.label, item)).join('');
+    return `
+      <section class="filter-group" id="filter-group-${escapeHtml(group.name)}">
+        <div class="filter-group__head">
+          <div>
+            <h3>${escapeHtml(group.label)}</h3>
+            <p>${escapeHtml(String(selected.size))} выбрано · ${escapeHtml(String(visibleItems.length))} доступно</p>
+          </div>
+          <button type="button" class="filter-group__clear" data-filter-group-reset="${escapeHtml(group.name)}">Сбросить</button>
+        </div>
+        <div class="filter-option-grid">${options || '<span class="muted">Нет доступных значений</span>'}</div>
+      </section>`;
+  }
+
+  function renderFilterOption(groupName, groupLabel, item) {
+    const key = String(item[groupKey(groupName)] || '');
+    const selected = filterState[groupName].has(key);
+    const allowed = allowedArchivesForGroup(groupName);
+    const itemArchives = archivesForItem(item);
+    const visible = selected || allowed === null || intersects(itemArchives, allowed);
+    if (!visible) {
+      return '';
+    }
+    const count = Number(item.count || 0);
+    const label = key || 'missing';
+    return `
+      <button type="button" class="filter-option${selected ? ' filter-option--active' : ''}" data-filter-group="${escapeHtml(groupName)}" data-filter-key="${escapeHtml(key)}" aria-pressed="${selected ? 'true' : 'false'}">
+        <span>${escapeHtml(label)}</span>
+        <strong>${count}</strong>
+      </button>`;
+  }
+
   function metaGroupForLabel(label) {
     if (label === 'Версии БМ') {
       return { name: 'versions', key: 'version' };
@@ -1317,6 +1409,14 @@ def _script() -> str:
       return { name: 'dates', key: 'date' };
     }
     return { name: 'versions', key: 'version' };
+  }
+
+  function groupKey(groupName) {
+    if (groupName === 'versions') return 'version';
+    if (groupName === 'carriers') return 'carrier';
+    if (groupName === 'readers') return 'reader';
+    if (groupName === 'dates') return 'date';
+    return 'version';
   }
 
   function closeModal() {
@@ -1765,6 +1865,7 @@ def _script() -> str:
 
   function renderAll() {
     renderActiveFilters();
+    renderFilterPanel();
     renderLogFiles();
     renderOtherFiles();
     renderStatusSection();
@@ -1838,6 +1939,12 @@ def _script() -> str:
     openModal(interactive);
   });
   document.addEventListener('click', (event) => {
+    const focusGroup = event.target.closest('[data-focus-group]');
+    if (focusGroup) {
+      event.preventDefault();
+      focusFilterGroup(focusGroup.dataset.focusGroup || '');
+      return;
+    }
     const groupReset = event.target.closest('[data-filter-group-reset]');
     if (groupReset) {
       event.preventDefault();
@@ -1914,6 +2021,32 @@ h1, h2, p { margin: 0; }
 .bm-meta-card--button:hover { background: #f2f5f8; border-color: #dbe3ea; }
 .bm-meta-card--button:focus-visible { outline: 2px solid #9db9d6; outline-offset: 2px; }
 .bm-meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.bm-filter-root { margin-top: 14px; }
+.filter-panel { border: 1px solid var(--line); border-radius: 14px; background: var(--soft); padding: 0; overflow: hidden; }
+.filter-panel__summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px; }
+.filter-panel__summary::-webkit-details-marker { display: none; }
+.filter-panel__summary strong { display: block; font-size: 16px; }
+.filter-panel__summary em { display: block; margin-top: 2px; color: var(--muted); font-style: normal; font-size: 13px; }
+.filter-panel__summary b { min-width: 34px; text-align: center; color: var(--blue); background: #e6f1ff; border-radius: 999px; padding: 4px 8px; font-size: 12px; }
+.filter-panel__body { padding: 0 14px 14px; }
+.filter-panel__head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
+.filter-panel__head strong { display: block; font-size: 16px; }
+.filter-panel__head span { display: block; margin-top: 2px; font-size: 13px; }
+.filter-panel__groups { display: grid; gap: 12px; }
+.filter-group { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+.filter-group--flash { box-shadow: 0 0 0 2px rgba(39, 100, 163, 0.12); border-color: #9db9d6; }
+.filter-group__head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 10px; }
+.filter-group__head h3 { font-size: 14px; line-height: 1.2; margin: 0; }
+.filter-group__head p { margin-top: 4px; color: var(--muted); font-size: 12px; }
+.filter-group__clear { appearance: none; border: 1px solid var(--line); background: var(--soft); color: inherit; font: inherit; border-radius: 999px; padding: 6px 10px; cursor: pointer; white-space: nowrap; }
+.filter-group__clear:hover { background: #f2f5f8; border-color: #dbe3ea; }
+.filter-option-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.filter-option { appearance: none; border: 1px solid var(--line); background: var(--soft); color: inherit; font: inherit; border-radius: 999px; padding: 7px 10px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
+.filter-option span { font-size: 13px; }
+.filter-option strong { color: var(--muted); font-size: 12px; }
+.filter-option:hover { background: #f2f5f8; border-color: #dbe3ea; }
+.filter-option--active { background: #dbeafe; border-color: #7fb0de; }
+.filter-option:focus-visible { outline: 2px solid #9db9d6; outline-offset: 2px; }
 .active-filters { margin-top: 12px; }
 .active-filters__row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .active-filters__empty { color: var(--muted); font-size: 13px; }
