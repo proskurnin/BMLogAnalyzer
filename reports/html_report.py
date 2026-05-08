@@ -1748,11 +1748,14 @@ def _script() -> str:
   function renderGroupedTable(events) {
     const groups = groupByStatusGroup(events);
     const total = events.length;
+    const unclassifiedRow = groups.unclassified > 0
+      ? renderGroupedRow('Не классифицировано', groups.unclassified, total, false, events)
+      : '';
     const rows = [
       renderGroupedRow('Успех', groups.success, total, true, events),
       renderGroupedRow('Ошибки', groups.errors, total, false, events),
       renderGroupedRow('Отказы', groups.declines, total, false, events),
-      renderGroupedRow('Не классифицировано', groups.unclassified, total, false, events)
+      unclassifiedRow
     ].join('');
     return `
       <div class="table-wrap bm-table-wrap bm-table-wrap--compact">
