@@ -67,3 +67,22 @@ def test_pipeline_does_not_analyze_zip_twice(tmp_path):
     assert stats.log_inventory[0].log_type == "bm"
     assert stats.archive_inventory[0].archive == str(archive_path)
     assert stats.archive_inventory[0].category == "Other log-like"
+
+
+def test_pipeline_falls_back_on_invalid_gzip(tmp_path):
+    input_dir = tmp_path / "input"
+    extracted_dir = tmp_path / "extracted"
+    input_dir.mkdir()
+    archive_path = input_dir / "broken.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr(
+            "broken.log.gz",
+            b"2026-04-29 20:50:41.343 PaymentStart, resp: {Code:0 Message:OK} duration=412 ms p: mgt_nbs-oti-4.4.12\n",
+        )
+
+    events, result, stats = run_analysis(input_dir, extracted_dir=extracted_dir)
+
+    assert len(events) == 1
+    assert result.total == 1
+    assert stats.scanned_lines == 1
+    assert stats.analyzed_files == [str(extracted_dir / "broken.zip" / "broken.log.gz")]

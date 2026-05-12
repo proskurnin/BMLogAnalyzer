@@ -21,6 +21,7 @@ from analytics.log_inventory import (
     reader_model_counts,
 )
 from core.config import load_app_config
+from core.contracts import SNAPSHOT_SCHEMA_VERSION
 from core.pipeline import run_analysis
 from core.version import format_version
 from web.models import AnalysisModel, ArchiveModel, PipelineModel, ReportsModel, RequestModel, SnapshotModel
@@ -143,6 +144,7 @@ def execute_analysis(request: AnalysisRequest) -> AnalysisBundle:
             "archive_inventory": [asdict(row) for row in stats.archive_inventory],
             "log_inventory": [asdict(item) for item in stats.log_inventory],
         },
+        schema_version=SNAPSHOT_SCHEMA_VERSION,
     )
     return AnalysisBundle(snapshot=snapshot, events=events, result=result, stats=stats)
 
@@ -166,6 +168,7 @@ def build_summary_snapshot(request: AnalysisRequest) -> SnapshotModel:
         reports=snapshot.reports,
         facts=snapshot.facts,
         stats=None,
+        schema_version=snapshot.schema_version,
     )
 
 
@@ -235,6 +238,7 @@ def execute_uploaded_analysis(
                 reports=bundle.snapshot.reports,
                 facts=bundle.snapshot.facts,
                 stats=None,
+                schema_version=bundle.snapshot.schema_version,
             ),
             events=bundle.events,
             result=bundle.result,

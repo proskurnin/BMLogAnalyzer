@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import re
 from collections import defaultdict
+from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
 
 from analytics.archive_inventory import bm_log_count, explicit_reader_log_count, explicit_system_log_count
 from analytics.bm_statuses import UNCLASSIFIED_STATUS, bm_status_summary_rows, classify_bm_status
+from core.contracts import REPORT_MANIFEST_SCHEMA_VERSION
 from core.models import AnalysisResult, ArchiveInventoryRow, PaymentEvent, PipelineStats
 from core.version import __version__
 
@@ -32,6 +34,11 @@ def write_html_report(
     report_path = Path(path)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(render_html_report(events, result, stats=stats), encoding="utf-8")
+    manifest_path = report_path.with_suffix(".json")
+    manifest_path.write_text(
+        json.dumps(render_html_report_manifest(events, result, stats=stats), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def _json_script(data: object) -> str:
@@ -59,6 +66,7 @@ def render_html_report(
     bm_date_records = _bm_date_records(events, archive_names)
     bm_group_rows = _bm_status_groups(events)
     bm_group_payloads = _bm_group_payloads(events, archive_names)
+    validator_sections = _validator_analytics(events, archive_names)
     date_chart = _bm_date_chart(events)
     unclassified_diag = _unclassified_diagnostics(events)
     report_data = _report_data(
@@ -70,7 +78,9 @@ def render_html_report(
         bm_carrier_records=bm_carrier_records,
         bm_reader_records=bm_reader_records,
         bm_date_records=bm_date_records,
+        validator_sections=validator_sections,
     )
+
     bm_meta_cards = _bm_meta_cards(
         versions=bm_versions,
         version_records=bm_version_records,
@@ -137,6 +147,7 @@ def render_html_report(
             _collapsible_other_section(other_groups, other_total),
             f'<script id="report-data" type="application/json">{_json_script(report_data)}</script>',
             _bm_status_section(events, bm_group_rows, bm_group_payloads, date_chart, unclassified_diag, archive_names),
+            _validator_section(validator_sections),
             _modal(),
             _script(),
             "</main>",
@@ -144,6 +155,73 @@ def render_html_report(
             "</html>",
         ]
     )
+
+
+def render_html_report_manifest(
+    events: list[PaymentEvent],
+    result: AnalysisResult,
+    *,
+    stats: PipelineStats | None = None,
+) -> dict[str, object]:
+    archive_inventory = stats.archive_inventory if stats else []
+    log_groups, log_total = _build_log_groups(archive_inventory)
+    other_groups, other_total = _build_other_groups(archive_inventory)
+    summary_rows = bm_status_summary_rows(events)
+    grouped_rows = _bm_status_groups(events)
+    archive_names = _archive_name_set(stats.input_files if stats else [])
+    validator_sections = _validator_analytics(events, archive_names)
+    stable_sections = [
+        "summary",
+        "bm_meta",
+        "log_files",
+        "other_files",
+        "bm_statuses",
+        "grouped_statuses",
+        "date_dynamics",
+        "unclassified_diagnostics",
+        "validator_analytics",
+    ]
+    return {
+        "schema_version": REPORT_MANIFEST_SCHEMA_VERSION,
+        "report_type": "analysis_report",
+        "report_title": "BM Log Analyzer",
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "version": __version__,
+        "stable_fields": [
+            "schema_version",
+            "report_type",
+            "report_title",
+            "generated_at",
+            "version",
+            "counts",
+            "sections",
+            "status_groups",
+            "grouped_statuses",
+            "log_groups",
+            "other_groups",
+            "validator_sections",
+        ],
+        "stable_sections": stable_sections,
+        "counts": {
+            "archives": len(stats.input_files) if stats else 0,
+            "log_files": log_total,
+            "other_files": other_total,
+            "bm_logs": bm_log_count(archive_inventory),
+            "reader_logs": explicit_reader_log_count(archive_inventory),
+            "system_logs": explicit_system_log_count(archive_inventory),
+            "events": result.total,
+            "success": result.success_count,
+            "decline": result.decline_count,
+            "technical_error": result.technical_error_count,
+            "unknown": result.unknown_count,
+        },
+        "sections": stable_sections,
+        "status_groups": [str(row["status"]) for row in summary_rows],
+        "grouped_statuses": [str(row["label"]) for row in grouped_rows],
+        "log_groups": [str(group["label"]) for group in log_groups],
+        "other_groups": [str(group["label"]) for group in other_groups],
+        "validator_sections": [str(item["validator"]) for item in validator_sections],
+    }
 
 
 def _metric_card(
@@ -370,6 +448,7 @@ def _report_data(
     bm_carrier_records: list[dict[str, object]],
     bm_reader_records: list[dict[str, object]],
     bm_date_records: list[dict[str, object]],
+    validator_sections: list[dict[str, object]],
 ) -> dict[str, object]:
     event_rows = []
     for event in events:
@@ -398,6 +477,7 @@ def _report_data(
             "readers": bm_reader_records,
             "dates": bm_date_records,
         },
+        "validators": validator_sections,
         "events": event_rows,
     }
 
@@ -773,6 +853,69 @@ def _bm_date_records(events: list[PaymentEvent], archive_names: set[str]) -> lis
     return [_bm_selectable_record("date", date, date_events, archive_names) for date, date_events in sorted(counts.items())]
 
 
+def _validator_analytics(events: list[PaymentEvent], archive_names: set[str]) -> list[dict[str, object]]:
+    grouped: dict[str, dict[str, list[PaymentEvent]]] = defaultdict(lambda: defaultdict(list))
+    for event in events:
+        validator = _validator_from_source(event.source_file, archive_names)
+        version = event.bm_version or "missing"
+        grouped[validator][version].append(event)
+
+    payload: list[dict[str, object]] = []
+    for validator in sorted(grouped):
+        versions = []
+        for version in sorted(grouped[validator]):
+            version_events = grouped[validator][version]
+            total = len(version_events)
+            date_range = _date_range_for_events(version_events)
+            versions.append(
+                {
+                    "version": version,
+                    "total": total,
+                    "date_from": date_range[0],
+                    "date_to": date_range[1],
+                    "declines": [
+                        {
+                            "status": "Отказ, нет карты в поле",
+                            "count": _count_events(version_events, {"Отказ, нет карты в поле"}),
+                            "percent": _percent(_count_events(version_events, {"Отказ, нет карты в поле"}), total),
+                        },
+                        {
+                            "status": "Отказ, ошибка чтения карты",
+                            "count": _count_events(version_events, {"Отказ, ошибка чтения карты"}),
+                            "percent": _percent(_count_events(version_events, {"Отказ, ошибка чтения карты"}), total),
+                        },
+                    ],
+                }
+            )
+        payload.append({"validator": validator, "versions": versions})
+    return payload
+
+
+def _validator_from_source(source_file: str, archive_names: set[str]) -> str:
+    path = Path(source_file)
+    for part in path.parts:
+        if part in archive_names:
+            return Path(part).stem
+    for part in path.parts:
+        stem = Path(part).stem
+        if stem and any(ch.isdigit() for ch in stem):
+            return stem
+    return path.stem or path.name or "missing"
+
+
+def _count_events(events: list[PaymentEvent], statuses: set[str]) -> int:
+    return sum(1 for event in events if classify_bm_status(event) in statuses)
+
+
+def _date_range_for_events(events: list[PaymentEvent]) -> tuple[str, str]:
+    timestamps = sorted(event.timestamp for event in events if event.timestamp)
+    if not timestamps:
+        return ("missing", "missing")
+    start = timestamps[0].strftime("%d.%m.%Y")
+    end = timestamps[-1].strftime("%d.%m.%Y")
+    return (start, end)
+
+
 def _bm_date_chart(events: list[PaymentEvent]) -> str:
     by_date = _bm_grouped_date_counts(events)
     if len(by_date) <= 1:
@@ -916,6 +1059,75 @@ def _collapsible_unclassified_section(rows: list[dict[str, object]]) -> str:
             "</summary>",
             '<div class="collapsible-body">',
             table,
+            "</div>",
+            "</details>",
+        ]
+    )
+
+
+def _validator_section(groups: list[dict[str, object]]) -> str:
+    if not groups:
+        content = '<p class="muted">Нет данных по валидаторам.</p>'
+    else:
+        blocks: list[str] = []
+        for group in groups:
+            validator = str(group.get("validator") or "missing")
+            versions = group.get("versions") or []
+            version_blocks: list[str] = []
+            for version in versions:
+                declines = version.get("declines") or []
+                decline_rows = "".join(
+                    f"<tr><td>{escape(str(row.get('status') or ''))}</td><td>{int(row.get('count') or 0)}</td><td>{float(row.get('percent') or 0):.2f}%</td></tr>"
+                    for row in declines
+                )
+                date_from = escape(str(version.get("date_from") or "missing"))
+                date_to = escape(str(version.get("date_to") or "missing"))
+                version_blocks.append(
+                    "\n".join(
+                        [
+                            '<div class="validator-version">',
+                            '<div class="validator-version__head">',
+                            f'<strong>Версия {escape(str(version.get("version") or "missing"))}</strong>',
+                            f'<span>Всего {int(version.get("total") or 0)} транзакций</span>',
+                            "</div>",
+                            f'<div class="validator-version__meta"><span>с {date_from} по {date_to}</span></div>',
+                            '<table class="status-table status-table--validator">',
+                            '<thead class="status-table-head"><tr><th>Статус</th><th>Кол-во</th><th>%</th></tr></thead>',
+                            f"<tbody>{decline_rows or '<tr><td colspan=\"3\" class=\"muted\">Нет данных</td></tr>'}</tbody>",
+                            "</table>",
+                            "</div>",
+                        ]
+                    )
+                )
+            blocks.append(
+                "\n".join(
+                    [
+                        '<details class="collapsible collapsible--validator">',
+                        "<summary>",
+                        "<span>",
+                        f"<strong>{escape(validator)}</strong>",
+                        f"<em>{len(versions)} версий</em>",
+                        "</span>",
+                        "</summary>",
+                        '<div class="collapsible-body">',
+                        "".join(version_blocks) if version_blocks else '<p class="muted">Нет данных по версиям.</p>',
+                        "</div>",
+                        "</details>",
+                    ]
+                )
+            )
+        content = "".join(blocks)
+    return "\n".join(
+        [
+            '<details class="collapsible collapsible--validators">',
+            "<summary>",
+            "<span>",
+            "<strong>Аналитика по валидаторам</strong>",
+            "<em>Версии BM, даты и два ключевых отказа по каждому архиву</em>",
+            "</span>",
+            "</summary>",
+            '<div class="collapsible-body">',
+            content,
             "</div>",
             "</details>",
         ]
@@ -2189,6 +2401,16 @@ h1, h2, p { margin: 0; }
 .status-table--grouped .status-row--success td { background: #eef8ee; }
 .status-table--grouped .status-row--clickable:hover td { background: rgba(39, 100, 163, 0.04); }
 .status-table--diagnostic td { vertical-align: top; }
+.status-table--validator { margin-top: 12px; }
+.status-table--validator .status-row td { background: #fff; }
+.collapsible--validators { margin-top: 18px; }
+.collapsible--validator { margin-top: 12px; border-color: #d9e0e7; box-shadow: none; }
+.validator-version { padding: 12px 0 2px; border-top: 1px solid #e8edf2; }
+.validator-version:first-child { border-top: 0; padding-top: 0; }
+.validator-version__head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.validator-version__head strong { font-size: 15px; }
+.validator-version__head span { color: var(--muted); white-space: nowrap; }
+.validator-version__meta { margin-top: 4px; color: var(--muted); font-size: 12px; }
 .chart-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: var(--soft); }
 .line-chart { width: 100%; height: auto; display: block; }
 .line-chart text { fill: var(--muted); font-size: 12px; }

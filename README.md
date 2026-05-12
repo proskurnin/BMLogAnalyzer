@@ -2,7 +2,7 @@
 
 CLI-first analyzer for BM PaymentStart response logs.
 
-Current analyzer version: `0.24.0`.
+Current analyzer version: `0.33.0`.
 
 ## Run
 
@@ -72,8 +72,24 @@ On shells where `python3` still resolves to the system interpreter, use:
 .venv/bin/python -m web --host 127.0.0.1 --port 8000
 ```
 
-The web page now uses a single upload flow: choose files or a folder, click `Загрузить`, watch the progress bar, then open the generated report from the link.
+The web page now uses a single upload flow: choose files or a folder, click `Загрузить`, watch the progress bar, then wait for the upload and report generation to finish.
 Every upload session is stored in `_workdir/web_history`, and the HTML report is served from `/report/{run_id}`.
+Each HTML report also writes a versioned JSON manifest next to it and exposes it at `/report/{run_id}/manifest`.
+The latest saved report is available at `/api/runs/latest/report`.
+The history list can be filtered by run mode (`analysis` or `summary`), searched by date/path/version, sorted by time, and each history entry exposes direct HTML and manifest URLs. Sessions can be deleted from the history view.
+The HTML report also includes a collapsed validator analytics section grouped by validator number, BM version, and date range.
+
+The root page `/` is upload-only. It does not expose analytics, reports, or history.
+The admin upload registry is available at `/uploads`. It lists uploaded files, lets an admin download each file locally, shows the current report state, and can generate a report for multiple selected uploads.
+Upload storage is kept in `_workdir/upload_store`.
+Role-based access control is planned separately: the product flow already separates upload and admin views, but authentication is not implemented yet.
+
+Stable contracts exposed by the core/web layer:
+
+* snapshot schema: `bm-log-analyzer.snapshot.v1`
+* report manifest schema: `bm-log-analyzer.analysis-report.v1`
+* stable report sections are declared in the manifest `sections` list
+* validator analytics is exposed in the HTML report and manifest as `validator_analytics`
 
 Archives are extracted into `_workdir/extracted` before analysis. The scanner reads `.log`, `.gz`, `.zip`, `.tar.gz`, `.tgz`, and `.rar` sources. RAR extraction requires `bsdtar`.
 

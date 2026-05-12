@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from core.contracts import SNAPSHOT_SCHEMA_VERSION
+
 
 @dataclass(frozen=True)
 class RequestModel:
@@ -80,6 +82,7 @@ class SnapshotModel:
     reports: ReportsModel
     facts: dict[str, Any] = field(default_factory=dict)
     stats: dict[str, Any] | None = None
+    schema_version: str = SNAPSHOT_SCHEMA_VERSION
 
 
 @dataclass(frozen=True)
@@ -100,3 +103,19 @@ class HistoryItemModel:
     reader_logs: int
     system_logs: int
     report_path: str = ""
+    report_url: str = ""
+    manifest_url: str = ""
+
+
+@dataclass(frozen=True)
+class UploadItemModel:
+    upload_id: str
+    created_at: str
+    original_name: str
+    stored_path: str
+    size_bytes: int
+    status: str = "stored"
+    status_message: str = ""
+    report_run_id: str = ""
+    report_url: str = ""
+    download_url: str = ""

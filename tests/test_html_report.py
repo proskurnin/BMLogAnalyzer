@@ -13,41 +13,41 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
         scanned_lines=10,
         malformed_payment_lines=0,
         extracted_files=4,
-        input_files=["input/archive.zip"],
+        input_files=["input/2007201.zip"],
         analyzed_files=["input/bm.log", "input/reader.log", "input/system.log", "input/other.log"],
         archive_inventory=[
             ArchiveInventoryRow(
-                archive="input/archive.zip",
+                archive="input/2007201.zip",
                 category="BM rotate",
                 count=7,
                 files=["bm/logs/bm/a.log", "bm/logs/bm/b.log"],
             ),
             ArchiveInventoryRow(
-                archive="input/archive.zip",
+                archive="input/2007201.zip",
                 category="Stopper stdout",
                 count=2,
                 files=["bm/logs/stopper-std/s1.log", "bm/logs/stopper-std/s2.log"],
             ),
             ArchiveInventoryRow(
-                archive="input/archive.zip",
+                archive="input/2007201.zip",
                 category="Reader logs",
                 count=1,
                 files=["logs/reader/reader.log"],
             ),
             ArchiveInventoryRow(
-                archive="input/archive.zip",
+                archive="input/2007201.zip",
                 category="Reader firmware binary",
                 count=1,
                 files=["reader-1.44.6518.bin.P.signed"],
             ),
             ArchiveInventoryRow(
-                archive="input/archive.zip",
+                archive="input/2007201.zip",
                 category="Service config",
                 count=1,
                 files=["bm/bm.service"],
             ),
             ArchiveInventoryRow(
-                archive="input/archive.zip",
+                archive="input/2007201.zip",
                 category="Other",
                 count=1,
                 files=["bm/stopper.service"],
@@ -56,17 +56,30 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     )
 
     events = [
-        make_event(0, 100, "4.4.12", message="OK", payment_type=2, auth_type=0),
+        make_event(17, 100, "4.4.12", message="Нет карты", payment_type=2, auth_type=0),
+        make_event(17, 120, "4.4.12", message="Нет карты", payment_type=2, auth_type=0),
         make_event(3, 412, "4.4.12", message="Ошибка чтения карты"),
+        make_event(3, 412, "4.4.12", message="Ошибка чтения карты"),
+        make_event(17, 100, "4.4.7", message="Нет карты", payment_type=2, auth_type=0),
+        make_event(3, 412, "4.4.7", message="Ошибка чтения карты"),
     ]
-    events[0] = replace(events[0], timestamp=datetime(2026, 5, 4, 10, 0))
-    events[0] = replace(events[0], raw_line="2026-05-04 PaymentStart, resp: {Code:0 Message:OK error: no error}")
-    events[1] = replace(events[1], timestamp=datetime(2026, 5, 5, 14, 0))
-    events[1] = replace(events[1], raw_line="2026-05-05 PaymentStart, resp: {Code:3 Message:Ошибка чтения карты}")
+    events[0] = replace(events[0], source_file="_workdir/extracted/2007201.zip/bm/logs/bm/a.log", timestamp=datetime(2026, 4, 11, 10, 0))
+    events[1] = replace(events[1], source_file="_workdir/extracted/2007201.zip/bm/logs/bm/b.log", timestamp=datetime(2026, 5, 5, 11, 0))
+    events[2] = replace(events[2], source_file="_workdir/extracted/2007201.zip/bm/logs/bm/c.log", timestamp=datetime(2026, 4, 20, 12, 0))
+    events[3] = replace(events[3], source_file="_workdir/extracted/2007201.zip/bm/logs/bm/d.log", timestamp=datetime(2026, 5, 5, 13, 0))
+    events[4] = replace(events[4], source_file="_workdir/extracted/2007201.zip/bm/logs/bm/e.log", timestamp=datetime(2026, 5, 6, 9, 0))
+    events[5] = replace(events[5], source_file="_workdir/extracted/2007201.zip/bm/logs/bm/f.log", timestamp=datetime(2026, 5, 12, 18, 0))
+    events[0] = replace(events[0], raw_line="2026-04-11 PaymentStart, resp: {Code:17 Message:Нет карты}")
+    events[1] = replace(events[1], raw_line="2026-05-05 PaymentStart, resp: {Code:17 Message:Нет карты}")
+    events[2] = replace(events[2], raw_line="2026-04-20 PaymentStart, resp: {Code:3 Message:Ошибка чтения карты}")
+    events[3] = replace(events[3], raw_line="2026-05-05 PaymentStart, resp: {Code:3 Message:Ошибка чтения карты}")
+    events[4] = replace(events[4], raw_line="2026-05-06 PaymentStart, resp: {Code:17 Message:Нет карты}")
+    events[5] = replace(events[5], raw_line="2026-05-12 PaymentStart, resp: {Code:3 Message:Ошибка чтения карты}")
     result = analyze_events(events)
     write_html_report(events, result, tmp_path / "analysis_report.html", stats=stats)
 
     html = (tmp_path / "analysis_report.html").read_text(encoding="utf-8")
+    manifest = (tmp_path / "analysis_report.json").read_text(encoding="utf-8")
     assert "BM Log Analyzer" in html
     assert f"version {__version__}" in html
     assert "Log-файлы" in html
@@ -118,3 +131,19 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert "Отказ, истек таймаут" in html
     assert "Отказы" in html
     assert "Не классифицировано" in html
+    assert "Аналитика по валидаторам" in html
+    assert "2007201" in html
+    assert "Версия 4.4.12" in html
+    assert "Всего 4 транзакций" in html
+    assert "Версия 4.4.7" in html
+    assert "Всего 2 транзакций" in html
+    assert "Отказ, нет карты в поле" in html
+    assert "Отказ, ошибка чтения карты" in html
+    assert '"report_type": "analysis_report"' in manifest
+    assert '"schema_version": "bm-log-analyzer.analysis-report.v1"' in manifest
+    assert '"stable_fields": [' in manifest
+    assert '"stable_sections": [' in manifest
+    assert '"counts": {' in manifest
+    assert '"sections": [' in manifest
+    assert '"log_files"' in manifest
+    assert '"validator_sections"' in manifest
