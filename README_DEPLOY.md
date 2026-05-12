@@ -7,9 +7,10 @@ This document describes the minimum production deployment for the current FastAP
 1. Set a release version and changelog entry.
 2. Prepare a persistent data directory, for example `/var/lib/bm-log-analyzer`.
 3. Configure production environment variables.
-4. Run the test suite before deployment.
-5. Run the service behind Nginx with HTTPS.
-6. Back up the persistent data directory.
+4. Set up GitHub Actions secrets for deploy.
+5. Run the test suite before deployment.
+6. Run the service behind Nginx with HTTPS.
+7. Back up the persistent data directory.
 
 ## Production environment
 
@@ -61,6 +62,33 @@ python3.11 -m venv .venv
 .venv/bin/python -m pip install -r requirements-dev.txt -r requirements-web.txt
 .venv/bin/python -m pytest
 ```
+
+## GitHub Actions
+
+The repository contains two workflows:
+
+* `.github/workflows/ci-stage.yml` runs tests on every push to `main` and every pull request. After tests pass on a push to `main`, it deploys the same commit to stage.
+* `.github/workflows/deploy-prod.yml` is a manual production deploy. It runs tests for the selected ref first and then deploys only after the test job passes.
+
+Required GitHub secrets:
+
+```bash
+DEPLOY_HOST=109.172.30.33
+DEPLOY_USER=root
+DEPLOY_SSH_KEY='private key for the deploy account'
+```
+
+Recommended GitHub environments:
+
+* `stage`
+* `production`
+
+For `production`, set required reviewers in GitHub so that prod deploys need an explicit approval.
+
+The deploy workflow updates the already provisioned server directories:
+
+* `/opt/bm-log-analyzer-stage/src`
+* `/opt/bm-log-analyzer-prod/src`
 
 ## systemd
 
