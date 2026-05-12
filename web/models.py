@@ -105,6 +105,8 @@ class HistoryItemModel:
     report_path: str = ""
     report_url: str = ""
     manifest_url: str = ""
+    owner_email: str = ""
+    owner_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -119,3 +121,15 @@ class UploadItemModel:
     report_run_id: str = ""
     report_url: str = ""
     download_url: str = ""
+    owner_email: str = ""
+    owner_name: str = ""
+
+
+@dataclass(frozen=True)
+class UserModel:
+    user_id: str
+    name: str
+    email: str
+    password_hash: str
+    role: str = "user"
+    created_at: str = ""

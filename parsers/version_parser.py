@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-PACKAGE_RE = re.compile(r"\bmgt_nbs-(?P<bm_type>oti|tt)-(?P<version>\d+(?:\.\d+)+)\b", re.IGNORECASE)
+PACKAGE_RE = re.compile(r"\bmgt_(?:nbs|askp)-(?P<bm_type>oti|tt)-(?P<version>\d+(?:\.\d+)+)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)

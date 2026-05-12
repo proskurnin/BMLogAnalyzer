@@ -9,10 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from web.models import HistoryItemModel, SnapshotModel
+from web.settings import web_history_dir
 
 
 def _history_root(storage_dir: Path | None = None) -> Path:
-    root = Path(storage_dir or "./_workdir/web_history")
+    root = Path(storage_dir) if storage_dir else web_history_dir()
     root.mkdir(parents=True, exist_ok=True)
     (root / "runs").mkdir(parents=True, exist_ok=True)
     return root
@@ -62,6 +63,8 @@ def history_summary_from_snapshot(
     mode: str,
     source: str,
     report_path: str = "",
+    owner_email: str = "",
+    owner_name: str = "",
 ) -> HistoryItemModel:
     report_url, manifest_url = _history_urls(run_id, report_path)
     return HistoryItemModel(
@@ -83,6 +86,8 @@ def history_summary_from_snapshot(
         report_path=report_path,
         report_url=report_url,
         manifest_url=manifest_url,
+        owner_email=owner_email,
+        owner_name=owner_name,
     )
 
 
@@ -95,6 +100,8 @@ def record_history(
     run_id: str | None = None,
     created_at: str | None = None,
     report_path: Path | None = None,
+    owner_email: str = "",
+    owner_name: str = "",
 ) -> HistoryItemModel:
     created_at = created_at or _utc_now()
     run_id = run_id or new_run_id()
@@ -109,6 +116,8 @@ def record_history(
         "report_path": str(report_path) if report_path else "",
         "report_url": f"/report/{run_id}" if report_path else "",
         "manifest_url": f"/report/{run_id}/manifest" if report_path else "",
+        "owner_email": owner_email,
+        "owner_name": owner_name,
         "snapshot": snapshot_to_payload(snapshot),
     }
     _run_path(run_id, root).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -119,6 +128,8 @@ def record_history(
         mode=mode,
         source=source,
         report_path=str(report_path) if report_path else "",
+        owner_email=owner_email,
+        owner_name=owner_name,
     )
     with _index_path(root).open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(asdict(summary), ensure_ascii=False) + "\n")
@@ -132,6 +143,7 @@ def list_history(
     mode: str | None = None,
     query: str | None = None,
     sort: str = "desc",
+    owner_email: str | None = None,
 ) -> list[HistoryItemModel]:
     index = _index_path(storage_dir)
     if not index.exists():
@@ -146,6 +158,10 @@ def list_history(
         payload.setdefault("report_path", "")
         payload.setdefault("report_url", "")
         payload.setdefault("manifest_url", "")
+        payload.setdefault("owner_email", "")
+        payload.setdefault("owner_name", "")
+        if owner_email is not None and payload.get("owner_email") != owner_email:
+            continue
         if mode_filter and str(payload.get("mode", "")).strip().lower() != mode_filter:
             continue
         if query_filter:
@@ -167,8 +183,9 @@ def latest_history(
     mode: str | None = None,
     query: str | None = None,
     sort: str = "desc",
+    owner_email: str | None = None,
 ) -> HistoryItemModel | None:
-    items = list_history(storage_dir, limit=1, mode=mode, query=query, sort=sort)
+    items = list_history(storage_dir, limit=1, mode=mode, query=query, sort=sort, owner_email=owner_email)
     return items[0] if items else None
 
 
@@ -180,6 +197,8 @@ def load_history_run(run_id: str, storage_dir: Path | None = None) -> dict[str, 
     report_path = payload.get("report_path") or ""
     payload.setdefault("report_url", f"/report/{run_id}" if report_path else "")
     payload.setdefault("manifest_url", f"/report/{run_id}/manifest" if report_path else "")
+    payload.setdefault("owner_email", "")
+    payload.setdefault("owner_name", "")
     return payload
 
 

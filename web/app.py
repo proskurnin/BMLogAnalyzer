@@ -3,12 +3,28 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from html import escape
 from core.verification import run_healthchecks, run_readiness_check
 from core.version import format_version
 from dataclasses import asdict
 
+from web.auth import (
+    SESSION_COOKIE,
+    authenticate_user,
+    cleanup_expired_sessions,
+    create_session,
+    create_user,
+    delete_user,
+    destroy_session,
+    ensure_default_admin,
+    get_user,
+    list_users,
+    update_user,
+    user_from_session,
+)
 from web.history import delete_history_run, latest_history, list_history, load_history_run, new_run_id, record_history, run_directory, run_report_path
 from web.service import AnalysisRequest, analyze_request, execute_uploaded_analysis, build_summary_snapshot
+from web.settings import load_settings, require_production_bootstrap_settings
 from web.uploads import (
     collect_upload_files,
     delete_upload,
@@ -16,36 +32,154 @@ from web.uploads import (
     load_upload,
     store_uploads,
     summary_from_uploads,
+    split_upload_candidates,
     update_upload_status,
     update_upload_reports,
 )
 
 try:  # pragma: no cover - optional dependency
-    from fastapi import FastAPI, File, UploadFile
-    from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+    from fastapi import FastAPI, File, Form, Request, UploadFile
+    from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 except ImportError:  # pragma: no cover - optional dependency
     FastAPI = None  # type: ignore[assignment]
     File = None  # type: ignore[assignment]
+    Form = None  # type: ignore[assignment]
+    Request = None  # type: ignore[assignment]
     UploadFile = None  # type: ignore[assignment]
     FileResponse = None  # type: ignore[assignment]
     HTMLResponse = None  # type: ignore[assignment]
     JSONResponse = None  # type: ignore[assignment]
+    RedirectResponse = None  # type: ignore[assignment]
 
 
 def create_app() -> Any:
-    if FastAPI is None or File is None or UploadFile is None or HTMLResponse is None or JSONResponse is None or FileResponse is None:  # pragma: no cover - optional dependency
+    if FastAPI is None or File is None or Form is None or Request is None or UploadFile is None or HTMLResponse is None or JSONResponse is None or FileResponse is None or RedirectResponse is None:  # pragma: no cover - optional dependency
         exc = ImportError("fastapi")
         raise RuntimeError("FastAPI is not installed. Install fastapi and uvicorn to use the web app.") from exc
 
+    settings = load_settings()
+    require_production_bootstrap_settings(settings)
+    ensure_default_admin()
+    cleanup_expired_sessions()
     app = FastAPI(title="BM Log Analyzer", version=format_version())
 
+    @app.middleware("http")
+    async def require_auth(request: Request, call_next):
+        ensure_default_admin()
+        path = request.url.path
+        if path in {"/login", "/health"}:
+            return await call_next(request)
+        user = user_from_session(request.cookies.get(SESSION_COOKIE))
+        request.state.user = user
+        if user is None:
+            if path.startswith("/api/") or request.method != "GET":
+                return JSONResponse({"detail": "Требуется авторизация"}, status_code=401)
+            return RedirectResponse("/login", status_code=303)
+        if _is_admin_path(path) and user.role != "admin":
+            return HTMLResponse("<h1>Доступ запрещён</h1>", status_code=403)
+        return await call_next(request)
+
     @app.get("/", response_class=HTMLResponse)
-    def index() -> str:
-        return _landing_html()
+    def index(request: Request) -> str:
+        return _landing_html(_request_user(request))
+
+    @app.get("/login", response_class=HTMLResponse)
+    def login_page() -> str:
+        return _login_html()
+
+    @app.post("/login")
+    def login(email: str = Form(...), password: str = Form(...)):
+        user = authenticate_user(email, password)
+        if user is None:
+            return HTMLResponse(_login_html("Неверный email или пароль."), status_code=401)
+        response = RedirectResponse("/", status_code=303)
+        response.set_cookie(
+            SESSION_COOKIE,
+            create_session(user.email),
+            httponly=True,
+            secure=load_settings().cookie_secure,
+            samesite="lax",
+        )
+        return response
+
+    @app.get("/logout")
+    def logout(request: Request):
+        destroy_session(request.cookies.get(SESSION_COOKIE, ""))
+        response = RedirectResponse("/login", status_code=303)
+        response.delete_cookie(SESSION_COOKIE)
+        return response
 
     @app.get("/uploads", response_class=HTMLResponse)
-    def uploads_page() -> str:
-        return _uploads_html()
+    def uploads_page(request: Request) -> str:
+        return _uploads_html(_request_user(request))
+
+    @app.get("/adnin")
+    def adnin_redirect():
+        return RedirectResponse("/admin", status_code=303)
+
+    @app.get("/admin", response_class=HTMLResponse)
+    def admin_page(request: Request) -> str:
+        return _admin_html(_request_user(request))
+
+    @app.post("/admin/users/create")
+    def admin_create_user(
+        name: str = Form(...),
+        email: str = Form(...),
+        password: str = Form(...),
+        role: str = Form(...),
+    ):
+        try:
+            create_user(name=name, email=email, password=password, role=role)
+        except ValueError as exc:
+            return HTMLResponse(_admin_html(None, str(exc)), status_code=400)
+        return RedirectResponse("/admin", status_code=303)
+
+    @app.post("/admin/users/update")
+    def admin_update_user(
+        email: str = Form(...),
+        name: str = Form(...),
+        new_email: str = Form(...),
+        password: str = Form(""),
+        role: str = Form(...),
+    ):
+        try:
+            update_user(email, name=name, new_email=new_email, password=password, role=role)
+        except ValueError as exc:
+            return HTMLResponse(_admin_html(None, str(exc)), status_code=400)
+        return RedirectResponse("/admin", status_code=303)
+
+    @app.post("/admin/users/delete")
+    def admin_delete_user(email: str = Form(...)):
+        try:
+            delete_user(email)
+        except ValueError as exc:
+            return HTMLResponse(_admin_html(None, str(exc)), status_code=400)
+        return RedirectResponse("/admin", status_code=303)
+
+    @app.get("/profile", response_class=HTMLResponse)
+    def profile_page(request: Request) -> str:
+        return _profile_html(_request_user(request))
+
+    @app.post("/profile/name")
+    def profile_update_name(request: Request, name: str = Form(...)):
+        user = _request_user(request)
+        update_user(user.email, name=name, new_email=user.email, password="", role=user.role)
+        return RedirectResponse("/profile", status_code=303)
+
+    @app.post("/profile/password")
+    def profile_update_password(request: Request, password: str = Form(...)):
+        user = _request_user(request)
+        update_user(user.email, name=user.name, new_email=user.email, password=password, role=user.role)
+        return RedirectResponse("/profile", status_code=303)
+
+    @app.post("/profile/uploads/{upload_id}/delete")
+    def profile_delete_upload(request: Request, upload_id: str):
+        user = _request_user(request)
+        item = load_upload(upload_id)
+        if item.owner_email != user.email and user.role != "admin":
+            return HTMLResponse("<h1>Доступ запрещён</h1>", status_code=403)
+        delete_upload(upload_id)
+        return RedirectResponse("/profile", status_code=303)
 
     @app.get("/health")
     def health() -> dict[str, Any]:
@@ -60,29 +194,40 @@ def create_app() -> Any:
         return [outcome.__dict__ for outcome in run_readiness_check()]
 
     @app.get("/report/{run_id}", response_class=HTMLResponse)
-    def report(run_id: str):
-        return _render_report(run_id)
+    def report(request: Request, run_id: str):
+        access_error = _report_access_error(run_id, _request_user(request))
+        if access_error:
+            return access_error
+        return _render_report(run_id, _request_user(request))
 
     @app.get("/report/{run_id}/manifest", response_class=JSONResponse)
-    def report_manifest(run_id: str):
+    def report_manifest(request: Request, run_id: str):
+        access_error = _report_access_error(run_id, _request_user(request), json_response=True)
+        if access_error:
+            return access_error
         return _render_report_manifest(run_id)
 
     @app.get("/api/runs/latest/report", response_class=HTMLResponse)
-    def latest_report():
-        item = latest_history()
+    def latest_report(request: Request):
+        user = _request_user(request)
+        owner = None if user.role == "admin" else user.email
+        item = latest_history(owner_email=owner)
         if not item:
             return HTMLResponse("<h1>Отчёт не найден</h1>", status_code=404)
-        return _render_report(item.run_id)
+        return _render_report(item.run_id, _request_user(request))
 
     @app.get("/api/runs/latest/manifest", response_class=JSONResponse)
-    def latest_manifest():
-        item = latest_history()
+    def latest_manifest(request: Request):
+        user = _request_user(request)
+        owner = None if user.role == "admin" else user.email
+        item = latest_history(owner_email=owner)
         if not item:
             return JSONResponse({"detail": "Отчёт не найден"}, status_code=404)
         return _render_report_manifest(item.run_id)
 
     @app.post("/api/analyze")
-    def analyze(payload: dict[str, Any]) -> dict[str, Any]:
+    def analyze(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+        user = _request_user(request)
         request = AnalysisRequest(
             input_path=payload.get("input_path"),
             config_path=str(payload.get("config_path", "./config/config.yaml")),
@@ -95,11 +240,19 @@ def create_app() -> Any:
         )
         snapshot = analyze_request(request)
         report_path = Path(request.reports_dir) / "analysis_report.html" if request.generate_reports else None
-        record_history(snapshot, mode="analysis", source="path", report_path=report_path)
+        record_history(
+            snapshot,
+            mode="analysis",
+            source="path",
+            report_path=report_path,
+            owner_email=user.email,
+            owner_name=user.name,
+        )
         return asdict(snapshot)
 
     @app.post("/api/summary")
-    def summary(payload: dict[str, Any]) -> dict[str, Any]:
+    def summary(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+        user = _request_user(request)
         request = AnalysisRequest(
             input_path=payload.get("input_path"),
             config_path=str(payload.get("config_path", "./config/config.yaml")),
@@ -111,13 +264,15 @@ def create_app() -> Any:
             generate_reports=False,
         )
         snapshot = build_summary_snapshot(request)
-        record_history(snapshot, mode="summary", source="path")
+        record_history(snapshot, mode="summary", source="path", owner_email=user.email, owner_name=user.name)
         return asdict(snapshot)
 
     @app.post("/api/upload/analyze")
     async def upload_analyze(
+        request: Request,
         files: list[UploadFile] = File(...),
     ) -> dict[str, Any]:
+        user = _request_user(request)
         run_id = new_run_id()
         payload_files = [(file.filename or "upload.bin", await file.read()) for file in files]
         request = AnalysisRequest(
@@ -140,6 +295,8 @@ def create_app() -> Any:
             source="upload",
             run_id=run_id,
             report_path=report_path,
+            owner_email=user.email,
+            owner_name=user.name,
         )
         return {
             "run_id": run_id,
@@ -151,8 +308,10 @@ def create_app() -> Any:
 
     @app.post("/api/upload/summary")
     async def upload_summary(
+        request: Request,
         files: list[UploadFile] = File(...),
     ) -> dict[str, Any]:
+        user = _request_user(request)
         run_id = new_run_id()
         payload_files = [(file.filename or "upload.bin", await file.read()) for file in files]
         request = AnalysisRequest(
@@ -175,6 +334,8 @@ def create_app() -> Any:
             source="upload",
             run_id=run_id,
             report_path=report_path,
+            owner_email=user.email,
+            owner_name=user.name,
         )
         return {
             "run_id": run_id,
@@ -185,33 +346,50 @@ def create_app() -> Any:
         }
 
     @app.get("/api/runs")
-    def runs(limit: int = 12, mode: str | None = None) -> list[dict[str, Any]]:
-        return [asdict(item) for item in list_history(limit=limit, mode=mode)]
+    def runs(request: Request, limit: int = 12, mode: str | None = None) -> list[dict[str, Any]]:
+        user = _request_user(request)
+        owner = None if user.role == "admin" else user.email
+        return [asdict(item) for item in list_history(limit=limit, mode=mode, owner_email=owner)]
 
     @app.get("/api/runs/latest")
-    def latest_run() -> dict[str, Any]:
-        item = latest_history()
+    def latest_run(request: Request) -> dict[str, Any]:
+        user = _request_user(request)
+        owner = None if user.role == "admin" else user.email
+        item = latest_history(owner_email=owner)
         return asdict(item) if item else {}
 
     @app.get("/api/runs/{run_id}")
-    def run_detail(run_id: str) -> dict[str, Any]:
+    def run_detail(request: Request, run_id: str) -> dict[str, Any]:
+        access_error = _report_access_error(run_id, _request_user(request), json_response=True)
+        if access_error:
+            return access_error
         return load_history_run(run_id)
 
     @app.delete("/api/runs/{run_id}")
-    def delete_run(run_id: str) -> dict[str, Any]:
+    def delete_run(request: Request, run_id: str) -> dict[str, Any]:
+        access_error = _report_access_error(run_id, _request_user(request), json_response=True)
+        if access_error:
+            return access_error
         if not delete_history_run(run_id):
             return {"detail": "Сессия не найдена"}
         return {"status": "ok", "run_id": run_id}
 
     @app.get("/api/uploads")
-    def uploads(limit: int = 200) -> list[dict[str, Any]]:
-        return [asdict(item) for item in list_uploads(limit=limit)]
+    def uploads(request: Request, limit: int = 200) -> list[dict[str, Any]]:
+        user = _request_user(request)
+        owner = None if user.role == "admin" else user.email
+        return [asdict(item) for item in list_uploads(limit=limit, owner_email=owner)]
 
     @app.post("/api/uploads/store")
-    async def store(files: list[UploadFile] = File(...)) -> dict[str, Any]:
+    async def store(request: Request, files: list[UploadFile] = File(...)) -> dict[str, Any]:
+        user = _request_user(request)
         payload_files = [(file.filename or "upload.bin", await file.read()) for file in files]
-        stored = store_uploads(payload_files)
-        summary = summary_from_uploads(stored)
+        limit_error = _validate_upload_limits(payload_files)
+        if limit_error:
+            return JSONResponse({"detail": limit_error}, status_code=413)
+        accepted_files, rejected_files = split_upload_candidates(payload_files)
+        stored = store_uploads(accepted_files, owner_email=user.email, owner_name=user.name)
+        summary = summary_from_uploads(stored, rejected_count=len(rejected_files))
         report_updates: list[dict[str, Any]] = []
         for item in stored:
             update_upload_status(item.upload_id, status="processing", status_message="Формируем отчёт", storage_dir=None)
@@ -242,6 +420,8 @@ def create_app() -> Any:
                 source="upload",
                 run_id=run_id,
                 report_path=report_path,
+                owner_email=user.email,
+                owner_name=user.name,
             )
             update_upload_reports([item.upload_id], report_run_id=run_id, report_url=f"/report/{run_id}")
             report_updates.append({"upload_id": item.upload_id, "run_id": run_id, "report_url": f"/report/{run_id}"})
@@ -251,17 +431,23 @@ def create_app() -> Any:
             "summary": summary,
             "items": refreshed_items,
             "report_updates": report_updates,
+            "rejected_files": [name for name, _content in rejected_files],
             "message": summary["message"],
         }
 
     @app.post("/api/uploads/report")
-    async def uploads_report(payload: dict[str, Any]) -> dict[str, Any]:
+    async def uploads_report(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+        user = _request_user(request)
         upload_ids = [str(item) for item in payload.get("upload_ids", []) if str(item).strip()]
         if not upload_ids:
             return JSONResponse({"detail": "Не выбраны загрузки"}, status_code=400)
         selected_files = collect_upload_files(upload_ids)
         if not selected_files:
             return JSONResponse({"detail": "Выбранные загрузки не найдены"}, status_code=404)
+        if user.role != "admin":
+            for upload_id in upload_ids:
+                if load_upload(upload_id).owner_email != user.email:
+                    return JSONResponse({"detail": "Доступ запрещён"}, status_code=403)
         run_id = new_run_id()
         staging_dir = run_directory(run_id)
         temp_input = staging_dir / "input"
@@ -292,6 +478,8 @@ def create_app() -> Any:
             source="uploads",
             run_id=run_id,
             report_path=report_path,
+            owner_email=user.email,
+            owner_name=user.name,
         )
         update_upload_reports(upload_ids, report_run_id=run_id, report_url=f"/report/{run_id}")
         return {
@@ -302,8 +490,11 @@ def create_app() -> Any:
         }
 
     @app.get("/uploads/download/{upload_id}")
-    def upload_download(upload_id: str):
+    def upload_download(request: Request, upload_id: str):
+        user = _request_user(request)
         item = load_upload(upload_id)
+        if item.owner_email != user.email and user.role != "admin":
+            return HTMLResponse("<h1>Доступ запрещён</h1>", status_code=403)
         path = Path(item.stored_path)
         if not path.exists():
             return JSONResponse({"detail": "Файл не найден"}, status_code=404)
@@ -313,16 +504,16 @@ def create_app() -> Any:
     return app
 
 
-def _render_report(run_id: str):
+def _render_report(run_id: str, user=None):
     report_path = run_report_path(run_id)
     if report_path.exists():
-        return HTMLResponse(report_path.read_text(encoding="utf-8"))
+        return HTMLResponse(_inject_report_topbar(report_path.read_text(encoding="utf-8"), user))
     payload = load_history_run(run_id)
     payload_report_path = payload.get("report_path") or ""
     if payload_report_path:
         file_path = Path(payload_report_path)
         if file_path.exists():
-            return HTMLResponse(file_path.read_text(encoding="utf-8"))
+            return HTMLResponse(_inject_report_topbar(file_path.read_text(encoding="utf-8"), user))
     return HTMLResponse("<h1>Отчёт не найден</h1>", status_code=404)
 
 
@@ -338,6 +529,356 @@ def _render_report_manifest(run_id: str):
         if file_path.exists():
             return JSONResponse(json.loads(file_path.read_text(encoding="utf-8")))
     return JSONResponse({"detail": "Отчёт не найден"}, status_code=404)
+
+
+def _validate_upload_limits(files: list[tuple[str, bytes]]) -> str:
+    settings = load_settings()
+    if len(files) > settings.max_upload_files:
+        return f"Слишком много файлов: {len(files)}. Максимум: {settings.max_upload_files}."
+    total_size = sum(len(content) for _name, content in files)
+    if total_size > settings.max_upload_session_bytes:
+        return (
+            f"Слишком большой общий размер загрузки: {_format_mb(total_size)} Mb. "
+            f"Максимум: {_format_mb(settings.max_upload_session_bytes)} Mb."
+        )
+    oversized = [
+        name
+        for name, content in files
+        if len(content) > settings.max_upload_file_bytes
+    ]
+    if oversized:
+        return (
+            f"Файл слишком большой: {oversized[0]}. "
+            f"Максимум на файл: {_format_mb(settings.max_upload_file_bytes)} Mb."
+        )
+    return ""
+
+
+def _format_mb(size_bytes: int) -> str:
+    return f"{size_bytes / (1024 * 1024):.2f}"
+
+
+def _version_number() -> str:
+    return format_version().removeprefix("BM Log Analyzer ").strip()
+
+
+def _report_access_error(run_id: str, user, *, json_response: bool = False):
+    try:
+        payload = load_history_run(run_id)
+    except FileNotFoundError:
+        if json_response:
+            return JSONResponse({"detail": "Отчёт не найден"}, status_code=404)
+        return HTMLResponse("<h1>Отчёт не найден</h1>", status_code=404)
+    owner_email = payload.get("owner_email") or ""
+    if user.role == "admin" or not owner_email or owner_email == user.email:
+        return None
+    if json_response:
+        return JSONResponse({"detail": "Доступ запрещён"}, status_code=403)
+    return HTMLResponse("<h1>Доступ запрещён</h1>", status_code=403)
+
+
+def _inject_report_topbar(html: str, user) -> str:
+    if user is None or "bm-auth-topbar" in html:
+        return html
+    topbar = f"""
+    <style>{_topbar_css()}</style>
+    <div class="bm-auth-topbar">
+      {_page_topbar(user)}
+    </div>
+    """
+    if "<body>" in html:
+        return html.replace("<body>", f"<body>{topbar}", 1)
+    return topbar + html
+
+
+def _request_user(request: Any):
+    return request.state.user
+
+
+def _is_admin_path(path: str) -> bool:
+    return path == "/uploads" or path == "/adnin" or path.startswith("/admin") or path == "/api/uploads/report"
+
+
+def _profile_link(user) -> str:
+    return f'<a class="profile-link" href="/profile">Профиль ({escape(user.name)})</a>'
+
+
+def _topbar_links(user) -> str:
+    items = [("/", "Загрузка файлов")]
+    if user.role == "admin":
+        items.extend(
+            [
+                ("/uploads", "История загрузок"),
+                ("/admin", "Администрирование"),
+            ]
+        )
+    return _join_nav_items(
+        [f'<a class="nav-link" href="{href}" data-path="{href}">{escape(label)}</a>' for href, label in items]
+    )
+
+
+def _join_nav_items(items: list[str]) -> str:
+    return '<span class="nav-separator">|</span>'.join(items)
+
+
+def _page_topbar(user) -> str:
+    return f"""
+      <header class="topbar" data-menu-open="false">
+        <button class="menu-toggle" type="button" aria-label="Открыть меню" aria-expanded="false">☰</button>
+        <nav class="topbar-nav topbar-left" aria-label="Основное меню">
+          {_topbar_links(user)}
+        </nav>
+        <nav class="topbar-nav topbar-right" aria-label="Профиль">
+          {_join_nav_items([
+              f'<a class="nav-link profile-link" href="/profile" data-path="/profile">Профиль ({escape(user.name)})</a>',
+              '<a class="nav-link" href="/logout">Выйти</a>',
+          ])}
+        </nav>
+      </header>
+      <script>
+        (() => {{
+          const header = document.currentScript.previousElementSibling;
+          if (!header || !header.classList.contains('topbar')) return;
+          const current = window.location.pathname === '/adnin' ? '/admin' : window.location.pathname;
+          header.querySelectorAll('a[data-path]').forEach((link) => {{
+            const path = link.dataset.path;
+            const active = path === '/' ? current === '/' : current === path || current.startsWith(`${{path}}/`);
+            if (active) link.dataset.active = 'true';
+          }});
+          const toggle = header.querySelector('.menu-toggle');
+          toggle?.addEventListener('click', () => {{
+            const open = header.dataset.menuOpen !== 'true';
+            header.dataset.menuOpen = String(open);
+            toggle.setAttribute('aria-expanded', String(open));
+          }});
+        }})();
+      </script>
+    """
+
+
+def _topbar_css() -> str:
+    return """
+      .topbar { width: 1180px; max-width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 24px; min-height: 48px; color: var(--text, #18212f); }
+      .topbar-nav { display: flex; align-items: center; gap: 10px; min-width: 0; }
+      .topbar-left { justify-content: flex-start; }
+      .topbar-right { justify-content: flex-end; margin-left: auto; }
+      .topbar a { color: var(--text, #18212f); text-decoration: none; font-weight: 600; line-height: 1.2; padding: 8px 10px; border-radius: 999px; box-shadow: inset 0 0 0 1px transparent; transition: background-color 140ms ease, color 140ms ease, box-shadow 140ms ease; white-space: nowrap; }
+      .topbar a:hover { background: #f2f6fb; color: var(--blue, #2457a6); box-shadow: inset 0 0 0 1px #c8d9f0; }
+      .topbar a[data-active="true"] { background: #eaf2fc; color: var(--blue, #2457a6); box-shadow: inset 0 0 0 1px #9eb6d1; }
+      .nav-separator { color: var(--muted, #667085); font-weight: 400; user-select: none; }
+      .menu-toggle { display: none; appearance: none; border: 1px solid var(--line, #d9e0e7); border-radius: 999px; background: #fff; color: var(--text, #18212f); padding: 8px 11px; font: inherit; line-height: 1; cursor: pointer; }
+      .menu-toggle:hover { background: #f2f6fb; border-color: #c8d9f0; color: var(--blue, #2457a6); }
+      @media (max-width: 720px) {
+        .topbar { width: 1180px; max-width: 100%; }
+        .topbar { position: relative; flex-wrap: wrap; align-items: flex-start; }
+        .menu-toggle { display: inline-flex; align-items: center; justify-content: center; }
+        .topbar-nav { display: none; width: 100%; justify-content: flex-start; padding-top: 8px; gap: 8px; }
+        .topbar[data-menu-open="true"] .topbar-nav { display: flex; flex-wrap: wrap; }
+        .topbar-right { margin-left: 0; }
+      }
+    """
+
+
+def _login_html(error: str = "") -> str:
+    error_html = f'<div class="error">{escape(error)}</div>' if error else ""
+    return f"""
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Вход · BM Log Analyzer</title>
+    <style>
+      :root {{ --bg:#eef2f6; --panel:#fff; --line:#d9e0e7; --text:#18212f; --muted:#667085; --blue:#2457a6; }}
+      * {{ box-sizing: border-box; }}
+      body {{ margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg); color:var(--text); font:14px/1.5 system-ui,sans-serif; }}
+      main {{ width:min(420px, calc(100% - 32px)); display:grid; gap:12px; justify-items:center; }}
+      form {{ width:min(420px, calc(100% - 32px)); display:grid; gap:14px; padding:28px; border:1px solid var(--line); border-radius:16px; background:var(--panel); box-shadow:0 20px 60px rgba(24,33,47,.08); }}
+      .brand {{ display:grid; gap:2px; }}
+      h1 {{ margin:0; font-size:28px; }}
+      .version {{ color:var(--muted); font-size:13px; }}
+      label {{ display:grid; gap:6px; color:var(--muted); font-size:12px; }}
+      input {{ width:100%; border:1px solid var(--line); border-radius:10px; padding:12px; font:inherit; color:var(--text); }}
+      button {{ border:0; border-radius:12px; padding:12px 16px; background:var(--blue); color:#fff; font:inherit; font-weight:700; cursor:pointer; }}
+      .error {{ padding:10px 12px; border:1px solid #f4b4a5; border-radius:10px; background:#fff5f3; color:#9f1d12; }}
+      .muted {{ color:var(--muted); }}
+      footer {{ color:var(--muted); font-size:12px; }}
+    </style>
+  </head>
+  <body>
+    <main>
+      <form method="post" action="/login">
+        <div class="brand">
+          <h1>BM Log Analyzer</h1>
+          <div class="version">версия сервиса {_version_number()}</div>
+        </div>
+        <div class="muted">Авторизация</div>
+        {error_html}
+        <label>Email<input name="email" type="email" autocomplete="username" required></label>
+        <label>Пароль<input name="password" type="password" autocomplete="current-password" required></label>
+        <button type="submit">Войти</button>
+      </form>
+      <footer>made with ♥ by Roman A. Proskurnin</footer>
+    </main>
+  </body>
+</html>
+""".strip()
+
+
+def _admin_html(user=None, error: str = "") -> str:
+    effective_user = user or get_user("admin@example.com")
+    rows = []
+    for item in list_users():
+        role_options = "".join(
+            f'<option value="{role}" {"selected" if item.role == role else ""}>{label}</option>'
+            for role, label in (("user", "пользователь"), ("admin", "администратор"))
+        )
+        rows.append(
+            f"""
+            <tr>
+              <td>
+                <form method="post" action="/admin/users/update" class="row-form">
+                  <input type="hidden" name="email" value="{escape(item.email)}">
+                  <input name="name" value="{escape(item.name)}" required>
+              </td>
+              <td><input name="new_email" type="email" value="{escape(item.email)}" required></td>
+              <td><input name="password" type="password" placeholder="Оставить без изменений"></td>
+              <td><select name="role">{role_options}</select></td>
+              <td class="actions">
+                  <button type="submit">Сохранить</button>
+                </form>
+                <form method="post" action="/admin/users/delete">
+                  <input type="hidden" name="email" value="{escape(item.email)}">
+                  <button type="submit" class="danger">Удалить</button>
+                </form>
+              </td>
+            </tr>
+            """
+        )
+    error_html = f'<div class="error">{escape(error)}</div>' if error else ""
+    return f"""
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Администрирование · BM Log Analyzer</title>
+    {_shared_page_css()}
+  </head>
+  <body>
+    <main class="page">
+      {_page_topbar(effective_user)}
+      <section class="panel">
+        <h1>Администрирование</h1>
+        <h2>Пользователи</h2>
+        {error_html}
+        <form method="post" action="/admin/users/create" class="create-form">
+          <input name="name" placeholder="Имя" required>
+          <input name="email" type="email" placeholder="Email / логин" required>
+          <input name="password" type="password" placeholder="Пароль" required>
+          <select name="role">
+            <option value="user">пользователь</option>
+            <option value="admin">администратор</option>
+          </select>
+          <button type="submit">Добавить</button>
+        </form>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Имя</th><th>Email</th><th>Пароль</th><th>Роль</th><th>Действия</th></tr></thead>
+            <tbody>{"".join(rows)}</tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
+""".strip()
+
+
+def _profile_html(user) -> str:
+    uploads = list_uploads(owner_email=user.email)
+    rows = []
+    for item in uploads:
+        rows.append(
+            f"""
+            <tr>
+              <td>{escape(item.created_at)}</td>
+              <td>{escape(item.original_name)}</td>
+              <td><a href="{escape(item.download_url or f'/uploads/download/{item.upload_id}')}">Скачать</a></td>
+              <td>
+                <form method="post" action="/profile/uploads/{escape(item.upload_id)}/delete">
+                  <button type="submit" class="danger">Удалить</button>
+                </form>
+              </td>
+            </tr>
+            """
+        )
+    table_body = "".join(rows) or '<tr><td colspan="4" class="muted">Загрузок пока нет.</td></tr>'
+    return f"""
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Профиль · BM Log Analyzer</title>
+    {_shared_page_css()}
+  </head>
+  <body>
+    <main class="page">
+      {_page_topbar(user)}
+      <section class="panel">
+        <h1>Профиль</h1>
+        <div class="forms-grid">
+          <form method="post" action="/profile/name" class="create-form">
+            <input name="name" value="{escape(user.name)}" required>
+            <button type="submit">Сменить имя</button>
+          </form>
+          <form method="post" action="/profile/password" class="create-form">
+            <input name="password" type="password" placeholder="Новый пароль" required>
+            <button type="submit">Сменить пароль</button>
+          </form>
+        </div>
+        <h2>Мои файлы</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Дата</th><th>Имя файла</th><th>Скачать</th><th>Удалить</th></tr></thead>
+            <tbody>{table_body}</tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
+""".strip()
+
+
+def _shared_page_css() -> str:
+    return """
+    <style>
+      :root { color-scheme: light; --panel:#fff; --bg:#eef2f6; --line:#d9e0e7; --text:#18212f; --muted:#667085; --blue:#2457a6; }
+      * { box-sizing: border-box; }
+      body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui,sans-serif; }
+      .page { width:100%; margin:0 auto; padding:24px; display:grid; justify-items:center; gap:16px; }
+      a { color:var(--blue); text-decoration:none; font-weight:600; }
+      .panel { width:1180px; max-width:100%; padding:20px 22px; border:1px solid var(--line); border-radius:16px; background:var(--panel); box-shadow:0 16px 42px rgba(24,33,47,.06); }
+      h1 { margin:0 0 16px; font-size:24px; }
+      h2 { margin:16px 0 10px; font-size:18px; }
+      .create-form, .row-form, .forms-grid { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+      .create-form { margin-bottom:16px; }
+      input, select { border:1px solid var(--line); border-radius:10px; padding:10px 12px; font:inherit; color:var(--text); background:#fff; }
+      button { border:0; border-radius:10px; padding:10px 14px; background:var(--blue); color:#fff; font:inherit; font-weight:700; cursor:pointer; }
+      .danger { background:#b42318; }
+      .table-wrap { overflow:auto; border:1px solid var(--line); border-radius:14px; }
+      table { width:100%; border-collapse:collapse; background:#fff; }
+      th, td { padding:12px 14px; border-bottom:1px solid #e8edf2; text-align:left; vertical-align:top; }
+      th { background:#f3f6fa; font-weight:700; }
+      .actions { display:flex; flex-wrap:wrap; gap:8px; }
+      .muted { color:var(--muted); }
+      .error { margin-bottom:12px; padding:10px 12px; border:1px solid #f4b4a5; border-radius:10px; background:#fff5f3; color:#9f1d12; }
+      {{TOPBAR_CSS}}
+      @media (max-width: 720px) { .page { padding:16px; } }
+    </style>
+    """.replace("{{TOPBAR_CSS}}", _topbar_css())
 
 
 def _index_html() -> str:
@@ -705,7 +1246,8 @@ def _index_html() -> str:
 """.strip()
 
 
-def _landing_html() -> str:
+def _landing_html(user=None) -> str:
+    user = user or get_user("admin@example.com")
     return """
 <!doctype html>
 <html lang="ru">
@@ -717,20 +1259,19 @@ def _landing_html() -> str:
       :root { color-scheme: light; --bg: #eef2f6; --panel: #fff; --line: #d9e0e7; --text: #18212f; --muted: #667085; --blue: #2457a6; --green: #137752; --soft: #f7f9fc; }
       * { box-sizing: border-box; }
       body { margin: 0; min-height: 100vh; background: radial-gradient(circle at top, #f9fbfd 0, #eef2f6 48%, #e8edf3 100%); color: var(--text); font: 14px/1.5 system-ui, sans-serif; }
-      main { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+      main { min-height: 100vh; display: grid; grid-template-rows: auto minmax(0, 1fr); justify-items: center; gap: 18px; padding: 24px; }
+      @media (max-width: 720px) { main { padding: 16px; } }
+      .upload-center { align-self: center; width: min(640px, 100%); display: grid; justify-items: center; gap: 12px; }
       .card { width: min(640px, 100%); padding: 30px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); box-shadow: 0 24px 70px rgba(24, 33, 47, 0.08); display: grid; gap: 18px; text-align: center; }
       h1 { margin: 0; font-size: 30px; line-height: 1.05; letter-spacing: 0; }
       .version { color: var(--muted); font-size: 13px; }
       .field { display: grid; gap: 8px; text-align: left; }
       .field label { font-size: 12px; color: var(--muted); }
-      .picker-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-      .picker-button { appearance: none; border: 1px solid var(--line); border-radius: 14px; background: var(--soft); color: var(--text); padding: 14px 16px; font: inherit; cursor: pointer; }
-      .picker-button:hover { border-color: #9eb6d1; background: #eef5fb; }
+      .native-picker { width: 100%; border: 1px solid var(--line); border-radius: 14px; background: var(--soft); color: var(--text); padding: 14px 16px; font: inherit; cursor: pointer; }
+      .dropzone { padding: 16px; border: 1px dashed #9eb6d1; border-radius: 14px; background: #fbfdff; color: var(--muted); text-align: left; }
+      .dropzone[data-active="true"] { background: #eef5fb; border-color: #2f6fd1; color: var(--text); }
       .button { appearance: none; border: 0; border-radius: 14px; background: linear-gradient(180deg, #2f6fd1, #2457a6); color: #fff; padding: 14px 18px; font: inherit; font-weight: 700; cursor: pointer; width: 100%; }
       .button:disabled { opacity: 0.75; cursor: progress; }
-      .picker-menu { display: grid; gap: 8px; margin-top: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 14px; background: var(--soft); text-align: left; }
-      .picker-choice { appearance: none; border: 1px solid var(--line); border-radius: 12px; background: #fff; color: var(--text); padding: 10px 12px; font: inherit; cursor: pointer; text-align: left; }
-      .picker-choice:hover { background: #eef5fb; border-color: #9eb6d1; }
       .status { display: grid; gap: 10px; text-align: left; }
       .status-line { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); }
       .progress-shell { height: 12px; border-radius: 999px; background: #edf2f7; border: 1px solid var(--line); overflow: hidden; }
@@ -740,54 +1281,78 @@ def _landing_html() -> str:
       .hint { color: var(--muted); font-size: 12px; text-align: left; }
       .selection-summary { padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: #fafcff; color: var(--text); text-align: left; min-height: 44px; }
       .selection-summary ul { margin: 0; padding-left: 18px; }
-      .input-hidden { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+      .selection-summary li + li { margin-top: 4px; }
+      .rejected-list { color: #9a3412; }
+      footer { color: var(--muted); font-size: 12px; }
+      a { color: var(--blue); text-decoration: none; font-weight: 600; }
+      {{TOPBAR_CSS}}
     </style>
   </head>
   <body>
     <main>
-      <section class="card">
-        <div>
-          <h1>BM Log Analyzer</h1>
-          <div class="version">версия сервиса {{VERSION}}</div>
-        </div>
-        <div class="field">
-          <label>Логи и архивы</label>
-          <button id="pick" class="button" type="button">Выбрать файлы или папку</button>
-          <div id="picker_menu" class="picker-menu" hidden>
-            <button type="button" class="picker-choice" data-target="files">Выбрать файлы</button>
-            <button type="button" class="picker-choice" data-target="folder">Выбрать папку</button>
+      {{TOPBAR}}
+      <div class="upload-center">
+        <section class="card">
+          <div>
+            <h1>BM Log Analyzer</h1>
+            <div class="version">версия сервиса {{VERSION}}</div>
           </div>
-          <input id="files" class="input-hidden" type="file" multiple>
-          <input id="folder" class="input-hidden" type="file" webkitdirectory multiple>
-          <div id="selection_summary" class="selection-summary">Пока ничего не выбрано.</div>
-          <div class="hint">Поддерживаются отдельные файлы, папки и архивы разных типов.</div>
-        </div>
-        <button id="upload" class="button" type="button">Загрузить логи в хранилище</button>
-        <div class="status">
-          <div class="status-line">
-            <span id="status_text">Ожидание выбора файлов.</span>
-            <span id="file_count">0 файлов</span>
+          <div class="field">
+            <label for="files">Логи и архивы</label>
+            <input id="files" class="native-picker" type="file" multiple accept=".log,.gz,.zip,.tar.gz,.tgz,.rar">
+            <div id="dropzone" class="dropzone" role="button" tabindex="0">Можно перетащить сюда файлы или папку с логами. В поддерживаемых браузерах клик здесь открывает выбор папки.</div>
+            <div id="selection_summary" class="selection-summary">Пока ничего не выбрано.</div>
+            <div class="hint">Поддерживаются отдельные файлы, папки и архивы разных типов.</div>
           </div>
-          <div class="progress-shell" aria-hidden="true"><div id="progress_bar" class="progress-bar"></div></div>
-        </div>
-        <div id="message" class="message">Выберите архивы или отдельные файлы, затем загрузите их в хранилище.</div>
-        <div class="signature">made with ♥ by Roman A. Proskurnin</div>
-      </section>
+          <button id="upload" class="button" type="button">Загрузить логи в хранилище</button>
+          <div class="status">
+            <div class="status-line">
+              <span id="status_text">Ожидание выбора файлов.</span>
+              <span id="file_count">0 файлов</span>
+            </div>
+            <div class="progress-shell" aria-hidden="true"><div id="progress_bar" class="progress-bar"></div></div>
+          </div>
+          <div id="message" class="message">Выберите архивы или отдельные файлы, затем загрузите их в хранилище.</div>
+        </section>
+        <footer>made with ♥ by Roman A. Proskurnin</footer>
+      </div>
     </main>
     <script>
       const filesInput = document.getElementById('files');
-      const folderInput = document.getElementById('folder');
-      const pickButton = document.getElementById('pick');
-      const pickerMenu = document.getElementById('picker_menu');
       const uploadButton = document.getElementById('upload');
       const statusText = document.getElementById('status_text');
       const fileCount = document.getElementById('file_count');
       const progressBar = document.getElementById('progress_bar');
       const message = document.getElementById('message');
       const selectionSummary = document.getElementById('selection_summary');
+      const dropzone = document.getElementById('dropzone');
+      const allowedSuffixes = ['.log', '.gz', '.zip', '.tar.gz', '.tgz', '.rar'];
+      const preparedFiles = new Map();
+      const rejectedFiles = new Map();
+
+      function fileKey(file) {
+        return `${file.webkitRelativePath || file.relativePath || file.name}:${file.size}:${file.lastModified || 0}`;
+      }
+
+      function displayName(file) {
+        return file.webkitRelativePath || file.relativePath || file.name;
+      }
+
+      function isAllowedFile(file) {
+        const name = displayName(file).toLowerCase();
+        return allowedSuffixes.some((suffix) => name.endsWith(suffix));
+      }
+
+      function addFiles(files) {
+        for (const file of files) {
+          const target = isAllowedFile(file) ? preparedFiles : rejectedFiles;
+          target.set(fileKey(file), file);
+        }
+        updateSelectionSummary();
+      }
 
       function selectedFiles() {
-        return [...filesInput.files, ...folderInput.files];
+        return [...preparedFiles.values()];
       }
 
       function setProgress(value, text) {
@@ -797,44 +1362,155 @@ def _landing_html() -> str:
 
       function updateSelectionSummary() {
         const selected = selectedFiles();
+        const rejected = [...rejectedFiles.values()];
         const total = selected.length;
-        fileCount.textContent = total ? `${total} файлов` : '0 файлов';
-        if (!total) {
+        fileCount.textContent = rejected.length ? `${total} подготовлено, ${rejected.length} отклонено` : `${total} подготовлено`;
+        if (!total && !rejected.length) {
           selectionSummary.textContent = 'Пока ничего не выбрано.';
           return;
         }
-        const names = selected.slice(0, 4).map((file) => file.webkitRelativePath || file.name);
-        const extra = total > names.length ? ` и ещё ${total - names.length}` : '';
-        selectionSummary.innerHTML = `<ul>${names.map((name) => `<li>${name}</li>`).join('')}</ul>${extra ? `<div class="muted">${extra}</div>` : ''}`;
+        const acceptedHtml = selected.length
+          ? `<div>Подготовлены к загрузке:</div><ul>${selected.map((file) => `<li>${displayName(file)} · ${formatSize(file.size)}</li>`).join('')}</ul>`
+          : '<div>Нет файлов, соответствующих требованиям.</div>';
+        const rejectedHtml = rejected.length
+          ? `<div class="rejected-list">Не будут загружены:</div><ul class="rejected-list">${rejected.map((file) => `<li>${displayName(file)} · ${formatSize(file.size)}</li>`).join('')}</ul>`
+          : '';
+        selectionSummary.innerHTML = `${acceptedHtml}${rejectedHtml}`;
       }
 
-      pickButton.addEventListener('click', () => {
-        pickerMenu.hidden = !pickerMenu.hidden;
-      });
-      document.addEventListener('click', (event) => {
-        if (!pickerMenu.contains(event.target) && event.target !== pickButton) {
-          pickerMenu.hidden = true;
+      function formatSize(bytes) {
+        return `${(bytes / (1024 * 1024)).toFixed(2)} Mb`;
+      }
+
+      function archiveWord(count) {
+        if (count % 10 === 1 && count % 100 !== 11) {
+          return 'архив';
         }
+        if ([2, 3, 4].includes(count % 10) && ![12, 13, 14].includes(count % 100)) {
+          return 'архива';
+        }
+        return 'архивов';
+      }
+
+      function fileWord(count) {
+        if (count % 10 === 1 && count % 100 !== 11) {
+          return 'файл';
+        }
+        if ([2, 3, 4].includes(count % 10) && ![12, 13, 14].includes(count % 100)) {
+          return 'файла';
+        }
+        return 'файлов';
+      }
+
+      function notUploadedPhrase(count) {
+        const verb = count % 10 === 1 && count % 100 !== 11 ? 'не загружен' : 'не загружены';
+        return `${count} ${fileWord(count)} ${verb}`;
+      }
+
+      function uploadMessage(summary, clientRejectedCount) {
+        const uploadedCount = summary.uploaded_count || 0;
+        const rejectedCount = clientRejectedCount + (summary.rejected_count || 0);
+        const totalSizeMb = Number(summary.total_size_mb || 0).toFixed(2);
+        const rejectedMessage = rejectedCount
+          ? ` ${notUploadedPhrase(rejectedCount)}, потому что они не соответствуют требованиям.`
+          : '';
+        return `Загружено ${uploadedCount} ${archiveWord(uploadedCount)} с логами, общим размером ${totalSizeMb} Mb. Загрузка прошла без ошибок.${rejectedMessage} Спасибо.`;
+      }
+
+      async function collectDirectoryHandleFiles(directoryHandle, prefix = '') {
+        const files = [];
+        for await (const [name, handle] of directoryHandle.entries()) {
+          if (handle.kind === 'file') {
+            const file = await handle.getFile();
+            Object.defineProperty(file, 'relativePath', { value: `${prefix}${name}` });
+            files.push(file);
+          } else if (handle.kind === 'directory') {
+            files.push(...await collectDirectoryHandleFiles(handle, `${prefix}${name}/`));
+          }
+        }
+        return files;
+      }
+
+      async function collectEntryFiles(entry, prefix = '') {
+        if (!entry) {
+          return [];
+        }
+        if (entry.isFile) {
+          return new Promise((resolve) => {
+            entry.file((file) => {
+              Object.defineProperty(file, 'relativePath', { value: `${prefix}${file.name}` });
+              resolve([file]);
+            });
+          });
+        }
+        if (!entry.isDirectory) {
+          return [];
+        }
+        const reader = entry.createReader();
+        const entries = [];
+        async function readBatch() {
+          const batch = await new Promise((resolve) => reader.readEntries(resolve));
+          if (!batch.length) {
+            return;
+          }
+          entries.push(...batch);
+          await readBatch();
+        }
+        await readBatch();
+        const nested = await Promise.all(entries.map((child) => collectEntryFiles(child, `${prefix}${entry.name}/`)));
+        return nested.flat();
+      }
+
+      filesInput.addEventListener('change', () => {
+        addFiles(filesInput.files);
+        filesInput.value = '';
       });
-      pickerMenu.addEventListener('click', (event) => {
-        const choice = event.target.closest('button[data-target]');
-        if (!choice) {
+
+      dropzone.addEventListener('click', async () => {
+        if (!window.showDirectoryPicker) {
+          message.textContent = 'Этот браузер не открывает папку по клику. Перетащите папку в область выбора.';
           return;
         }
-        pickerMenu.hidden = true;
-        if (choice.dataset.target === 'files') {
-          filesInput.click();
-        } else {
-          folderInput.click();
+        try {
+          const handle = await window.showDirectoryPicker();
+          addFiles(await collectDirectoryHandleFiles(handle, `${handle.name}/`));
+        } catch (error) {
+          if (!(error instanceof DOMException && error.name === 'AbortError')) {
+            message.textContent = error instanceof Error ? error.message : String(error);
+          }
         }
       });
-      filesInput.addEventListener('change', updateSelectionSummary);
-      folderInput.addEventListener('change', updateSelectionSummary);
+      dropzone.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          dropzone.click();
+        }
+      });
+
+      dropzone.addEventListener('dragover', (event) => {
+        event.preventDefault();
+        dropzone.dataset.active = 'true';
+      });
+      dropzone.addEventListener('dragleave', () => {
+        dropzone.dataset.active = 'false';
+      });
+      dropzone.addEventListener('drop', async (event) => {
+        event.preventDefault();
+        dropzone.dataset.active = 'false';
+        const items = [...event.dataTransfer.items];
+        const entries = items.map((item) => item.webkitGetAsEntry ? item.webkitGetAsEntry() : null).filter(Boolean);
+        if (entries.length) {
+          const files = await Promise.all(entries.map((entry) => collectEntryFiles(entry)));
+          addFiles(files.flat());
+        } else {
+          addFiles(event.dataTransfer.files);
+        }
+      });
 
       uploadButton.addEventListener('click', async () => {
         const payloadFiles = selectedFiles();
         if (!payloadFiles.length) {
-          statusText.textContent = 'Сначала выберите папку или файлы.';
+          statusText.textContent = 'Нет файлов, соответствующих требованиям.';
           return;
         }
         uploadButton.disabled = true;
@@ -843,7 +1519,7 @@ def _landing_html() -> str:
           setProgress(10, 'Подготовка файлов...');
           const formData = new FormData();
           for (const file of payloadFiles) {
-            formData.append('files', file, file.webkitRelativePath || file.name);
+            formData.append('files', file, displayName(file));
           }
           setProgress(35, 'Передача файлов...');
           const responsePromise = fetch('/api/uploads/store', { method: 'POST', body: formData });
@@ -855,9 +1531,9 @@ def _landing_html() -> str:
             throw new Error(data?.detail || data?.message || 'Не удалось загрузить файлы.');
           }
           const summary = data.summary || {};
-          message.textContent = summary.message || data.message || 'Загрузка прошла без ошибок. Спасибо.';
-          filesInput.value = '';
-          folderInput.value = '';
+          message.textContent = uploadMessage(summary, rejectedFiles.size);
+          preparedFiles.clear();
+          rejectedFiles.clear();
           updateSelectionSummary();
         } catch (error) {
           message.textContent = error instanceof Error ? error.message : String(error);
@@ -871,10 +1547,11 @@ def _landing_html() -> str:
     </script>
   </body>
 </html>
-""".replace("{{VERSION}}", format_version()).strip()
+""".replace("{{VERSION}}", _version_number()).replace("{{TOPBAR}}", _page_topbar(user)).replace("{{TOPBAR_CSS}}", _topbar_css()).strip()
 
 
-def _uploads_html() -> str:
+def _uploads_html(user=None) -> str:
+    user = user or get_user("admin@example.com")
     return """
 <!doctype html>
 <html lang="ru">
@@ -886,8 +1563,9 @@ def _uploads_html() -> str:
       :root { color-scheme: light; --panel: #fff; --bg: #eef2f6; --line: #d9e0e7; --text: #18212f; --muted: #667085; --blue: #2457a6; --green: #137752; }
       * { box-sizing: border-box; }
       body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif; }
-      main { max-width: 1180px; margin: 0 auto; padding: 24px; display: grid; gap: 16px; }
+      main { width: 100%; margin: 0 auto; padding: 24px; display: grid; justify-items: center; gap: 16px; }
       .header, .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 16px 42px rgba(24, 33, 47, 0.06); }
+      .header, .panel { width: 1180px; max-width: 100%; }
       .header { padding: 20px 22px; display: flex; justify-content: space-between; gap: 16px; align-items: baseline; flex-wrap: wrap; }
       h1 { margin: 0; font-size: 24px; }
       .muted { color: var(--muted); }
@@ -908,10 +1586,14 @@ def _uploads_html() -> str:
       .report-empty { color: var(--muted); }
       .message { margin-top: 12px; padding: 14px; border: 1px dashed #c8d9f0; border-radius: 12px; background: #f8fbff; }
       .footer { color: var(--muted); font-size: 12px; margin-top: 8px; }
+      a { color:var(--blue); text-decoration:none; font-weight:600; }
+      {{TOPBAR_CSS}}
+      @media (max-width: 720px) { main { padding: 16px; } }
     </style>
   </head>
   <body>
     <main>
+      {{TOPBAR}}
       <header class="header">
         <div>
           <h1>Загрузки</h1>
@@ -936,6 +1618,7 @@ def _uploads_html() -> str:
               <tr>
                 <th style="width:44px;"></th>
                 <th>Дата загрузки</th>
+                <th>Пользователь</th>
                 <th>Имя загруженного файла</th>
                 <th>Отчёт</th>
               </tr>
@@ -975,6 +1658,7 @@ def _uploads_html() -> str:
           <tr>
             <td><input class="row-checkbox" type="checkbox" data-upload-id="${item.upload_id}"></td>
             <td>${item.created_at}</td>
+            <td>${item.owner_name || item.owner_email || 'Не указан'}</td>
             <td><a class="file-link" href="${fileUrl}" target="_blank" rel="noreferrer">${item.original_name}</a></td>
             <td>${reportHtml}</td>
           </tr>`;
@@ -986,7 +1670,7 @@ def _uploads_html() -> str:
         uploadsCount.textContent = `Файлов: ${Array.isArray(items) ? items.length : 0}`;
         uploadsBody.innerHTML = Array.isArray(items) && items.length
           ? items.map((item) => rowHtml(item)).join('')
-          : '<tr><td colspan="4" class="muted">Загрузок пока нет.</td></tr>';
+          : '<tr><td colspan="5" class="muted">Загрузок пока нет.</td></tr>';
         uploadsBody.querySelectorAll('input[data-upload-id]').forEach((checkbox) => {
           checkbox.addEventListener('change', () => {
             if (checkbox.checked) {
@@ -1020,6 +1704,9 @@ def _uploads_html() -> str:
           uploadsMessage.innerHTML = `${data.message || 'Отчёт сформирован.'} <a class="report-link" href="${data.report_url}" target="_blank" rel="noreferrer">Открыть отчёт</a>`;
           selectedUploads.clear();
           await loadUploads();
+          if (data.report_url) {
+            window.location.href = data.report_url;
+          }
         } catch (error) {
           uploadsMessage.textContent = error instanceof Error ? error.message : String(error);
         } finally {
@@ -1032,7 +1719,7 @@ def _uploads_html() -> str:
     </script>
   </body>
 </html>
-""".replace("{{VERSION}}", format_version()).strip()
+""".replace("{{VERSION}}", format_version()).replace("{{TOPBAR}}", _page_topbar(user)).replace("{{TOPBAR_CSS}}", _topbar_css()).strip()
 
 
 _index_html = _landing_html

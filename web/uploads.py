@@ -9,10 +9,13 @@ from pathlib import Path
 from typing import Any
 
 from web.models import UploadItemModel
+from web.settings import upload_store_dir
+
+ALLOWED_UPLOAD_SUFFIXES = (".log", ".gz", ".zip", ".tar.gz", ".tgz", ".rar")
 
 
 def _upload_root(storage_dir: Path | None = None) -> Path:
-    root = Path(storage_dir or "./_workdir/upload_store")
+    root = Path(storage_dir) if storage_dir else upload_store_dir()
     root.mkdir(parents=True, exist_ok=True)
     (root / "items").mkdir(parents=True, exist_ok=True)
     (root / "files").mkdir(parents=True, exist_ok=True)
@@ -44,6 +47,8 @@ def _utc_now() -> str:
 def store_uploads(
     files: list[tuple[str, bytes]],
     *,
+    owner_email: str = "",
+    owner_name: str = "",
     storage_dir: Path | None = None,
 ) -> list[UploadItemModel]:
     root = _upload_root(storage_dir)
@@ -62,16 +67,33 @@ def store_uploads(
             status="stored",
             status_message="",
             download_url=f"/uploads/download/{upload_id}",
+            owner_email=owner_email,
+            owner_name=owner_name,
         )
         _item_path(upload_id, root).write_text(json.dumps(asdict(item), ensure_ascii=False, indent=2), encoding="utf-8")
         uploaded.append(item)
     return uploaded
 
 
+def split_upload_candidates(files: list[tuple[str, bytes]]) -> tuple[list[tuple[str, bytes]], list[tuple[str, bytes]]]:
+    accepted: list[tuple[str, bytes]] = []
+    rejected: list[tuple[str, bytes]] = []
+    for original_name, content in files:
+        target = accepted if is_allowed_upload_name(original_name) else rejected
+        target.append((original_name, content))
+    return accepted, rejected
+
+
+def is_allowed_upload_name(original_name: str) -> bool:
+    lowered = original_name.lower()
+    return any(lowered.endswith(suffix) for suffix in ALLOWED_UPLOAD_SUFFIXES)
+
+
 def list_uploads(
     storage_dir: Path | None = None,
     *,
     limit: int = 200,
+    owner_email: str | None = None,
 ) -> list[UploadItemModel]:
     root = _upload_root(storage_dir)
     items: list[UploadItemModel] = []
@@ -82,7 +104,11 @@ def list_uploads(
         payload.setdefault("download_url", "")
         payload.setdefault("status", "ready" if payload.get("report_url") else "stored")
         payload.setdefault("status_message", "")
-        items.append(UploadItemModel(**payload))
+        payload.setdefault("owner_email", "")
+        payload.setdefault("owner_name", "")
+        item = UploadItemModel(**payload)
+        if owner_email is None or item.owner_email == owner_email:
+            items.append(item)
     items.sort(key=lambda item: item.created_at, reverse=True)
     return items[:limit]
 
@@ -97,6 +123,8 @@ def load_upload(upload_id: str, storage_dir: Path | None = None) -> UploadItemMo
     payload.setdefault("download_url", f"/uploads/download/{upload_id}")
     payload.setdefault("status", "ready" if payload.get("report_url") else "stored")
     payload.setdefault("status_message", "")
+    payload.setdefault("owner_email", "")
+    payload.setdefault("owner_name", "")
     return UploadItemModel(**payload)
 
 
@@ -164,11 +192,44 @@ def collect_upload_files(upload_ids: list[str], storage_dir: Path | None = None)
     return files
 
 
-def summary_from_uploads(uploaded: list[UploadItemModel]) -> dict[str, Any]:
+def summary_from_uploads(uploaded: list[UploadItemModel], rejected_count: int = 0) -> dict[str, Any]:
     total_size = sum(item.size_bytes for item in uploaded)
+    uploaded_count = len(uploaded)
+    total_size_mb = round(total_size / (1024 * 1024), 2) if total_size else 0.0
+    rejected_message = (
+        f" {_not_uploaded_phrase(rejected_count)}, потому что они не соответствуют требованиям."
+        if rejected_count
+        else ""
+    )
+    message = (
+        f"Загружено {uploaded_count} {_archive_word(uploaded_count)} с логами, общим размером {total_size_mb:.2f} Mb. "
+        f"Загрузка прошла без ошибок.{rejected_message} Спасибо."
+    )
     return {
-        "uploaded_count": len(uploaded),
+        "uploaded_count": uploaded_count,
+        "rejected_count": rejected_count,
         "total_size_bytes": total_size,
-        "total_size_mb": round(total_size / (1024 * 1024), 2) if total_size else 0.0,
-        "message": f"Загружено {len(uploaded)} архивов, общим размером {round(total_size / (1024 * 1024), 2):.2f} Mb. Загрузка прошла без ошибок. Спасибо." if uploaded else "Загружено 0 архивов, общим размером 0.00 Mb. Загрузка прошла без ошибок. Спасибо.",
+        "total_size_mb": total_size_mb,
+        "message": message,
     }
+
+
+def _archive_word(count: int) -> str:
+    if count % 10 == 1 and count % 100 != 11:
+        return "архив"
+    if count % 10 in {2, 3, 4} and count % 100 not in {12, 13, 14}:
+        return "архива"
+    return "архивов"
+
+
+def _file_word(count: int) -> str:
+    if count % 10 == 1 and count % 100 != 11:
+        return "файл"
+    if count % 10 in {2, 3, 4} and count % 100 not in {12, 13, 14}:
+        return "файла"
+    return "файлов"
+
+
+def _not_uploaded_phrase(count: int) -> str:
+    verb = "не загружен" if count % 10 == 1 and count % 100 != 11 else "не загружены"
+    return f"{count} {_file_word(count)} {verb}"

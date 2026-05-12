@@ -39,6 +39,21 @@ def test_parses_payment_start_resp_without_comma_and_tt_package():
     assert event.reader_type == "TT"
 
 
+def test_parses_askp_tt_package():
+    line = (
+        "2026-04-29 20:50:41 PaymentStart resp: "
+        "{Code:0 Message:OK} duration=250 ms p: mgt_askp-tt-4.2.5"
+    )
+
+    event = parse_payment_start_response(line)
+
+    assert event is not None
+    assert event.package == "mgt_askp-tt-4.2.5"
+    assert event.bm_type == "tt"
+    assert event.bm_version == "4.2.5"
+    assert event.reader_type == "TT"
+
+
 def test_handles_missing_duration():
     event = parse_payment_start_response(
         "2026-04-29 20:50:41.343 PaymentStart, resp: {Code:17 Message:Нет карты в поле} p: mgt_nbs-oti-4.4.2"

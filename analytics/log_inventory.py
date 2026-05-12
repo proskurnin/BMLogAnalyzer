@@ -131,7 +131,7 @@ def _observe_path(item: _InventoryBuilder) -> None:
         item.path_hints.add("path:reader")
     if "system" in path or "syslog" in path or "journal" in path:
         item.path_hints.add("path:system")
-    if "bm" in path or "mgt_nbs" in path:
+    if "bm" in path or "mgt_nbs" in path or "mgt_askp" in path:
         item.path_hints.add("path:bm")
 
 
@@ -147,7 +147,7 @@ def _observe_date(item: _InventoryBuilder, line: str) -> None:
 def _observe_bm(item: _InventoryBuilder, line: str) -> None:
     package = parse_package(line)
     if package:
-        item.content_hints.add("content:mgt_nbs_package")
+        item.content_hints.add("content:bm_package")
         item.bm_versions.add(package.bm_version)
     if "PaymentStart" in line:
         item.content_hints.add("content:PaymentStart")
@@ -204,7 +204,7 @@ def _build_inventory(item: _InventoryBuilder) -> LogFileInventory:
 
 def _detect_log_type(item: _InventoryBuilder) -> str:
     hints = item.content_hints | item.path_hints
-    if "content:mgt_nbs_package" in hints or "content:PaymentStart" in hints or "path:bm" in hints:
+    if "content:bm_package" in hints or "content:mgt_nbs_package" in hints or "content:PaymentStart" in hints or "path:bm" in hints:
         return "bm"
     if "content:reader_firmware" in hints or "content:reader_model" in hints or "path:reader" in hints:
         return "reader"

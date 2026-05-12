@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from web.app import _index_html, create_app
+from web.auth import DEFAULT_ADMIN_EMAIL, DEFAULT_ADMIN_PASSWORD
 from web.history import list_history, load_history_run, record_history
 from web.service import AnalysisRequest, analyze_request, build_summary_snapshot
 
@@ -22,6 +23,37 @@ def _mock_history_root(root):
         return root
 
     return _root
+
+
+def _mock_auth_root(root):
+    def _root(storage_dir=None):
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    return _root
+
+
+def _login(client):
+    response = client.post(
+        "/login",
+        data={"email": DEFAULT_ADMIN_EMAIL, "password": DEFAULT_ADMIN_PASSWORD},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
+def _create_user(client, *, name="User", email="user@example.com", password="secret", role="user"):
+    response = client.post(
+        "/admin/users/create",
+        data={"name": name, "email": email, "password": password, "role": role},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
+def _login_as(client, email, password):
+    response = client.post("/login", data={"email": email, "password": password}, follow_redirects=False)
+    assert response.status_code == 303
 
 
 def test_web_snapshot_builds_from_core(tmp_path):
@@ -55,17 +87,147 @@ def test_web_app_requires_optional_fastapi_dependency():
     assert app.title == "BM Log Analyzer"
 
 
+def test_web_requires_login_for_resource(tmp_path, monkeypatch):
+    monkeypatch.setattr("web.auth._auth_root", _mock_auth_root(tmp_path / "auth"))
+    client = TestClient(create_app())
+
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+
+    api_response = client.get("/api/uploads")
+    assert api_response.status_code == 401
+
+
+def test_login_page_contains_version_and_signature(tmp_path, monkeypatch):
+    monkeypatch.setattr("web.auth._auth_root", _mock_auth_root(tmp_path / "auth"))
+    client = TestClient(create_app())
+
+    response = client.get("/login")
+
+    assert response.status_code == 200
+    assert "версия сервиса 0.34.0" in response.text
+    assert 'class="brand"' in response.text
+    assert "made with ♥ by Roman A. Proskurnin" in response.text
+
+
+def test_production_requires_explicit_admin_credentials(tmp_path, monkeypatch):
+    monkeypatch.setattr("web.auth._auth_root", _mock_auth_root(tmp_path / "auth"))
+    monkeypatch.setenv("BM_APP_ENV", "production")
+    monkeypatch.delenv("BM_ADMIN_EMAIL", raising=False)
+    monkeypatch.delenv("BM_ADMIN_PASSWORD", raising=False)
+
+    try:
+        create_app()
+    except RuntimeError as exc:
+        assert "Production startup requires explicit" in str(exc)
+    else:
+        raise AssertionError("production app started without explicit admin credentials")
+
+
+def test_upload_limits_reject_oversized_file(tmp_path, monkeypatch):
+    history_root = tmp_path / "history"
+    upload_root = tmp_path / "uploads"
+    auth_root = tmp_path / "auth"
+    monkeypatch.setattr("web.history._history_root", _mock_history_root(history_root))
+    monkeypatch.setattr("web.uploads._upload_root", _mock_upload_root(upload_root))
+    monkeypatch.setattr("web.auth._auth_root", _mock_auth_root(auth_root))
+    monkeypatch.setenv("BM_MAX_UPLOAD_FILE_MB", "0")
+
+    client = TestClient(create_app())
+    _login(client)
+    response = client.post(
+        "/api/uploads/store",
+        files=[("files", ("sample.log", b"x", "text/plain"))],
+    )
+
+    assert response.status_code == 413
+    assert "Файл слишком большой" in response.json()["detail"]
+
+
+def test_admin_and_user_navigation_by_role(tmp_path, monkeypatch):
+    monkeypatch.setattr("web.auth._auth_root", _mock_auth_root(tmp_path / "auth"))
+    client = TestClient(create_app())
+    _login(client)
+    _create_user(client)
+
+    admin_home = client.get("/")
+    assert admin_home.status_code == 200
+    assert "История загрузок" in admin_home.text
+    assert "Администрирование" in admin_home.text
+    assert "Профиль (Administrator)" in admin_home.text
+    assert "topbar-left" in admin_home.text
+    assert "topbar-right" in admin_home.text
+    assert '<span class="nav-separator">|</span>' in admin_home.text
+    assert "menu-toggle" in admin_home.text
+    assert 'data-active="true"' in admin_home.text
+
+    client.get("/logout")
+    _login_as(client, "user@example.com", "secret")
+    user_home = client.get("/")
+    assert user_home.status_code == 200
+    assert "Загрузить логи в хранилище" in user_home.text
+    assert "История загрузок" not in user_home.text
+    assert "Администрирование" not in user_home.text
+    assert "Профиль (User)" in user_home.text
+
+    forbidden = client.get("/admin")
+    assert forbidden.status_code == 403
+
+
+def test_admin_user_management_and_profile_files(tmp_path, monkeypatch):
+    history_root = tmp_path / "history"
+    upload_root = tmp_path / "uploads"
+    auth_root = tmp_path / "auth"
+    monkeypatch.setattr("web.history._history_root", _mock_history_root(history_root))
+    monkeypatch.setattr("web.uploads._upload_root", _mock_upload_root(upload_root))
+    monkeypatch.setattr("web.auth._auth_root", _mock_auth_root(auth_root))
+
+    client = TestClient(create_app())
+    _login(client)
+    admin_page = client.get("/admin")
+    assert admin_page.status_code == 200
+    assert "Пользователи" in admin_page.text
+    _create_user(client, name="Operator", email="operator@example.com", password="secret", role="user")
+
+    client.get("/logout")
+    _login_as(client, "operator@example.com", "secret")
+    store_response = client.post(
+        "/api/uploads/store",
+        files=[("files", ("operator.log", b"2026-04-29 20:50:41.343 PaymentStart, resp: {Code:0 Message:OK}\n", "text/plain"))],
+    )
+    assert store_response.status_code == 200
+
+    profile = client.get("/profile")
+    assert profile.status_code == 200
+    assert "operator.log" in profile.text
+    assert "Сменить пароль" in profile.text
+    assert "Сменить имя" in profile.text
+
+    update_name = client.post("/profile/name", data={"name": "Operator Renamed"}, follow_redirects=False)
+    assert update_name.status_code == 303
+    renamed = client.get("/profile")
+    assert "Профиль (Operator Renamed)" in renamed.text
+
+
 def test_web_index_contains_upload_landing():
     html = _index_html()
 
     assert "BM Log Analyzer" in html
-    assert "версия сервиса" in html
-    assert "Выбрать файлы или папку" in html
+    assert "версия сервиса 0.34.0" in html
+    assert "picker_menu" not in html
+    assert "Выбрать файлы</button>" not in html
+    assert "Выбрать папку</button>" not in html
     assert "Загрузить логи в хранилище" in html
     assert "made with ♥ by Roman A. Proskurnin" in html
+    assert 'class="upload-center"' in html
+    assert "</section>\n        <footer>made with ♥ by Roman A. Proskurnin</footer>" in html
     assert "progress_bar" in html
     assert "status_text" in html
-    assert "webkitdirectory" in html
+    assert 'accept=".log,.gz,.zip,.tar.gz,.tgz,.rar"' in html
+    assert "dropzone" in html
+    assert "preparedFiles" in html
+    assert "и ещё" not in html
     assert "/api/uploads/store" in html
     assert "selection_summary" in html
     assert "Последние сессии" not in html
@@ -73,12 +235,15 @@ def test_web_index_contains_upload_landing():
 
 def test_uploads_page_contains_table_and_actions():
     client = TestClient(create_app())
+    _login(client)
     response = client.get("/uploads")
 
     assert response.status_code == 200
     html = response.text
     assert "Загрузки" in html
     assert "Сформировать отчёт по выбранным" in html
+    assert "Пользователь" in html
+    assert "window.location.href = data.report_url" in html
     assert "Выбрано 0" in html
     assert "uploads_body" in html
     assert "/api/uploads" in html
@@ -120,10 +285,13 @@ def test_web_history_roundtrip(tmp_path):
 def test_web_upload_creates_report_page(tmp_path, monkeypatch):
     history_root = tmp_path / "history"
     upload_root = tmp_path / "uploads"
+    auth_root = tmp_path / "auth"
     monkeypatch.setattr("web.history._history_root", _mock_history_root(history_root))
     monkeypatch.setattr("web.uploads._upload_root", _mock_upload_root(upload_root))
+    monkeypatch.setattr("web.auth._auth_root", _mock_auth_root(auth_root))
 
     client = TestClient(create_app())
+    _login(client)
     store_response = client.post(
         "/api/uploads/store",
         files=[("files", ("sample.log", b"2026-04-29 20:50:41.343 PaymentStart, resp: {Code:0 Message:OK} duration=412 ms p: mgt_nbs-oti-4.4.12\n", "text/plain"))],
@@ -153,6 +321,7 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
     report_response = client.get(f"/report/{run_id}")
     assert report_response.status_code == 200
     assert "BM Log Analyzer" in report_response.text
+    assert "Профиль (Administrator)" in report_response.text
 
     report_manifest = client.get(f"/report/{run_id}/manifest")
     assert report_manifest.status_code == 200
@@ -208,6 +377,54 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
     assert latest_manifest.json()["stable_sections"] == report_manifest.json()["stable_sections"]
 
 
+def test_web_upload_rejects_unsupported_files_before_storage(tmp_path, monkeypatch):
+    history_root = tmp_path / "history"
+    upload_root = tmp_path / "uploads"
+    auth_root = tmp_path / "auth"
+    monkeypatch.setattr("web.history._history_root", _mock_history_root(history_root))
+    monkeypatch.setattr("web.uploads._upload_root", _mock_upload_root(upload_root))
+    monkeypatch.setattr("web.auth._auth_root", _mock_auth_root(auth_root))
+
+    client = TestClient(create_app())
+    _login(client)
+    store_response = client.post(
+        "/api/uploads/store",
+        files=[
+            ("files", ("sample.log", b"2026-04-29 20:50:41.343 PaymentStart, resp: {Code:0 Message:OK}\n", "text/plain")),
+            ("files", ("notes.txt", b"not a log upload source", "text/plain")),
+        ],
+    )
+
+    assert store_response.status_code == 200
+    data = store_response.json()
+    assert data["summary"]["uploaded_count"] == 1
+    assert data["summary"]["rejected_count"] == 1
+    assert data["rejected_files"] == ["notes.txt"]
+    assert "1 файл не загружен" in data["summary"]["message"]
+    assert len(list((upload_root / "items").glob("*.json"))) == 1
+
+
+def test_web_upload_summary_omits_zero_rejections(tmp_path, monkeypatch):
+    history_root = tmp_path / "history"
+    upload_root = tmp_path / "uploads"
+    auth_root = tmp_path / "auth"
+    monkeypatch.setattr("web.history._history_root", _mock_history_root(history_root))
+    monkeypatch.setattr("web.uploads._upload_root", _mock_upload_root(upload_root))
+    monkeypatch.setattr("web.auth._auth_root", _mock_auth_root(auth_root))
+
+    client = TestClient(create_app())
+    _login(client)
+    store_response = client.post(
+        "/api/uploads/store",
+        files=[("files", ("sample.log", b"2026-04-29 20:50:41.343 PaymentStart, resp: {Code:0 Message:OK}\n", "text/plain"))],
+    )
+
+    assert store_response.status_code == 200
+    message = store_response.json()["summary"]["message"]
+    assert "не загруж" not in message
+    assert message.endswith("Загрузка прошла без ошибок. Спасибо.")
+
+
 def test_web_history_filter_by_mode(tmp_path):
     input_dir = tmp_path / "input"
     input_dir.mkdir()
@@ -234,7 +451,9 @@ def test_web_history_filter_by_mode(tmp_path):
 
 def test_web_history_query_sort_and_delete(tmp_path, monkeypatch):
     history_root = tmp_path / "history"
+    auth_root = tmp_path / "auth"
     monkeypatch.setattr("web.history._history_root", _mock_history_root(history_root))
+    monkeypatch.setattr("web.auth._auth_root", _mock_auth_root(auth_root))
 
     input_dir = tmp_path / "input"
     input_dir.mkdir()
@@ -274,6 +493,7 @@ def test_web_history_query_sort_and_delete(tmp_path, monkeypatch):
     assert queried[0].run_id == new_item.run_id
 
     client = TestClient(create_app())
+    _login(client)
     delete_response = client.delete(f"/api/runs/{new_item.run_id}")
     assert delete_response.status_code == 200
     assert delete_response.json()["status"] == "ok"
@@ -307,10 +527,13 @@ def test_web_summary_snapshot_is_compact(tmp_path):
 def test_uploads_report_links_update(tmp_path, monkeypatch):
     history_root = tmp_path / "history"
     upload_root = tmp_path / "uploads"
+    auth_root = tmp_path / "auth"
     monkeypatch.setattr("web.history._history_root", _mock_history_root(history_root))
     monkeypatch.setattr("web.uploads._upload_root", _mock_upload_root(upload_root))
+    monkeypatch.setattr("web.auth._auth_root", _mock_auth_root(auth_root))
 
     client = TestClient(create_app())
+    _login(client)
     store_response = client.post(
         "/api/uploads/store",
         files=[("files", ("sample.log", b"2026-04-29 20:50:41.343 PaymentStart, resp: {Code:0 Message:OK} duration=412 ms p: mgt_nbs-oti-4.4.12\n", "text/plain"))],
