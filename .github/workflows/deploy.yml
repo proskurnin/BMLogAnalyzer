@@ -58,6 +58,7 @@ jobs:
             cp /tmp/bm-log-analyzer.env.staging .env.staging
             chmod 600 .env.staging
             sudo systemctl disable --now bm-log-analyzer-stage 2>/dev/null || true
+            docker rm -f src-app-1 2>/dev/null || true
             docker compose -f docker-compose.staging.yml up -d --build --force-recreate
             docker image prune -f
             sudo cp nginx/staging.conf /etc/nginx/sites-available/bm-log-analyzer-stage
@@ -107,6 +108,7 @@ jobs:
             cp /tmp/bm-log-analyzer.env.prod .env.prod
             chmod 600 .env.prod
             sudo systemctl disable --now bm-log-analyzer-prod 2>/dev/null || true
+            docker rm -f src-app-1 2>/dev/null || true
             docker compose -f docker-compose.prod.yml up -d --build --force-recreate
             docker image prune -f
             sudo cp nginx/prod.conf /etc/nginx/sites-available/bm-log-analyzer-prod
