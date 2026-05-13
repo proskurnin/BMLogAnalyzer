@@ -322,6 +322,8 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
     assert report_response.status_code == 200
     assert "BM Log Analyzer" in report_response.text
     assert "Профиль (Administrator)" in report_response.text
+    assert "bm-auth-topbar" in report_response.text
+    assert ".bm-auth-topbar { width: 100%; margin: 0 auto; padding: 24px 24px 0; display: grid; justify-items: center; }" in report_response.text
 
     report_manifest = client.get(f"/report/{run_id}/manifest")
     assert report_manifest.status_code == 200

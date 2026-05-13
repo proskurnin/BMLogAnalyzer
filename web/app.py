@@ -658,6 +658,7 @@ def _page_topbar(user) -> str:
 
 def _topbar_css() -> str:
     return """
+      .bm-auth-topbar { width: 100%; margin: 0 auto; padding: 24px 24px 0; display: grid; justify-items: center; }
       .topbar { width: 1180px; max-width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 24px; min-height: 48px; color: var(--text, #18212f); }
       .topbar-nav { display: flex; align-items: center; gap: 10px; min-width: 0; }
       .topbar-left { justify-content: flex-start; }
@@ -669,6 +670,7 @@ def _topbar_css() -> str:
       .menu-toggle { display: none; appearance: none; border: 1px solid var(--line, #d9e0e7); border-radius: 999px; background: #fff; color: var(--text, #18212f); padding: 8px 11px; font: inherit; line-height: 1; cursor: pointer; }
       .menu-toggle:hover { background: #f2f6fb; border-color: #c8d9f0; color: var(--blue, #2457a6); }
       @media (max-width: 720px) {
+        .bm-auth-topbar { padding: 16px 16px 0; }
         .topbar { width: 1180px; max-width: 100%; }
         .topbar { position: relative; flex-wrap: wrap; align-items: flex-start; }
         .menu-toggle { display: inline-flex; align-items: center; justify-content: center; }
