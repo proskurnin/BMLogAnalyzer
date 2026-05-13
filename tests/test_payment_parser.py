@@ -54,6 +54,23 @@ def test_parses_askp_tt_package():
     assert event.reader_type == "TT"
 
 
+def test_parses_mcd_astra_package():
+    line = (
+        "2026-04-29 20:50:41 PaymentStart resp: "
+        "{Code:0 Message:OK} duration=250 ms p: mcd-x64_astra-1.1.18"
+    )
+
+    event = parse_payment_start_response(line)
+
+    assert event is not None
+    assert event.package == "mcd-x64_astra-1.1.18"
+    assert event.carrier == "mcd"
+    assert event.platform == "x64_astra"
+    assert event.bm_version == "1.1.18"
+    assert event.bm_type is None
+    assert event.reader_type is None
+
+
 def test_handles_missing_duration():
     event = parse_payment_start_response(
         "2026-04-29 20:50:41.343 PaymentStart, resp: {Code:17 Message:Нет карты в поле} p: mgt_nbs-oti-4.4.2"

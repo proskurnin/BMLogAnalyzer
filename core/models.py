@@ -38,11 +38,13 @@ class PaymentEvent:
     message: str | None
     duration_ms: float | None
     package: str | None
-    bm_type: str | None
-    bm_version: str | None
-    reader_type: str | None
-    reader_firmware: str | None
     raw_line: str
+    carrier: str | None = None
+    platform: str | None = None
+    bm_type: str | None = None
+    bm_version: str | None = None
+    reader_type: str | None = None
+    reader_firmware: str | None = None
     payment_type: int | None = None
     auth_type: int | None = None
 

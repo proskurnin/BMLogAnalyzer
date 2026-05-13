@@ -3,15 +3,20 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-PACKAGE_RE = re.compile(r"\bmgt_(?:nbs|askp)-(?P<bm_type>oti|tt)-(?P<version>\d+(?:\.\d+)+)\b", re.IGNORECASE)
+PACKAGE_RE = re.compile(
+    r"\b(?P<carrier>[A-Za-z0-9_]+)-(?P<platform>[A-Za-z0-9_]+)-(?P<version>\d+(?:\.\d+)+)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
 class PackageInfo:
     package: str
-    bm_type: str
+    carrier: str
+    platform: str
     bm_version: str
-    reader_type: str
+    reader_type: str | None
+    bm_type: str | None
 
 
 def parse_package(line: str) -> PackageInfo | None:
@@ -19,10 +24,14 @@ def parse_package(line: str) -> PackageInfo | None:
     if not match:
         return None
 
-    bm_type = match.group("bm_type").lower()
+    carrier = match.group("carrier").lower()
+    platform = match.group("platform").lower()
+    reader_type = platform.upper() if platform in {"oti", "tt"} else None
     return PackageInfo(
         package=match.group(0),
-        bm_type=bm_type,
+        carrier=carrier,
+        platform=platform,
         bm_version=match.group("version"),
-        reader_type=bm_type.upper(),
+        reader_type=reader_type,
+        bm_type=platform if reader_type else None,
     )
