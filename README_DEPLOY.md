@@ -1,26 +1,26 @@
 # BM Log Analyzer Deployment
 
-This document describes the minimum production deployment for the current FastAPI web MVP.
+This document describes the Docker Compose deployment used by the current FastAPI web MVP.
 
 ## Release checklist
 
 1. Set a release version and changelog entry.
-2. Prepare a persistent data directory, for example `/var/lib/bm-log-analyzer`.
+2. Prepare persistent data directories.
 3. Configure production environment variables.
 4. Set up GitHub Actions secrets for deploy.
 5. Run the test suite before deployment.
 6. Run the service behind Nginx with HTTPS.
-7. Back up the persistent data directory.
+7. Back up the persistent data directories.
 
 ## Production environment
 
-Copy `.env.production.example` and change every secret before first start.
+Create environment files on the server. The deploy workflow preserves these files across `git reset --hard`.
 
 Required in production:
 
 ```bash
 BM_APP_ENV=production
-BM_DATA_DIR=/var/lib/bm-log-analyzer
+BM_DATA_DIR=/app/_workdir
 BM_ADMIN_EMAIL=admin@example.com
 BM_ADMIN_PASSWORD='use-a-long-random-password'
 BM_COOKIE_SECURE=true
@@ -44,39 +44,48 @@ upload_store/  uploaded original files
 web_history/   analysis runs and generated reports
 ```
 
-## Install
+## Server Layout
 
-Example on a Linux server:
+The deployment mirrors deTilda:
 
-```bash
-sudo useradd --system --home /opt/bm-log-analyzer --shell /usr/sbin/nologin bmlog
-sudo mkdir -p /opt/bm-log-analyzer /var/lib/bm-log-analyzer
-sudo chown -R bmlog:bmlog /opt/bm-log-analyzer /var/lib/bm-log-analyzer
+```text
+/opt/bm-log-analyzer-stage/src  staging git checkout
+/opt/bm-log-analyzer-prod/src   production git checkout
+/var/lib/bm-log-analyzer-stage  staging persistent data mounted as /app/_workdir
+/var/lib/bm-log-analyzer-prod   production persistent data mounted as /app/_workdir
+/home/bm/.env.staging           staging secrets, copied into checkout during deploy
+/home/bm/.env.prod              production secrets, copied into checkout during deploy
 ```
 
-Deploy the project into `/opt/bm-log-analyzer`, create a venv, then install dependencies:
+The server needs Docker Compose:
 
 ```bash
-cd /opt/bm-log-analyzer
-python3.11 -m venv .venv
-.venv/bin/python -m pip install -r requirements-dev.txt -r requirements-web.txt
-.venv/bin/python -m pytest
+docker compose version
 ```
 
 ## GitHub Actions
 
 The repository contains two workflows:
 
-* `.github/workflows/ci-stage.yml` runs tests on every push to `main` and every pull request. After tests pass on a push to `main`, it deploys the same commit to stage.
-* `.github/workflows/deploy-prod.yml` is a manual production deploy. It runs tests for the selected ref first and then deploys only after the test job passes.
+* `.github/workflows/tests.yml` runs tests on every push to `main` and every pull request targeting `main`.
+* `.github/workflows/deploy.yml` matches the deTilda flow:
+  * push to `main` runs tests and deploys staging
+  * push to `prod` runs tests and deploys production
+  * pull requests targeting `main` or `prod` run tests only
+  * manual `workflow_dispatch` is supported
 
 Required GitHub secrets:
 
 ```bash
-DEPLOY_HOST=109.172.30.33
-DEPLOY_USER=root
-DEPLOY_SSH_KEY='private key for the deploy account'
+STAGING_HOST=109.172.30.33
+STAGING_USER=root
+STAGING_SSH_KEY='private key for the staging deploy account'
+PROD_HOST=109.172.30.33
+PROD_USER=root
+PROD_SSH_KEY='private key for the production deploy account'
 ```
+
+During migration, `deploy.yml` also accepts the older shared `DEPLOY_HOST`, `DEPLOY_USER` and `DEPLOY_SSH_KEY` secrets as a fallback.
 
 Recommended GitHub environments:
 
@@ -85,87 +94,54 @@ Recommended GitHub environments:
 
 For `production`, set required reviewers in GitHub so that prod deploys need an explicit approval.
 
-The deploy workflow updates the already provisioned server directories:
-
-* `/opt/bm-log-analyzer-stage/src`
-* `/opt/bm-log-analyzer-prod/src`
-
-## systemd
-
-Create `/etc/systemd/system/bm-log-analyzer.service`:
-
-```ini
-[Unit]
-Description=BM Log Analyzer web service
-After=network.target
-
-[Service]
-User=bmlog
-Group=bmlog
-WorkingDirectory=/opt/bm-log-analyzer
-EnvironmentFile=/etc/bm-log-analyzer.env
-ExecStart=/opt/bm-log-analyzer/.venv/bin/python -m web --host 127.0.0.1 --port 8000
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Then:
+The deploy workflow updates the already provisioned server directories and then runs Docker Compose:
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now bm-log-analyzer
-sudo systemctl status bm-log-analyzer
+docker compose -f docker-compose.staging.yml up -d --build --force-recreate
+docker compose -f docker-compose.prod.yml up -d --build --force-recreate
+```
+
+## Docker Compose
+
+Staging exposes the app on localhost port `8010`:
+
+```bash
+docker compose -f docker-compose.staging.yml up -d --build
+```
+
+Production exposes the app on localhost port `8011`:
+
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
 ```
 
 ## Nginx
 
-Example server block:
+Nginx configs are stored in the repository and copied by the deploy workflow:
 
-```nginx
-server {
-    listen 80;
-    server_name logs.example.com;
-    return 301 https://$host$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    server_name logs.example.com;
-
-    client_max_body_size 2048m;
-
-    ssl_certificate /etc/letsencrypt/live/logs.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/logs.example.com/privkey.pem;
-
-    location / {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
-    }
-}
+```text
+nginx/staging.conf -> /etc/nginx/sites-available/bm-log-analyzer-stage
+nginx/prod.conf    -> /etc/nginx/sites-available/bm-log-analyzer-prod
 ```
 
-Use Let’s Encrypt or another valid TLS certificate.
+Stage uses `bm-stage.proskurnin.ru` and proxies to `127.0.0.1:8010`.
+Production uses `bm.proskurnin.ru` and proxies to `127.0.0.1:8011`.
 
 ## Backup and restore
 
-Back up `BM_DATA_DIR` regularly. The minimal backup unit is the entire directory:
+Back up persistent data regularly. The minimal backup units are the entire data directories:
 
 ```bash
-sudo tar -czf bm-log-analyzer-data-$(date +%F).tar.gz /var/lib/bm-log-analyzer
+sudo tar -czf bm-log-analyzer-stage-data-$(date +%F).tar.gz /var/lib/bm-log-analyzer-stage
+sudo tar -czf bm-log-analyzer-prod-data-$(date +%F).tar.gz /var/lib/bm-log-analyzer-prod
 ```
 
-Restore by stopping the service, replacing the directory contents, fixing ownership, and starting the service:
+Restore by stopping the container, replacing the directory contents, fixing ownership, and starting the container:
 
 ```bash
-sudo systemctl stop bm-log-analyzer
-sudo chown -R bmlog:bmlog /var/lib/bm-log-analyzer
-sudo systemctl start bm-log-analyzer
+docker compose -f docker-compose.prod.yml down
+sudo chown -R bm:bm /var/lib/bm-log-analyzer-prod
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 ## Manual smoke test

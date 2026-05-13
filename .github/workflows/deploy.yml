@@ -1,0 +1,123 @@
+name: Test & Deploy
+
+on:
+  push:
+    branches: [main, prod]
+  pull_request:
+    branches: [main, prod]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Python version
+        run: python3 --version
+
+      - name: Install dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements-dev.txt -r requirements-web.txt
+
+      - name: Run tests
+        run: python3 -m pytest tests/ -q
+
+  deploy-staging:
+    needs: test
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to staging
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.STAGING_HOST || secrets.DEPLOY_HOST }}
+          username: ${{ secrets.STAGING_USER || secrets.DEPLOY_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY || secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -eu
+            cd /opt/bm-log-analyzer-stage/src
+            sudo chown -R "$(id -u):$(id -g)" /opt/bm-log-analyzer-stage/src
+            sudo rm -f /tmp/bm-log-analyzer.env.staging
+            if [ -f .env.staging ]; then
+              cp .env.staging /tmp/bm-log-analyzer.env.staging
+            elif [ -f /home/bm/.env.staging ]; then
+              cp /home/bm/.env.staging /tmp/bm-log-analyzer.env.staging
+            elif [ -f /home/bm/secrets/.env.staging ]; then
+              cp /home/bm/secrets/.env.staging /tmp/bm-log-analyzer.env.staging
+            fi
+            rm -f .env.staging
+            git fetch --prune origin main
+            git checkout -B main origin/main
+            git reset --hard origin/main
+            if [ ! -f /tmp/bm-log-analyzer.env.staging ]; then
+              echo "Missing .env.staging on server. Put it in /home/bm/.env.staging or /home/bm/secrets/.env.staging."
+              exit 1
+            fi
+            cp /tmp/bm-log-analyzer.env.staging .env.staging
+            chmod 600 .env.staging
+            sudo systemctl disable --now bm-log-analyzer-stage 2>/dev/null || true
+            docker compose -f docker-compose.staging.yml up -d --build --force-recreate
+            docker image prune -f
+            sudo cp nginx/staging.conf /etc/nginx/sites-available/bm-log-analyzer-stage
+            sudo ln -sfn /etc/nginx/sites-available/bm-log-analyzer-stage /etc/nginx/sites-enabled/bm-log-analyzer-stage
+            sudo nginx -t && sudo systemctl reload nginx
+            for i in 1 2 3 4 5; do
+              if curl --fail --silent --show-error http://127.0.0.1:8010/health; then
+                break
+              fi
+              if [ "$i" = "5" ]; then
+                exit 1
+              fi
+              sleep 2
+            done
+
+  deploy-prod:
+    needs: test
+    if: github.ref == 'refs/heads/prod' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to production
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.PROD_HOST || secrets.DEPLOY_HOST }}
+          username: ${{ secrets.PROD_USER || secrets.DEPLOY_USER }}
+          key: ${{ secrets.PROD_SSH_KEY || secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -eu
+            cd /opt/bm-log-analyzer-prod/src
+            sudo chown -R "$(id -u):$(id -g)" /opt/bm-log-analyzer-prod/src
+            sudo rm -f /tmp/bm-log-analyzer.env.prod
+            if [ -f .env.prod ]; then
+              cp .env.prod /tmp/bm-log-analyzer.env.prod
+            elif [ -f /home/bm/.env.prod ]; then
+              cp /home/bm/.env.prod /tmp/bm-log-analyzer.env.prod
+            elif [ -f /home/bm/secrets/.env.prod ]; then
+              cp /home/bm/secrets/.env.prod /tmp/bm-log-analyzer.env.prod
+            fi
+            rm -f .env.prod
+            git fetch --prune origin prod
+            git checkout -B prod origin/prod
+            git reset --hard origin/prod
+            if [ ! -f /tmp/bm-log-analyzer.env.prod ]; then
+              echo "Missing .env.prod on server. Put it in /home/bm/.env.prod or /home/bm/secrets/.env.prod."
+              exit 1
+            fi
+            cp /tmp/bm-log-analyzer.env.prod .env.prod
+            chmod 600 .env.prod
+            sudo systemctl disable --now bm-log-analyzer-prod 2>/dev/null || true
+            docker compose -f docker-compose.prod.yml up -d --build --force-recreate
+            docker image prune -f
+            sudo cp nginx/prod.conf /etc/nginx/sites-available/bm-log-analyzer-prod
+            sudo ln -sfn /etc/nginx/sites-available/bm-log-analyzer-prod /etc/nginx/sites-enabled/bm-log-analyzer-prod
+            sudo nginx -t && sudo systemctl reload nginx
+            for i in 1 2 3 4 5; do
+              if curl --fail --silent --show-error http://127.0.0.1:8011/health; then
+                break
+              fi
+              if [ "$i" = "5" ]; then
+                exit 1
+              fi
+              sleep 2
+            done
