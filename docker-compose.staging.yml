@@ -1,3 +1,5 @@
+name: bm-log-analyzer-stage
+
 services:
   app:
     build: .

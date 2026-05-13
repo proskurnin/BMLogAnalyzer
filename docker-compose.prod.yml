@@ -1,3 +1,5 @@
+name: bm-log-analyzer-prod
+
 services:
   app:
     build: .
