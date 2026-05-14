@@ -106,7 +106,7 @@ def test_login_page_contains_version_and_signature(tmp_path, monkeypatch):
     response = client.get("/login")
 
     assert response.status_code == 200
-    assert "версия сервиса 1.0.1" in response.text
+    assert "версия сервиса 1.0.2" in response.text
     assert 'class="brand"' in response.text
     assert "made with ♥ by Roman A. Proskurnin" in response.text
 
@@ -216,7 +216,7 @@ def test_web_index_contains_upload_landing():
     html = _index_html()
 
     assert "BM Log Analyzer" in html
-    assert "версия сервиса 1.0.1" in html
+    assert "версия сервиса 1.0.2" in html
     assert "picker_menu" not in html
     assert "Выбрать файлы</button>" not in html
     assert "Выбрать папку</button>" not in html
@@ -232,6 +232,10 @@ def test_web_index_contains_upload_landing():
     assert "и ещё" not in html
     assert "/api/uploads/store" in html
     assert "selection_summary" in html
+    assert "renderUploadComplete" in html
+    assert "Открыть отчёт" in html
+    assert "Перейти в загрузки" in html
+    assert "safeReportUrl" in html
     assert "Последние сессии" not in html
 
 
@@ -309,6 +313,8 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
     store_data = store_response.json()
     assert store_data["status"] == "ok"
     assert store_data["summary"]["uploaded_count"] == 1
+    assert store_data["run_id"]
+    assert store_data["report_url"].startswith("/report/")
     upload_id = store_data["items"][0]["upload_id"]
     assert store_data["items"][0]["report_url"].startswith("/report/")
     assert store_data["items"][0]["status"] == "ready"
@@ -395,6 +401,51 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
     ai_start = client.post(f"/api/runs/{run_id}/ai-analysis")
     assert ai_start.status_code == 400
     assert "AI-анализ выключен" in ai_start.json()["detail"]
+
+
+def test_web_upload_session_report_combines_uploaded_files(tmp_path, monkeypatch):
+    history_root = tmp_path / "history"
+    upload_root = tmp_path / "uploads"
+    auth_root = tmp_path / "auth"
+    monkeypatch.setattr("web.history._history_root", _mock_history_root(history_root))
+    monkeypatch.setattr("web.uploads._upload_root", _mock_upload_root(upload_root))
+    monkeypatch.setattr("web.auth._auth_root", _mock_auth_root(auth_root))
+
+    client = TestClient(create_app())
+    _login(client)
+    store_response = client.post(
+        "/api/uploads/store",
+        files=[
+            (
+                "files",
+                (
+                    "first.log",
+                    b"2026-04-29 20:50:41.343 PaymentStart, resp: {Code:0 Message:SESSION_OK} duration=412 ms p: mgt_nbs-oti-4.4.12\n",
+                    "text/plain",
+                ),
+            ),
+            (
+                "files",
+                (
+                    "second.log",
+                    b"2026-04-29 20:50:42.343 PaymentStart, resp: {Code:3 Message:SESSION_ERROR} duration=812 ms p: mgt_nbs-tt-4.4.13\n",
+                    "text/plain",
+                ),
+            ),
+        ],
+    )
+
+    assert store_response.status_code == 200
+    data = store_response.json()
+    assert data["summary"]["uploaded_count"] == 2
+    assert data["report_url"].startswith("/report/")
+    assert len(data["report_updates"]) == 2
+    assert data["report_url"] not in {item["report_url"] for item in data["report_updates"]}
+
+    report_response = client.get(data["report_url"])
+    assert report_response.status_code == 200
+    assert "SESSION_OK" in report_response.text
+    assert "SESSION_ERROR" in report_response.text
 
 
 def test_web_upload_rejects_unsupported_files_before_storage(tmp_path, monkeypatch):

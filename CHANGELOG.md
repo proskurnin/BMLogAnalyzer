@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.2 - 2026-05-14
+
+### Changed
+
+- Upload completion now shows actions to open the latest upload-session report or go to `/uploads`.
+- Multi-file upload sessions now return a combined report URL covering all files uploaded in that session.
+- Analyzer version bumped to `1.0.2`.
+
 ## 1.0.1 - 2026-05-14
 
 ### Changed

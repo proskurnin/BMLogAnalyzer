@@ -444,12 +444,15 @@ def create_app() -> Any:
         for item in stored:
             update_upload_status(item.upload_id, status="processing", status_message="Формируем отчёт", storage_dir=None)
             report_updates.append(_build_upload_report(item, user))
+        session_report = _upload_session_report(stored, report_updates, user)
         refreshed_items = [asdict(load_upload(item.upload_id)) for item in stored]
         return {
             "status": "ok",
             "summary": summary,
             "items": refreshed_items,
             "report_updates": report_updates,
+            "run_id": session_report.get("run_id", ""),
+            "report_url": session_report.get("report_url", ""),
             "rejected_files": rejected_files,
             "message": summary["message"],
         }
@@ -618,6 +621,49 @@ def _build_upload_report(item, user) -> dict[str, Any]:
     )
     update_upload_reports([item.upload_id], report_run_id=run_id, report_url=f"/report/{run_id}")
     return {"upload_id": item.upload_id, "run_id": run_id, "report_url": f"/report/{run_id}"}
+
+
+def _upload_session_report(items, report_updates: list[dict[str, Any]], user) -> dict[str, Any]:
+    if not items:
+        return {}
+    if len(items) == 1 and report_updates:
+        return report_updates[0]
+
+    selected_files = [(item.original_name, Path(item.stored_path)) for item in items if Path(item.stored_path).exists()]
+    if not selected_files:
+        return {}
+
+    run_id = new_run_id()
+    report_root = run_directory(run_id)
+    report_path = run_report_path(run_id)
+    analysis_request = AnalysisRequest(
+        config_path="./config/config.yaml",
+        reports_dir=str(report_root),
+        extracted_dir=None,
+        date=None,
+        reader=None,
+        bm=None,
+        generate_reports=False,
+    )
+    bundle = execute_uploaded_path_analysis(
+        analysis_request,
+        selected_files,
+        summary=False,
+        storage_dir=report_root,
+    )
+    from reports.html_report import write_html_report
+
+    write_html_report(bundle.events, bundle.result, report_path, stats=bundle.stats)
+    record_history(
+        bundle.snapshot,
+        mode="analysis",
+        source="upload_session",
+        run_id=run_id,
+        report_path=report_path,
+        owner_email=user.email,
+        owner_name=user.name,
+    )
+    return {"run_id": run_id, "report_url": f"/report/{run_id}", "upload_ids": [item.upload_id for item in items]}
 
 
 def _validate_upload_limits(files: list[tuple[str, bytes]]) -> str:
@@ -1568,6 +1614,9 @@ def _landing_html(user=None) -> str:
       .progress-shell { height: 12px; border-radius: 999px; background: #edf2f7; border: 1px solid var(--line); overflow: hidden; }
       .progress-bar { width: 0%; height: 100%; background: linear-gradient(90deg, #6e98da, #2f6fd1); transition: width 180ms ease; }
       .message { min-height: 52px; padding: 14px; border-radius: 14px; background: #f8fbff; border: 1px dashed #c8d9f0; color: var(--text); text-align: left; }
+      .message-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+      .message-action { display: inline-flex; align-items: center; justify-content: center; min-height: 38px; border-radius: 10px; padding: 9px 14px; background: #2f6fd1; color: #fff; font-weight: 700; }
+      .message-action--secondary { background: #eef4fb; color: #2457a6; border: 1px solid #c8d9f0; }
       .signature { color: var(--muted); font-size: 12px; }
       .hint { color: var(--muted); font-size: 12px; text-align: left; }
       .selection-summary { padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: #fafcff; color: var(--text); text-align: left; min-height: 44px; }
@@ -1708,6 +1757,31 @@ def _landing_html(user=None) -> str:
         return `Загружено ${uploadedCount} ${archiveWord(uploadedCount)} с логами, общим размером ${totalSizeMb} Mb. Загрузка прошла без ошибок.${rejectedMessage} Спасибо.`;
       }
 
+      function escapeHtml(value) {
+        return String(value).replace(/[&<>"']/g, (char) => ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#039;',
+        }[char]));
+      }
+
+      function safeReportUrl(value) {
+        const url = String(value || '');
+        return url.startsWith('/report/') ? url : '';
+      }
+
+      function renderUploadComplete(summary, clientRejectedCount, reportUrl) {
+        const actions = [
+          safeReportUrl(reportUrl)
+            ? `<a class="message-action" href="${escapeHtml(safeReportUrl(reportUrl))}">Открыть отчёт</a>`
+            : '',
+          '<a class="message-action message-action--secondary" href="/uploads">Перейти в загрузки</a>',
+        ].filter(Boolean).join('');
+        message.innerHTML = `<div>${escapeHtml(uploadMessage(summary, clientRejectedCount))}</div><div class="message-actions">${actions}</div>`;
+      }
+
       async function collectDirectoryHandleFiles(directoryHandle, prefix = '') {
         const files = [];
         for await (const [name, handle] of directoryHandle.entries()) {
@@ -1822,7 +1896,7 @@ def _landing_html(user=None) -> str:
             throw new Error(data?.detail || data?.message || 'Не удалось загрузить файлы.');
           }
           const summary = data.summary || {};
-          message.textContent = uploadMessage(summary, rejectedFiles.size);
+          renderUploadComplete(summary, rejectedFiles.size, data.report_url);
           preparedFiles.clear();
           rejectedFiles.clear();
           updateSelectionSummary();
