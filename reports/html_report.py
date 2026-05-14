@@ -9,6 +9,7 @@ from pathlib import Path
 
 from analytics.archive_inventory import bm_log_count, explicit_reader_log_count, explicit_system_log_count
 from analytics.bm_statuses import UNCLASSIFIED_STATUS, bm_status_summary_rows, classify_bm_status
+from analytics.suspicious import suspicious_line_payloads
 from core.contracts import REPORT_MANIFEST_SCHEMA_VERSION
 from core.models import AnalysisResult, ArchiveInventoryRow, PaymentEvent, PipelineStats
 from core.version import __version__
@@ -67,6 +68,7 @@ def render_html_report(
     bm_group_rows = _bm_status_groups(events)
     bm_group_payloads = _bm_group_payloads(events, archive_names)
     validator_sections = _validator_analytics(events, archive_names)
+    suspicious_rows = suspicious_line_payloads(events)
     date_chart = _bm_date_chart(events)
     unclassified_diag = _unclassified_diagnostics(events)
     report_data = _report_data(
@@ -146,6 +148,7 @@ def render_html_report(
             "</section>",
             _collapsible_other_section(other_groups, other_total),
             f'<script id="report-data" type="application/json">{_json_script(report_data)}</script>',
+            _suspicious_section(suspicious_rows),
             _bm_status_section(events, bm_group_rows, bm_group_payloads, date_chart, unclassified_diag, archive_names),
             _validator_section(validator_sections),
             _modal(),
@@ -170,11 +173,13 @@ def render_html_report_manifest(
     grouped_rows = _bm_status_groups(events)
     archive_names = _archive_name_set(stats.input_files if stats else [])
     validator_sections = _validator_analytics(events, archive_names)
+    suspicious_rows = suspicious_line_payloads(events)
     stable_sections = [
         "summary",
         "bm_meta",
         "log_files",
         "other_files",
+        "suspicious",
         "bm_statuses",
         "grouped_statuses",
         "date_dynamics",
@@ -200,6 +205,7 @@ def render_html_report_manifest(
             "log_groups",
             "other_groups",
             "validator_sections",
+            "suspicious_lines",
         ],
         "stable_sections": stable_sections,
         "counts": {
@@ -214,6 +220,7 @@ def render_html_report_manifest(
             "decline": result.decline_count,
             "technical_error": result.technical_error_count,
             "unknown": result.unknown_count,
+            "suspicious": len(suspicious_rows),
         },
         "sections": stable_sections,
         "status_groups": [str(row["status"]) for row in summary_rows],
@@ -221,6 +228,7 @@ def render_html_report_manifest(
         "log_groups": [str(group["label"]) for group in log_groups],
         "other_groups": [str(group["label"]) for group in other_groups],
         "validator_sections": [str(item["validator"]) for item in validator_sections],
+        "suspicious_lines": suspicious_rows,
     }
 
 
@@ -423,6 +431,46 @@ def _collapsible_other_section(other_groups: list[dict[str, object]], other_tota
             _bar_chart(other_groups, other_total),
             "</div>",
             "</details>",
+        ]
+    )
+
+
+def _suspicious_section(rows: list[dict[str, object]]) -> str:
+    rendered_rows = []
+    for row in rows:
+        source = str(row.get("source_file") or "")
+        line_number = str(row.get("line_number") or "")
+        timestamp = str(row.get("timestamp") or "")
+        code = str(row.get("code") or "")
+        reason = str(row.get("reason") or "")
+        raw_line = str(row.get("raw_line") or "")
+        location = f"{source}:{line_number}" if line_number else source
+        rendered_rows.append(
+            "<tr class=\"status-row status-row--suspicious\">"
+            f"<td><strong>{escape(location)}</strong><br><span class=\"muted\">{escape(timestamp)}</span></td>"
+            f"<td>{escape(code)}</td>"
+            f"<td>{escape(reason)}</td>"
+            f"<td><code>{escape(raw_line)}</code></td>"
+            "</tr>"
+        )
+    empty = '<tr><td colspan="4" class="muted">Подозрительных строк не найдено.</td></tr>'
+    table = (
+        '<div class="table-wrap suspicious-table-wrap">'
+        '<table class="status-table status-table--suspicious">'
+        '<thead class="status-table-head"><tr><th>Источник</th><th>Код</th><th>Почему подозрительно</th><th>Строка лога</th></tr></thead>'
+        f"<tbody>{''.join(rendered_rows) if rendered_rows else empty}</tbody>"
+        "</table>"
+        "</div>"
+    )
+    return "\n".join(
+        [
+            '<section class="section section--suspicious">',
+            '<div class="section-title">',
+            "<h2>Подозрительно</h2>",
+            f"<p>Найдено строк: {len(rows)}. Baseline строится по успешным PaymentStart resp с Code:0.</p>",
+            "</div>",
+            table,
+            "</section>",
         ]
     )
 
@@ -2397,6 +2445,9 @@ h1, h2, p { margin: 0; }
 .status-row--total td { background: #f6f8fb; font-weight: 700; }
 .status-row--clickable { cursor: pointer; }
 .status-row--clickable:hover td { background: rgba(39, 100, 163, 0.04); }
+.status-table--suspicious code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.status-row--suspicious td { background: #fffaf0; }
+.suspicious-table-wrap { max-height: 560px; }
 .status-table--grouped .status-row--group td { background: transparent; }
 .status-table--grouped .status-row--success td { background: #eef8ee; }
 .status-table--grouped .status-row--clickable:hover td { background: rgba(39, 100, 163, 0.04); }

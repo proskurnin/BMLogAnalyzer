@@ -344,12 +344,14 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
         "log_groups",
         "other_groups",
         "validator_sections",
+        "suspicious_lines",
     ]
     assert report_manifest.json()["stable_sections"] == [
         "summary",
         "bm_meta",
         "log_files",
         "other_files",
+        "suspicious",
         "bm_statuses",
         "grouped_statuses",
         "date_dynamics",

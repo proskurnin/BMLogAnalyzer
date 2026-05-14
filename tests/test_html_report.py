@@ -85,6 +85,9 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert "Log-файлы" in html
     assert "Прочие файлы" in html
     assert "BM-статусы" in html
+    assert "Подозрительно" in html
+    assert "Почему подозрительно" in html
+    assert "status-table--suspicious" in html
     assert "Группировка статусов" in html
     assert "BM сведения" in html
     assert "Версии БМ" in html
@@ -147,3 +150,5 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert '"sections": [' in manifest
     assert '"log_files"' in manifest
     assert '"validator_sections"' in manifest
+    assert '"suspicious"' in manifest
+    assert '"suspicious_lines"' in manifest
