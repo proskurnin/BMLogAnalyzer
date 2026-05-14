@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.1 - 2026-05-15
+
+### Changed
+
+- Admin page sections are now collapsed by default and ordered as users, storage policies, and validation checks.
+- Analyzer version bumped to `1.1.1`.
+
 ## 1.1.0 - 2026-05-15
 
 ### Added

@@ -1186,42 +1186,56 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
       {_page_topbar(effective_user)}
       <section class="panel">
         <h1>Администрирование</h1>
-        <h2>Пользователи</h2>
         {error_html}
-        <form method="post" action="/admin/users/create" class="create-form">
-          <input name="name" placeholder="Имя" required>
-          <input name="email" type="email" placeholder="Email / логин" required>
-          <input name="password" type="password" placeholder="Пароль" required>
-          <select name="role">
-            <option value="user">пользователь</option>
-            <option value="admin">администратор</option>
-          </select>
-          <button type="submit">Добавить</button>
-        </form>
-        <h2>Хранение архивов</h2>
-        <form method="post" action="/admin/settings" class="create-form">
-          <label>Срок хранения, дни
-            <input name="archive_retention_days" type="number" min="1" step="1" value="{policy.archive_retention_days}" required>
-          </label>
-          <button type="submit">Сохранить</button>
-        </form>
-        <div class="muted">Через заданное число дней удаляются архивы и распаковки. Табличные данные сохраняются, ссылка на скачивание исчезает.</div>
-        <h2>Каталог проверок</h2>
-        <div class="muted">Правила применяются при формировании `check_results.csv`, `check_summary.csv` и AI-контекста.</div>
-        <form method="post" action="/admin/check-cases/reset" class="inline-form">
-          <button type="submit">Сбросить к встроенным правилам</button>
-        </form>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>ID</th><th>Проверка</th><th>Severity</th><th>Статус</th><th>Версия</th><th>Действия</th></tr></thead>
-            <tbody>{"".join(check_rows)}</tbody>
-          </table>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Имя</th><th>Email</th><th>Пароль</th><th>Роль</th><th>Действия</th></tr></thead>
-            <tbody>{"".join(rows)}</tbody>
-          </table>
+        <div class="admin-sections">
+          <details class="admin-section">
+            <summary><span>Пользователи</span><strong>{len(rows)}</strong></summary>
+            <div class="admin-section__body">
+              <form method="post" action="/admin/users/create" class="create-form">
+                <input name="name" placeholder="Имя" required>
+                <input name="email" type="email" placeholder="Email / логин" required>
+                <input name="password" type="password" placeholder="Пароль" required>
+                <select name="role">
+                  <option value="user">пользователь</option>
+                  <option value="admin">администратор</option>
+                </select>
+                <button type="submit">Добавить</button>
+              </form>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Имя</th><th>Email</th><th>Пароль</th><th>Роль</th><th>Действия</th></tr></thead>
+                  <tbody>{"".join(rows)}</tbody>
+                </table>
+              </div>
+            </div>
+          </details>
+          <details class="admin-section">
+            <summary><span>Политики хранения</span><strong>{policy.archive_retention_days} дней</strong></summary>
+            <div class="admin-section__body">
+              <form method="post" action="/admin/settings" class="create-form">
+                <label>Срок хранения архивов, дни
+                  <input name="archive_retention_days" type="number" min="1" step="1" value="{policy.archive_retention_days}" required>
+                </label>
+                <button type="submit">Сохранить</button>
+              </form>
+              <div class="muted">Через заданное число дней удаляются архивы и распаковки. Табличные данные сохраняются, ссылка на скачивание исчезает.</div>
+            </div>
+          </details>
+          <details class="admin-section">
+            <summary><span>Каталог проверок</span><strong>{len(check_rows)}</strong></summary>
+            <div class="admin-section__body">
+              <div class="muted">Правила применяются при формировании `check_results.csv`, `check_summary.csv` и AI-контекста.</div>
+              <form method="post" action="/admin/check-cases/reset" class="inline-form">
+                <button type="submit">Сбросить к встроенным правилам</button>
+              </form>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>ID</th><th>Проверка</th><th>Severity</th><th>Статус</th><th>Версия</th><th>Действия</th></tr></thead>
+                  <tbody>{"".join(check_rows)}</tbody>
+                </table>
+              </div>
+            </div>
+          </details>
         </div>
       </section>
     </main>
@@ -1320,6 +1334,13 @@ def _shared_page_css() -> str:
       .actions { display:flex; flex-wrap:wrap; gap:8px; }
       .muted { color:var(--muted); }
       .error { margin-bottom:12px; padding:10px 12px; border:1px solid #f4b4a5; border-radius:10px; background:#fff5f3; color:#9f1d12; }
+      .admin-sections { display:grid; gap:12px; }
+      .admin-section { border:1px solid var(--line); border-radius:14px; background:#fff; overflow:hidden; }
+      .admin-section > summary { list-style:none; cursor:pointer; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 16px; background:#f7f9fc; }
+      .admin-section > summary::-webkit-details-marker { display:none; }
+      .admin-section > summary span { font-size:16px; font-weight:800; }
+      .admin-section > summary strong { color:var(--blue); background:#e6f1ff; border-radius:999px; padding:4px 10px; font-size:12px; white-space:nowrap; }
+      .admin-section__body { display:grid; gap:12px; padding:14px 16px 16px; border-top:1px solid var(--line); }
       {{TOPBAR_CSS}}
       @media (max-width: 720px) { .page { padding:16px; } }
     </style>
