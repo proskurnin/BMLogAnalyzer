@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import io
 import zipfile
 from collections.abc import Iterable, Iterator
 from pathlib import Path
@@ -35,7 +36,7 @@ def _read_source(path: Path) -> Iterator[LogLine]:
     if suffix == ".zip":
         yield from _read_zip(path)
     elif suffix == ".gz":
-        yield from _iter_text_lines(path, _open_gzip_or_text(path))
+        yield from _read_gzip_or_text(path)
     else:
         yield from _iter_text_lines(path, path.open("rt", encoding="utf-8", errors="replace"))
 
@@ -52,12 +53,17 @@ def _read_zip(path: Path) -> Iterator[LogLine]:
                 if name.endswith("/") or Path(name).suffix.lower() not in {".log", ".gz"}:
                     continue
                 source_name = f"{path}!{name}"
-                with archive.open(name) as raw:
-                    raw_bytes = raw.read()
-                    if name.lower().endswith(".gz"):
-                        yield from _iter_text_lines(source_name, _open_gzip_bytes_or_text(raw_bytes))
-                    else:
-                        yield from _iter_text_bytes(source_name, raw_bytes)
+                if name.lower().endswith(".gz"):
+                    try:
+                        with archive.open(name) as raw:
+                            with gzip.GzipFile(fileobj=raw) as gzipped:
+                                yield from _iter_text_lines(source_name, io.TextIOWrapper(gzipped, encoding="utf-8", errors="replace"))
+                    except (OSError, EOFError, gzip.BadGzipFile):
+                        with archive.open(name) as raw:
+                            yield from _iter_text_lines(source_name, io.TextIOWrapper(raw, encoding="utf-8", errors="replace"))
+                else:
+                    with archive.open(name) as raw:
+                        yield from _iter_text_lines(source_name, io.TextIOWrapper(raw, encoding="utf-8", errors="replace"))
     except zipfile.BadZipFile:
         yield from _iter_text_lines(path, path.open("rt", encoding="utf-8", errors="replace"))
 
@@ -68,22 +74,8 @@ def _iter_text_lines(source_file: Path | str, stream) -> Iterator[LogLine]:
             yield LogLine(str(source_file), line_number, line.rstrip("\n\r"))
 
 
-def _iter_text_bytes(source_file: Path | str, raw_bytes: bytes) -> Iterator[LogLine]:
-    text = raw_bytes.decode("utf-8", errors="replace")
-    for line_number, line in enumerate(text.splitlines(), start=1):
-        yield LogLine(str(source_file), line_number, line.rstrip("\n\r"))
-
-
-def _open_gzip_or_text(path: Path):
-    raw_bytes = path.read_bytes()
-    return _open_gzip_bytes_or_text(raw_bytes)
-
-
-def _open_gzip_bytes_or_text(raw_bytes: bytes):
+def _read_gzip_or_text(path: Path) -> Iterator[LogLine]:
     try:
-        text = gzip.decompress(raw_bytes).decode("utf-8", errors="replace")
+        yield from _iter_text_lines(path, gzip.open(path, "rt", encoding="utf-8", errors="replace"))
     except (OSError, EOFError, gzip.BadGzipFile):
-        text = raw_bytes.decode("utf-8", errors="replace")
-    from io import StringIO
-
-    return StringIO(text)
+        yield from _iter_text_lines(path, path.open("rt", encoding="utf-8", errors="replace"))

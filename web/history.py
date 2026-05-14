@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import asdict
 from datetime import datetime, timezone, timedelta
 import json
@@ -148,31 +149,42 @@ def list_history(
     index = _index_path(storage_dir)
     if not index.exists():
         return []
+    limit = max(0, limit)
+    if limit == 0:
+        return []
     items: list[HistoryItemModel] = []
     mode_filter = (mode or "").strip().lower() or None
     query_filter = (query or "").strip().lower() or None
-    for line in index.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        payload = json.loads(line)
-        payload.setdefault("report_path", "")
-        payload.setdefault("report_url", "")
-        payload.setdefault("manifest_url", "")
-        payload.setdefault("owner_email", "")
-        payload.setdefault("owner_name", "")
-        if owner_email is not None and payload.get("owner_email") != owner_email:
-            continue
-        if mode_filter and str(payload.get("mode", "")).strip().lower() != mode_filter:
-            continue
-        if query_filter:
-            searchable = " ".join(
-                str(payload.get(field, ""))
-                for field in ("run_id", "created_at", "mode", "source", "version", "input_path", "reports_dir")
-            ).lower()
-            if query_filter not in searchable:
-                continue
-        items.append(HistoryItemModel(**payload))
     reverse = str(sort).strip().lower() != "asc"
+    recent_items: deque[HistoryItemModel] | None = deque(maxlen=limit) if reverse and not query_filter else None
+    with index.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            payload = json.loads(line)
+            payload.setdefault("report_path", "")
+            payload.setdefault("report_url", "")
+            payload.setdefault("manifest_url", "")
+            payload.setdefault("owner_email", "")
+            payload.setdefault("owner_name", "")
+            if owner_email is not None and payload.get("owner_email") != owner_email:
+                continue
+            if mode_filter and str(payload.get("mode", "")).strip().lower() != mode_filter:
+                continue
+            if query_filter:
+                searchable = " ".join(
+                    str(payload.get(field, ""))
+                    for field in ("run_id", "created_at", "mode", "source", "version", "input_path", "reports_dir")
+                ).lower()
+                if query_filter not in searchable:
+                    continue
+            item = HistoryItemModel(**payload)
+            if recent_items is not None:
+                recent_items.append(item)
+            else:
+                items.append(item)
+    if recent_items is not None:
+        return list(reversed(recent_items))
     items.sort(key=lambda item: (item.created_at, item.run_id), reverse=reverse)
     return items[:limit]
 

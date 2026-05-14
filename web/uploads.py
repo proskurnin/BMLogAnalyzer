@@ -76,6 +76,41 @@ def store_uploads(
     return uploaded
 
 
+def allocate_upload_path(original_name: str, storage_dir: Path | None = None) -> tuple[str, Path]:
+    root = _upload_root(storage_dir)
+    upload_id = new_upload_id()
+    stored_path = _file_path(upload_id, original_name, root)
+    stored_path.parent.mkdir(parents=True, exist_ok=True)
+    return upload_id, stored_path
+
+
+def save_upload_item(
+    *,
+    upload_id: str,
+    original_name: str,
+    stored_path: Path,
+    size_bytes: int,
+    owner_email: str = "",
+    owner_name: str = "",
+    storage_dir: Path | None = None,
+) -> UploadItemModel:
+    root = _upload_root(storage_dir)
+    item = UploadItemModel(
+        upload_id=upload_id,
+        created_at=_utc_now(),
+        original_name=original_name,
+        stored_path=str(stored_path),
+        size_bytes=size_bytes,
+        status="stored",
+        status_message="",
+        download_url=f"/uploads/download/{upload_id}",
+        owner_email=owner_email,
+        owner_name=owner_name,
+    )
+    _item_path(upload_id, root).write_text(json.dumps(asdict(item), ensure_ascii=False, indent=2), encoding="utf-8")
+    return item
+
+
 def split_upload_candidates(files: list[tuple[str, bytes]]) -> tuple[list[tuple[str, bytes]], list[tuple[str, bytes]]]:
     accepted: list[tuple[str, bytes]] = []
     rejected: list[tuple[str, bytes]] = []
@@ -190,6 +225,16 @@ def collect_upload_files(upload_ids: list[str], storage_dir: Path | None = None)
         item = load_upload(upload_id, storage_dir)
         stored_path = Path(item.stored_path)
         files.append((item.original_name, stored_path.read_bytes()))
+    return files
+
+
+def collect_upload_paths(upload_ids: list[str], storage_dir: Path | None = None) -> list[tuple[str, Path]]:
+    files: list[tuple[str, Path]] = []
+    for upload_id in upload_ids:
+        item = load_upload(upload_id, storage_dir)
+        stored_path = Path(item.stored_path)
+        if stored_path.exists():
+            files.append((item.original_name, stored_path))
     return files
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -183,6 +184,18 @@ def stage_uploaded_files(files: list[tuple[str, bytes]], base_dir: Path | None =
     return temp_root, input_dir
 
 
+def stage_uploaded_paths(files: list[tuple[str, Path]], base_dir: Path | None = None) -> tuple[Path, Path]:
+    temp_root = Path(tempfile.mkdtemp(prefix="bm-log-analyzer-upload-", dir=str(base_dir) if base_dir else None))
+    input_dir = temp_root / "input"
+    input_dir.mkdir(parents=True, exist_ok=True)
+    for relative_name, source_path in files:
+        target = input_dir / _safe_upload_path(relative_name)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with source_path.open("rb") as source, target.open("wb") as destination:
+            shutil.copyfileobj(source, destination, length=1024 * 1024)
+    return temp_root, input_dir
+
+
 def analyze_uploaded_files(
     request: AnalysisRequest,
     files: list[tuple[str, bytes]],
@@ -245,3 +258,50 @@ def execute_uploaded_analysis(
             stats=bundle.stats,
         )
     return bundle
+
+
+def execute_uploaded_path_analysis(
+    request: AnalysisRequest,
+    files: list[tuple[str, Path]],
+    *,
+    summary: bool = False,
+    storage_dir: Path | None = None,
+) -> AnalysisBundle:
+    storage_base = Path(storage_dir or "./_workdir/uploads")
+    storage_base.mkdir(parents=True, exist_ok=True)
+    upload_root, input_dir = stage_uploaded_paths(files, storage_base)
+    staged_request = AnalysisRequest(
+        input_path=str(input_dir),
+        config_path=request.config_path,
+        extracted_dir=str(upload_root / "extracted"),
+        reports_dir=request.reports_dir,
+        date=request.date,
+        reader=request.reader,
+        bm=request.bm,
+        generate_reports=request.generate_reports,
+    )
+    bundle = execute_analysis(staged_request)
+    if summary:
+        return AnalysisBundle(
+            snapshot=SnapshotModel(
+                version=bundle.snapshot.version,
+                request=bundle.snapshot.request,
+                analysis=bundle.snapshot.analysis,
+                pipeline=bundle.snapshot.pipeline,
+                archives=bundle.snapshot.archives,
+                reports=bundle.snapshot.reports,
+                facts=bundle.snapshot.facts,
+                stats=None,
+                schema_version=bundle.snapshot.schema_version,
+            ),
+            events=bundle.events,
+            result=bundle.result,
+            stats=bundle.stats,
+        )
+    return bundle
+
+
+def _safe_upload_path(relative_name: str) -> Path:
+    path = Path(relative_name)
+    parts = [part.replace(":", "_") for part in path.parts if part not in {"", ".", "..", path.anchor}]
+    return Path(*parts) if parts else Path("upload.bin")

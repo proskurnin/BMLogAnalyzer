@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 from html import escape
@@ -23,17 +24,18 @@ from web.auth import (
     user_from_session,
 )
 from web.history import delete_history_run, latest_history, list_history, load_history_run, new_run_id, record_history, run_directory, run_report_path
-from web.service import AnalysisRequest, analyze_request, execute_uploaded_analysis, build_summary_snapshot
+from web.service import AnalysisRequest, analyze_request, execute_uploaded_path_analysis, build_summary_snapshot
 from web.settings import load_settings, require_production_bootstrap_settings
-from web.retention import cleanup_expired_storage, load_storage_policy, update_storage_policy
+from web.retention import cleanup_expired_storage, cleanup_expired_storage_if_due, load_storage_policy, update_storage_policy
 from web.uploads import (
-    collect_upload_files,
+    allocate_upload_path,
+    collect_upload_paths,
     delete_upload,
+    is_allowed_upload_name,
     list_uploads,
     load_upload,
-    store_uploads,
+    save_upload_item,
     summary_from_uploads,
-    split_upload_candidates,
     update_upload_status,
     update_upload_reports,
 )
@@ -67,8 +69,7 @@ def create_app() -> Any:
 
     @app.middleware("http")
     async def require_auth(request: Request, call_next):
-        ensure_default_admin()
-        cleanup_expired_storage()
+        cleanup_expired_storage_if_due()
         path = request.url.path
         if path in {"/login", "/health"}:
             return await call_next(request)
@@ -286,17 +287,18 @@ def create_app() -> Any:
     ) -> dict[str, Any]:
         user = _request_user(request)
         run_id = new_run_id()
-        payload_files = [(file.filename or "upload.bin", await file.read()) for file in files]
+        report_root = run_directory(run_id)
+        staged_files = await _spool_upload_files(files, report_root / "received")
         request = AnalysisRequest(
             config_path="./config/config.yaml",
-            reports_dir=str(run_directory(run_id)),
+            reports_dir=str(report_root),
             extracted_dir=None,
             date=None,
             reader=None,
             bm=None,
             generate_reports=False,
         )
-        bundle = execute_uploaded_analysis(request, payload_files, summary=False, storage_dir=run_directory(run_id))
+        bundle = execute_uploaded_path_analysis(request, staged_files, summary=False, storage_dir=report_root)
         report_path = run_report_path(run_id)
         from reports.html_report import write_html_report
 
@@ -325,17 +327,18 @@ def create_app() -> Any:
     ) -> dict[str, Any]:
         user = _request_user(request)
         run_id = new_run_id()
-        payload_files = [(file.filename or "upload.bin", await file.read()) for file in files]
+        report_root = run_directory(run_id)
+        staged_files = await _spool_upload_files(files, report_root / "received")
         request = AnalysisRequest(
             config_path="./config/config.yaml",
-            reports_dir=str(run_directory(run_id)),
+            reports_dir=str(report_root),
             extracted_dir=None,
             date=None,
             reader=None,
             bm=None,
             generate_reports=False,
         )
-        bundle = execute_uploaded_analysis(request, payload_files, summary=True, storage_dir=run_directory(run_id))
+        bundle = execute_uploaded_path_analysis(request, staged_files, summary=True, storage_dir=report_root)
         report_path = run_report_path(run_id)
         from reports.html_report import write_html_report
 
@@ -395,12 +398,9 @@ def create_app() -> Any:
     @app.post("/api/uploads/store")
     async def store(request: Request, files: list[UploadFile] = File(...)) -> dict[str, Any]:
         user = _request_user(request)
-        payload_files = [(file.filename or "upload.bin", await file.read()) for file in files]
-        limit_error = _validate_upload_limits(payload_files)
+        stored, rejected_files, limit_error = await _store_uploads_streaming(files, owner_email=user.email, owner_name=user.name)
         if limit_error:
             return JSONResponse({"detail": limit_error}, status_code=413)
-        accepted_files, rejected_files = split_upload_candidates(payload_files)
-        stored = store_uploads(accepted_files, owner_email=user.email, owner_name=user.name)
         summary = summary_from_uploads(stored, rejected_count=len(rejected_files))
         report_updates: list[dict[str, Any]] = []
         for item in stored:
@@ -417,9 +417,9 @@ def create_app() -> Any:
                 bm=None,
                 generate_reports=False,
             )
-            bundle = execute_uploaded_analysis(
+            bundle = execute_uploaded_path_analysis(
                 request,
-                [(item.original_name, Path(item.stored_path).read_bytes())],
+                [(item.original_name, Path(item.stored_path))],
                 summary=False,
                 storage_dir=report_root,
             )
@@ -443,7 +443,7 @@ def create_app() -> Any:
             "summary": summary,
             "items": refreshed_items,
             "report_updates": report_updates,
-            "rejected_files": [name for name, _content in rejected_files],
+            "rejected_files": rejected_files,
             "message": summary["message"],
         }
 
@@ -453,7 +453,7 @@ def create_app() -> Any:
         upload_ids = [str(item) for item in payload.get("upload_ids", []) if str(item).strip()]
         if not upload_ids:
             return JSONResponse({"detail": "Не выбраны загрузки"}, status_code=400)
-        selected_files = collect_upload_files(upload_ids)
+        selected_files = collect_upload_paths(upload_ids)
         if not selected_files:
             return JSONResponse({"detail": "Выбранные загрузки не найдены"}, status_code=404)
         if user.role != "admin":
@@ -462,24 +462,15 @@ def create_app() -> Any:
                     return JSONResponse({"detail": "Доступ запрещён"}, status_code=403)
         run_id = new_run_id()
         staging_dir = run_directory(run_id)
-        temp_input = staging_dir / "input"
-        temp_input.mkdir(parents=True, exist_ok=True)
-        for index, (original_name, content) in enumerate(selected_files, start=1):
-            safe_name = original_name.replace("/", "_").replace("\\", "_")
-            target = temp_input / f"{index:03d}_{safe_name}"
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(content)
         request = AnalysisRequest(
-            input_path=str(temp_input),
             config_path="./config/config.yaml",
             reports_dir=str(staging_dir),
-            extracted_dir=str(staging_dir / "extracted"),
             date=None,
             reader=None,
             bm=None,
             generate_reports=False,
         )
-        bundle = execute_uploaded_analysis(request, selected_files, summary=False, storage_dir=staging_dir)
+        bundle = execute_uploaded_path_analysis(request, selected_files, summary=False, storage_dir=staging_dir)
         report_path = run_report_path(run_id)
         from reports.html_report import write_html_report
 
@@ -564,6 +555,90 @@ def _validate_upload_limits(files: list[tuple[str, bytes]]) -> str:
             f"Максимум на файл: {_format_mb(settings.max_upload_file_bytes)} Mb."
         )
     return ""
+
+
+async def _spool_upload_files(files: list[UploadFile], destination: Path) -> list[tuple[str, Path]]:
+    destination.mkdir(parents=True, exist_ok=True)
+    staged: list[tuple[str, Path]] = []
+    chunk_size = 1024 * 1024
+    for index, file in enumerate(files, start=1):
+        original_name = file.filename or "upload.bin"
+        target_name = Path(original_name).name or "upload.bin"
+        target = destination / f"{index}-{target_name}"
+        with target.open("wb") as handle:
+            while True:
+                chunk = await file.read(chunk_size)
+                if not chunk:
+                    break
+                handle.write(chunk)
+        staged.append((original_name, target))
+    return staged
+
+
+async def _store_uploads_streaming(
+    files: list[UploadFile],
+    *,
+    owner_email: str = "",
+    owner_name: str = "",
+) -> tuple[list[Any], list[str], str]:
+    settings = load_settings()
+    if len(files) > settings.max_upload_files:
+        return [], [], f"Слишком много файлов: {len(files)}. Максимум: {settings.max_upload_files}."
+
+    stored: list[Any] = []
+    rejected_files: list[str] = []
+    total_size = 0
+    chunk_size = 1024 * 1024
+
+    try:
+        for file in files:
+            original_name = file.filename or "upload.bin"
+            if not is_allowed_upload_name(original_name):
+                rejected_files.append(original_name)
+                continue
+
+            upload_id, stored_path = allocate_upload_path(original_name)
+            file_size = 0
+            try:
+                with stored_path.open("wb") as target:
+                    while True:
+                        chunk = await file.read(chunk_size)
+                        if not chunk:
+                            break
+                        file_size += len(chunk)
+                        total_size += len(chunk)
+                        if file_size > settings.max_upload_file_bytes:
+                            raise ValueError(
+                                f"Файл слишком большой: {original_name}. "
+                                f"Максимум на файл: {_format_mb(settings.max_upload_file_bytes)} Mb."
+                            )
+                        if total_size > settings.max_upload_session_bytes:
+                            raise ValueError(
+                                f"Слишком большой общий размер загрузки: {_format_mb(total_size)} Mb. "
+                                f"Максимум: {_format_mb(settings.max_upload_session_bytes)} Mb."
+                            )
+                        target.write(chunk)
+            except Exception:
+                if stored_path.parent.exists():
+                    shutil.rmtree(stored_path.parent, ignore_errors=True)
+                raise
+
+            stored.append(
+                save_upload_item(
+                    upload_id=upload_id,
+                    original_name=original_name,
+                    stored_path=stored_path,
+                    size_bytes=file_size,
+                    owner_email=owner_email,
+                    owner_name=owner_name,
+                )
+            )
+    except ValueError as exc:
+        for item in stored:
+            delete_upload(item.upload_id)
+        return [], rejected_files, str(exc)
+
+    return stored, rejected_files, ""
 
 
 def _format_mb(size_bytes: int) -> str:

@@ -3,10 +3,13 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
+from time import monotonic
 
 from web.settings import load_settings
 
 DEFAULT_ARCHIVE_RETENTION_DAYS = 10
+DEFAULT_CLEANUP_INTERVAL_SECONDS = 60 * 60
+_last_cleanup_at = 0.0
 
 
 @dataclass(frozen=True)
@@ -55,6 +58,15 @@ def cleanup_expired_storage() -> dict[str, int]:
         **upload_summary,
         **history_summary,
     }
+
+
+def cleanup_expired_storage_if_due(*, interval_seconds: int = DEFAULT_CLEANUP_INTERVAL_SECONDS) -> dict[str, int] | None:
+    global _last_cleanup_at
+    now = monotonic()
+    if _last_cleanup_at and now - _last_cleanup_at < interval_seconds:
+        return None
+    _last_cleanup_at = now
+    return cleanup_expired_storage()
 
 
 def _normalize_days(value: int | str | None) -> int:
