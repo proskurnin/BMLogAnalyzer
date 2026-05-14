@@ -106,7 +106,7 @@ def test_login_page_contains_version_and_signature(tmp_path, monkeypatch):
     response = client.get("/login")
 
     assert response.status_code == 200
-    assert "версия сервиса 1.0.3" in response.text
+    assert "версия сервиса 1.0.4" in response.text
     assert 'class="brand"' in response.text
     assert "made with ♥ by Roman A. Proskurnin" in response.text
 
@@ -216,7 +216,7 @@ def test_web_index_contains_upload_landing():
     html = _index_html()
 
     assert "BM Log Analyzer" in html
-    assert "версия сервиса 1.0.3" in html
+    assert "версия сервиса 1.0.4" in html
     assert "picker_menu" not in html
     assert "Выбрать файлы</button>" not in html
     assert "Выбрать папку</button>" not in html
@@ -236,6 +236,11 @@ def test_web_index_contains_upload_landing():
     assert "Открыть отчёт" in html
     assert "Перейти в загрузки" in html
     assert "safeReportUrl" in html
+    assert 'id="message_actions"' in html
+    assert ".message-actions { display: none; grid-template-columns: repeat(2, minmax(0, 1fr));" in html
+    assert "message.textContent = uploadMessage(summary, clientRejectedCount);" in html
+    assert "messageActions.dataset.visible = actions ? 'true' : 'false';" in html
+    assert "message.innerHTML = `<div>${escapeHtml(uploadMessage" not in html
     assert "Последние сессии" not in html
 
 

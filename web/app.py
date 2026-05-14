@@ -1631,9 +1631,11 @@ def _landing_html(user=None) -> str:
       .progress-shell { height: 12px; border-radius: 999px; background: #edf2f7; border: 1px solid var(--line); overflow: hidden; }
       .progress-bar { width: 0%; height: 100%; background: linear-gradient(90deg, #6e98da, #2f6fd1); transition: width 180ms ease; }
       .message { min-height: 52px; padding: 14px; border-radius: 14px; background: #f8fbff; border: 1px dashed #c8d9f0; color: var(--text); text-align: left; }
-      .message-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
-      .message-action { display: inline-flex; align-items: center; justify-content: center; min-height: 38px; border-radius: 10px; padding: 9px 14px; background: #2f6fd1; color: #fff; font-weight: 700; }
-      .message-action--secondary { background: #eef4fb; color: #2457a6; border: 1px solid #c8d9f0; }
+      .message-actions { display: none; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; width: 100%; margin: 2px auto 0; }
+      .message-actions[data-visible="true"] { display: grid; }
+      .message-action { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; border-radius: 12px; padding: 10px 14px; background: #2f6fd1; color: #fff; font-weight: 700; box-shadow: 0 10px 22px rgba(47, 111, 209, .18); }
+      .message-action--secondary { background: #ffffff; color: #2457a6; border: 1px solid #c8d9f0; box-shadow: 0 8px 18px rgba(36, 87, 166, .08); }
+      @media (max-width: 520px) { .message-actions { grid-template-columns: 1fr; } }
       .signature { color: var(--muted); font-size: 12px; }
       .hint { color: var(--muted); font-size: 12px; text-align: left; }
       .selection-summary { padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: #fafcff; color: var(--text); text-align: left; min-height: 44px; }
@@ -1670,6 +1672,7 @@ def _landing_html(user=None) -> str:
             <div class="progress-shell" aria-hidden="true"><div id="progress_bar" class="progress-bar"></div></div>
           </div>
           <div id="message" class="message">Выберите архивы или отдельные файлы, затем загрузите их в хранилище.</div>
+          <div id="message_actions" class="message-actions" aria-label="Действия после загрузки"></div>
         </section>
         <footer>made with ♥ by Roman A. Proskurnin</footer>
       </div>
@@ -1681,6 +1684,7 @@ def _landing_html(user=None) -> str:
       const fileCount = document.getElementById('file_count');
       const progressBar = document.getElementById('progress_bar');
       const message = document.getElementById('message');
+      const messageActions = document.getElementById('message_actions');
       const selectionSummary = document.getElementById('selection_summary');
       const dropzone = document.getElementById('dropzone');
       const allowedSuffixes = ['.log', '.gz', '.zip', '.tar.gz', '.tgz', '.rar'];
@@ -1796,7 +1800,14 @@ def _landing_html(user=None) -> str:
             : '',
           '<a class="message-action message-action--secondary" href="/uploads">Перейти в загрузки</a>',
         ].filter(Boolean).join('');
-        message.innerHTML = `<div>${escapeHtml(uploadMessage(summary, clientRejectedCount))}</div><div class="message-actions">${actions}</div>`;
+        message.textContent = uploadMessage(summary, clientRejectedCount);
+        messageActions.innerHTML = actions;
+        messageActions.dataset.visible = actions ? 'true' : 'false';
+      }
+
+      function clearUploadActions() {
+        messageActions.innerHTML = '';
+        messageActions.dataset.visible = 'false';
       }
 
       async function collectDirectoryHandleFiles(directoryHandle, prefix = '') {
@@ -1851,6 +1862,7 @@ def _landing_html(user=None) -> str:
       dropzone.addEventListener('click', async () => {
         if (!window.showDirectoryPicker) {
           message.textContent = 'Этот браузер не открывает папку по клику. Перетащите папку в область выбора.';
+          clearUploadActions();
           return;
         }
         try {
@@ -1859,6 +1871,7 @@ def _landing_html(user=None) -> str:
         } catch (error) {
           if (!(error instanceof DOMException && error.name === 'AbortError')) {
             message.textContent = error instanceof Error ? error.message : String(error);
+            clearUploadActions();
           }
         }
       });
@@ -1897,6 +1910,7 @@ def _landing_html(user=None) -> str:
         }
         uploadButton.disabled = true;
         message.textContent = 'Идёт загрузка...';
+        clearUploadActions();
         try {
           setProgress(10, 'Подготовка файлов...');
           const formData = new FormData();
@@ -1919,6 +1933,7 @@ def _landing_html(user=None) -> str:
           updateSelectionSummary();
         } catch (error) {
           message.textContent = error instanceof Error ? error.message : String(error);
+          clearUploadActions();
           progressBar.style.width = '0%';
         } finally {
           uploadButton.disabled = false;

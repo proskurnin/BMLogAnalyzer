@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.4 - 2026-05-14
+
+### Changed
+
+- Upload completion actions now render as a separate centered button row below the upload result message.
+- Analyzer version bumped to `1.0.4`.
+
 ## 1.0.3 - 2026-05-14
 
 ### Changed
