@@ -93,7 +93,7 @@ Stable contracts exposed by the core/web layer:
 * stable report sections are declared in the manifest `sections` list
 * validator analytics is exposed in the HTML report and manifest as `validator_analytics`
 
-Archives are extracted into `_workdir/extracted` before analysis. The scanner reads `.log`, `.gz`, `.zip`, `.tar.gz`, `.tgz`, and `.rar` sources. RAR extraction requires `bsdtar`.
+Archives are extracted into `_workdir/extracted` before analysis. The scanner reads `.log`, `.gz`, `.zip`, `.tar.gz`, `.tgz`, and `.rar` sources. RAR extraction requires `bsdtar` (`libarchive-tools` in the Docker image).
 
 ## Report Configuration
 
