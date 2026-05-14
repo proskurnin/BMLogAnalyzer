@@ -97,8 +97,10 @@ For `production`, set required reviewers in GitHub so that prod deploys need an 
 The deploy workflow updates the already provisioned server directories and then runs Docker Compose:
 
 ```bash
-docker compose -f docker-compose.staging.yml up -d --build --force-recreate
-docker compose -f docker-compose.prod.yml up -d --build --force-recreate
+docker compose -f docker-compose.staging.yml build --no-cache --pull app
+docker compose -f docker-compose.staging.yml up -d --force-recreate --remove-orphans
+docker compose -f docker-compose.prod.yml build --no-cache --pull app
+docker compose -f docker-compose.prod.yml up -d --force-recreate --remove-orphans
 ```
 
 ## Docker Compose
@@ -106,13 +108,15 @@ docker compose -f docker-compose.prod.yml up -d --build --force-recreate
 Staging exposes the app on localhost port `8010`:
 
 ```bash
-docker compose -f docker-compose.staging.yml up -d --build
+docker compose -f docker-compose.staging.yml build --no-cache --pull app
+docker compose -f docker-compose.staging.yml up -d --force-recreate --remove-orphans
 ```
 
 Production exposes the app on localhost port `8011`:
 
 ```bash
-docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml build --no-cache --pull app
+docker compose -f docker-compose.prod.yml up -d --force-recreate --remove-orphans
 ```
 
 ## Nginx
