@@ -92,14 +92,33 @@ def _post_json(url: str, payload: dict[str, object], *, api_key: str) -> dict[st
         },
         method="POST",
     )
+    opener = _openai_opener()
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with opener.open(request, timeout=60) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"OpenAI API error {exc.code}: {body}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"OpenAI API network error: {exc.reason}") from exc
+
+
+def _openai_opener() -> urllib.request.OpenerDirector:
+    proxies = _ai_proxies()
+    if not proxies:
+        return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return urllib.request.build_opener(urllib.request.ProxyHandler(proxies))
+
+
+def _ai_proxies() -> dict[str, str]:
+    https_proxy = os.getenv("BM_AI_HTTPS_PROXY", "").strip()
+    http_proxy = os.getenv("BM_AI_HTTP_PROXY", "").strip()
+    proxies: dict[str, str] = {}
+    if https_proxy:
+        proxies["https"] = https_proxy
+    if http_proxy:
+        proxies["http"] = http_proxy
+    return proxies
 
 
 def _extract_output_json(response: dict[str, object]) -> dict[str, object]:
