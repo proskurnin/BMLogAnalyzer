@@ -9,6 +9,7 @@ from pathlib import Path
 
 from analytics.archive_inventory import bm_log_count, explicit_reader_log_count, explicit_system_log_count
 from analytics.bm_statuses import UNCLASSIFIED_STATUS, bm_status_summary_rows, classify_bm_status
+from analytics.ai_context import build_ai_context
 from analytics.suspicious import suspicious_line_payloads
 from core.contracts import REPORT_MANIFEST_SCHEMA_VERSION
 from core.models import AnalysisResult, ArchiveInventoryRow, PaymentEvent, PipelineStats
@@ -38,6 +39,11 @@ def write_html_report(
     manifest_path = report_path.with_suffix(".json")
     manifest_path.write_text(
         json.dumps(render_html_report_manifest(events, result, stats=stats), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    ai_context_path = report_path.with_suffix(".ai_context.json")
+    ai_context_path.write_text(
+        json.dumps(build_ai_context(events, result, stats=stats), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
@@ -109,43 +115,60 @@ def render_html_report(
         reader_groups=_build_metric_groups(archive_inventory, {"Reader logs"}),
         system_groups=_build_metric_groups(archive_inventory, {"System logs"}),
     )
-
-    return "\n".join(
+    show_filters = _has_filter_combinations(
+        bm_version_records,
+        bm_carrier_records,
+        bm_reader_records,
+        bm_date_records,
+    )
+    body_parts = [
+        "<!doctype html>",
+        '<html lang="ru">',
+        "<head>",
+        '<meta charset="utf-8">',
+        '<meta name="viewport" content="width=device-width, initial-scale=1">',
+        "<title>BM Log Analyzer</title>",
+        f"<style>{_css()}</style>",
+        "</head>",
+        "<body>",
+        "<main>",
+        '<header class="header">',
+        "<div>",
+        "<h1>BM Log Analyzer</h1>",
+        f'<span class="version">version {escape(__version__)}</span>',
+        "</div>",
+        "</header>",
+        '<section class="section">',
+        f'<div class="summary-grid">{summary_cards}</div>',
+        "</section>",
+        '<section class="section section--bm-meta">',
+        '<div class="section-title">',
+        "<h2>BM сведения</h2>",
+        "</div>",
+        _bm_meta_grid(bm_meta_cards),
+    ]
+    if show_filters:
+        body_parts.extend(
+            [
+                '<div id="active-filters" class="active-filters"></div>',
+                '<div id="bm-filter-root" class="bm-filter-root"></div>',
+            ]
+        )
+    body_parts.append("</section>")
+    if log_total:
+        body_parts.extend(
+            [
+                '<section class="section section--chart">',
+                '<div class="section-title">',
+                "<h2>Log-файлы</h2>",
+                "<p>Кликабельная сводка по типам логов в архивах.</p>",
+                "</div>",
+                f'<div id="log-files-root">{_bar_chart(log_groups, log_total)}</div>',
+                "</section>",
+            ]
+        )
+    body_parts.extend(
         [
-            "<!doctype html>",
-            '<html lang="ru">',
-            "<head>",
-            '<meta charset="utf-8">',
-            '<meta name="viewport" content="width=device-width, initial-scale=1">',
-            "<title>BM Log Analyzer</title>",
-            f"<style>{_css()}</style>",
-            "</head>",
-            "<body>",
-            "<main>",
-            '<header class="header">',
-            "<div>",
-            "<h1>BM Log Analyzer</h1>",
-            f'<span class="version">version {escape(__version__)}</span>',
-            "</div>",
-            "</header>",
-            '<section class="section">',
-            f'<div class="summary-grid">{summary_cards}</div>',
-            "</section>",
-            '<section class="section section--bm-meta">',
-            '<div class="section-title">',
-            "<h2>BM сведения</h2>",
-            "</div>",
-            _bm_meta_grid(bm_meta_cards),
-            '<div id="active-filters" class="active-filters"></div>',
-            '<div id="bm-filter-root" class="bm-filter-root"></div>',
-            "</section>",
-            '<section class="section section--chart">',
-            '<div class="section-title">',
-            "<h2>Log-файлы</h2>",
-            "<p>Кликабельная сводка по типам логов в архивах.</p>",
-            "</div>",
-            f'<div id="log-files-root">{_bar_chart(log_groups, log_total)}</div>',
-            "</section>",
             _collapsible_other_section(other_groups, other_total),
             f'<script id="report-data" type="application/json">{_json_script(report_data)}</script>',
             _suspicious_section(suspicious_rows),
@@ -158,6 +181,8 @@ def render_html_report(
             "</html>",
         ]
     )
+
+    return "\n".join(part for part in body_parts if part)
 
 
 def render_html_report_manifest(
@@ -177,15 +202,18 @@ def render_html_report_manifest(
     stable_sections = [
         "summary",
         "bm_meta",
-        "log_files",
-        "other_files",
         "suspicious",
         "bm_statuses",
         "grouped_statuses",
         "date_dynamics",
-        "unclassified_diagnostics",
         "validator_analytics",
     ]
+    if log_total:
+        stable_sections.insert(2, "log_files")
+    if other_total:
+        stable_sections.insert(3 if log_total else 2, "other_files")
+    if unclassified_total := sum(int(row.get("count", 0)) for row in _unclassified_diagnostics(events)):
+        stable_sections.insert(-1, "unclassified_diagnostics")
     return {
         "schema_version": REPORT_MANIFEST_SCHEMA_VERSION,
         "report_type": "analysis_report",
@@ -417,6 +445,8 @@ def _summary_cards(
 
 
 def _collapsible_other_section(other_groups: list[dict[str, object]], other_total: int) -> str:
+    if other_total == 0:
+        return ""
     return "\n".join(
         [
             '<details class="collapsible">',
@@ -488,6 +518,10 @@ def _archive_records(input_files: list[str]) -> list[dict[str, object]]:
 
 def _archive_name_set(input_files: list[str]) -> set[str]:
     return {Path(name).name for name in input_files if name}
+
+
+def _has_filter_combinations(*record_groups: list[dict[str, object]]) -> bool:
+    return any(len(group) > 1 for group in record_groups)
 
 
 def _report_data(
@@ -1088,6 +1122,8 @@ def _unclassified_diagnostics(events: list[PaymentEvent]) -> list[dict[str, obje
 
 def _collapsible_unclassified_section(rows: list[dict[str, object]]) -> str:
     summary = sum(int(row["count"]) for row in rows)
+    if summary == 0:
+        return ""
     rendered_rows = "".join(
         f"<tr><td>{escape(str(row['code']))}</td><td>{escape(str(row['message']))}</td><td>{int(row['count'])}</td></tr>"
         for row in rows
@@ -2191,6 +2227,9 @@ def _script() -> str:
     });
     const entries = Object.values(rows).sort((a, b) => b.count - a.count || a.code.localeCompare(b.code) || a.message.localeCompare(b.message));
     const summary = entries.reduce((sum, row) => sum + row.count, 0);
+    if (summary === 0) {
+      return '';
+    }
     const renderedRows = entries.map((row) => `<tr><td>${escapeHtml(row.code)}</td><td>${escapeHtml(row.message)}</td><td>${row.count}</td></tr>`).join('');
     const table = `
       <div class="table-wrap">

@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 from html import escape
+from analytics.ai_analysis import ai_analysis_enabled, run_ai_analysis
 from core.verification import run_healthchecks, run_readiness_check
 from core.version import format_version
 from dataclasses import asdict
@@ -219,6 +220,43 @@ def create_app() -> Any:
         if access_error:
             return access_error
         return _render_report_manifest(run_id)
+
+    @app.get("/api/runs/{run_id}/ai-analysis")
+    def get_ai_analysis(request: Request, run_id: str) -> dict[str, Any]:
+        access_error = _report_access_error(run_id, _request_user(request), json_response=True)
+        if access_error:
+            return access_error
+        report_path = _report_file_for_run(run_id)
+        if report_path is None:
+            return JSONResponse({"detail": "Отчёт не найден"}, status_code=404)
+        result_path = report_path.with_suffix(".ai.json")
+        if result_path.exists():
+            return json.loads(result_path.read_text(encoding="utf-8"))
+        return {
+            "status": "not_started",
+            "enabled": ai_analysis_enabled(),
+            "detail": "AI-анализ ещё не запускался.",
+        }
+
+    @app.post("/api/runs/{run_id}/ai-analysis")
+    def start_ai_analysis(request: Request, run_id: str) -> dict[str, Any]:
+        access_error = _report_access_error(run_id, _request_user(request), json_response=True)
+        if access_error:
+            return access_error
+        report_path = _report_file_for_run(run_id)
+        if report_path is None:
+            return JSONResponse({"detail": "Отчёт не найден"}, status_code=404)
+        context_path = report_path.with_suffix(".ai_context.json")
+        if not context_path.exists():
+            return JSONResponse({"detail": "AI context не найден для этого отчёта"}, status_code=404)
+        context = json.loads(context_path.read_text(encoding="utf-8"))
+        try:
+            result = run_ai_analysis(context)
+        except RuntimeError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        result_path = report_path.with_suffix(".ai.json")
+        result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        return result
 
     @app.get("/api/runs/latest/report", response_class=HTMLResponse)
     def latest_report(request: Request):
@@ -507,13 +545,13 @@ def create_app() -> Any:
 def _render_report(run_id: str, user=None):
     report_path = run_report_path(run_id)
     if report_path.exists():
-        return HTMLResponse(_inject_report_topbar(report_path.read_text(encoding="utf-8"), user))
+        return HTMLResponse(_inject_report_topbar(report_path.read_text(encoding="utf-8"), user, run_id=run_id))
     payload = load_history_run(run_id)
     payload_report_path = payload.get("report_path") or ""
     if payload_report_path:
         file_path = Path(payload_report_path)
         if file_path.exists():
-            return HTMLResponse(_inject_report_topbar(file_path.read_text(encoding="utf-8"), user))
+            return HTMLResponse(_inject_report_topbar(file_path.read_text(encoding="utf-8"), user, run_id=run_id))
     return HTMLResponse("<h1>Отчёт не найден</h1>", status_code=404)
 
 
@@ -529,6 +567,22 @@ def _render_report_manifest(run_id: str):
         if file_path.exists():
             return JSONResponse(json.loads(file_path.read_text(encoding="utf-8")))
     return JSONResponse({"detail": "Отчёт не найден"}, status_code=404)
+
+
+def _report_file_for_run(run_id: str) -> Path | None:
+    report_path = run_report_path(run_id)
+    if report_path.exists():
+        return report_path
+    try:
+        payload = load_history_run(run_id)
+    except FileNotFoundError:
+        return None
+    payload_report_path = payload.get("report_path") or ""
+    if payload_report_path:
+        file_path = Path(payload_report_path)
+        if file_path.exists():
+            return file_path
+    return None
 
 
 def _build_upload_report(item, user) -> dict[str, Any]:
@@ -696,7 +750,7 @@ def _report_access_error(run_id: str, user, *, json_response: bool = False):
     return HTMLResponse("<h1>Доступ запрещён</h1>", status_code=403)
 
 
-def _inject_report_topbar(html: str, user) -> str:
+def _inject_report_topbar(html: str, user, *, run_id: str = "") -> str:
     if user is None or "bm-auth-topbar" in html:
         return html
     topbar = f"""
@@ -705,9 +759,110 @@ def _inject_report_topbar(html: str, user) -> str:
       {_page_topbar(user)}
     </div>
     """
+    ai_panel = _report_ai_panel(run_id) if run_id else ""
+    if ai_panel and "</main>" in html:
+        html = html.replace("</main>", f"{ai_panel}</main>", 1)
     if "<body>" in html:
         return html.replace("<body>", f"<body>{topbar}", 1)
     return topbar + html
+
+
+def _report_ai_panel(run_id: str) -> str:
+    safe_run_id = escape(run_id)
+    endpoint = f"/api/runs/{safe_run_id}/ai-analysis"
+    return f"""
+    <details class="collapsible bm-ai-analysis">
+      <summary>
+        <span>
+          <strong>AI-аналитика</strong>
+          <em>Отдельный слой гипотез на основе фактов отчёта.</em>
+        </span>
+      </summary>
+      <div class="collapsible-body">
+        <div class="bm-ai-actions">
+          <button type="button" class="bm-ai-button" id="bm-ai-run">Запустить AI-анализ</button>
+          <span class="muted" id="bm-ai-status">AI-анализ не запускался.</span>
+        </div>
+        <div id="bm-ai-result" class="bm-ai-result"></div>
+      </div>
+    </details>
+    <style>
+      .bm-ai-actions {{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:12px; }}
+      .bm-ai-button {{ appearance:none; border:0; border-radius:10px; background:var(--blue,#2457a6); color:#fff; padding:10px 14px; font:inherit; font-weight:700; cursor:pointer; }}
+      .bm-ai-button:disabled {{ opacity:.6; cursor:progress; }}
+      .bm-ai-result {{ display:grid; gap:12px; }}
+      .bm-ai-card {{ border:1px solid var(--line,#d9e0e7); border-radius:12px; padding:12px; background:var(--soft,#f6f8fb); }}
+      .bm-ai-card h3 {{ margin:0 0 6px; font-size:15px; }}
+      .bm-ai-card p {{ margin:6px 0; }}
+      .bm-ai-card ul {{ margin:6px 0 0 18px; padding:0; }}
+    </style>
+    <script>
+      (() => {{
+        const endpoint = "{endpoint}";
+        const runButton = document.getElementById("bm-ai-run");
+        const status = document.getElementById("bm-ai-status");
+        const resultRoot = document.getElementById("bm-ai-result");
+        if (!runButton || !status || !resultRoot) return;
+
+        function escapeHtml(value) {{
+          return String(value || "")
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#39;");
+        }}
+
+        function render(payload) {{
+          const analysis = payload.analysis || payload;
+          const hypotheses = Array.isArray(analysis.hypotheses) ? analysis.hypotheses : [];
+          status.textContent = payload.generated_at ? `Готово: ${{payload.generated_at}}` : "AI-анализ готов.";
+          resultRoot.innerHTML = `
+            <div class="bm-ai-card">
+              <h3>Кратко</h3>
+              <p>${{escapeHtml(analysis.summary || "Нет данных.")}}</p>
+            </div>
+            ${{hypotheses.map((item) => `
+              <div class="bm-ai-card">
+                <h3>${{escapeHtml(item.title || "Гипотеза")}}</h3>
+                <p><strong>Гипотеза:</strong> ${{escapeHtml(item.hypothesis || "")}}</p>
+                <p><strong>Уверенность:</strong> ${{escapeHtml(item.confidence || "")}}</p>
+                <p><strong>Evidence:</strong> ${{escapeHtml((item.evidence_refs || []).join(", "))}}</p>
+                ${{Array.isArray(item.what_to_check) && item.what_to_check.length ? `<ul>${{item.what_to_check.map((value) => `<li>${{escapeHtml(value)}}</li>`).join("")}}</ul>` : ""}}
+              </div>
+            `).join("")}}
+          `;
+        }}
+
+        async function loadExisting() {{
+          const response = await fetch(endpoint);
+          const payload = await response.json();
+          if (response.ok && payload.schema_version) {{
+            render(payload);
+          }} else if (payload.enabled === false) {{
+            status.textContent = "AI-анализ выключен в настройках сервера.";
+          }}
+        }}
+
+        runButton.addEventListener("click", async () => {{
+          runButton.disabled = true;
+          status.textContent = "AI-анализ выполняется...";
+          resultRoot.innerHTML = "";
+          try {{
+            const response = await fetch(endpoint, {{ method: "POST" }});
+            const payload = await response.json();
+            if (!response.ok) throw new Error(payload.detail || "Не удалось выполнить AI-анализ.");
+            render(payload);
+          }} catch (error) {{
+            status.textContent = error instanceof Error ? error.message : String(error);
+          }} finally {{
+            runButton.disabled = false;
+          }}
+        }});
+        loadExisting();
+      }})();
+    </script>
+    """
 
 
 def _request_user(request: Any):

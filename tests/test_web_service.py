@@ -329,6 +329,8 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
     assert "BM Log Analyzer" in report_response.text
     assert "Профиль (Administrator)" in report_response.text
     assert "bm-auth-topbar" in report_response.text
+    assert "AI-аналитика" in report_response.text
+    assert f"/api/runs/{run_id}/ai-analysis" in report_response.text
     assert ".bm-auth-topbar { width: 100%; margin: 0 auto; padding: 24px 24px 0; display: grid; justify-items: center; }" in report_response.text
 
     report_manifest = client.get(f"/report/{run_id}/manifest")
@@ -350,18 +352,14 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
         "validator_sections",
         "suspicious_lines",
     ]
-    assert report_manifest.json()["stable_sections"] == [
-        "summary",
-        "bm_meta",
-        "log_files",
-        "other_files",
-        "suspicious",
-        "bm_statuses",
-        "grouped_statuses",
-        "date_dynamics",
-        "unclassified_diagnostics",
-        "validator_analytics",
-    ]
+    stable_sections = report_manifest.json()["stable_sections"]
+    assert "summary" in stable_sections
+    assert "bm_meta" in stable_sections
+    assert "suspicious" in stable_sections
+    assert "bm_statuses" in stable_sections
+    assert "validator_analytics" in stable_sections
+    assert "log_files" not in stable_sections
+    assert "other_files" not in stable_sections
 
     run_detail = client.get(f"/api/runs/{run_id}")
     assert run_detail.status_code == 200
@@ -385,6 +383,15 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
     assert latest_manifest.json()["schema_version"] == "bm-log-analyzer.analysis-report.v1"
     assert latest_manifest.json()["stable_fields"] == report_manifest.json()["stable_fields"]
     assert latest_manifest.json()["stable_sections"] == report_manifest.json()["stable_sections"]
+
+    ai_status = client.get(f"/api/runs/{run_id}/ai-analysis")
+    assert ai_status.status_code == 200
+    assert ai_status.json()["status"] == "not_started"
+    assert ai_status.json()["enabled"] is False
+
+    ai_start = client.post(f"/api/runs/{run_id}/ai-analysis")
+    assert ai_start.status_code == 400
+    assert "AI-анализ выключен" in ai_start.json()["detail"]
 
 
 def test_web_upload_rejects_unsupported_files_before_storage(tmp_path, monkeypatch):

@@ -1,5 +1,6 @@
 from datetime import datetime
 from dataclasses import replace
+import json
 
 from analytics.counters import analyze_events
 from core.models import ArchiveInventoryRow, PipelineStats
@@ -153,3 +154,27 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert '"validator_sections"' in manifest
     assert '"suspicious"' in manifest
     assert '"suspicious_lines"' in manifest
+    ai_context = json.loads((tmp_path / "analysis_report.ai_context.json").read_text(encoding="utf-8"))
+    assert ai_context["schema_version"] == "bm-log-analyzer.ai-context.v1"
+    assert ai_context["summary"]["events"] == 6
+
+
+def test_html_report_hides_empty_sections(tmp_path):
+    stats = PipelineStats(scanned_lines=1, malformed_payment_lines=0, extracted_files=0)
+    event = replace(
+        make_event(0, 100, "4.4.12", message="OK", payment_type=2, auth_type=0),
+        raw_line="PaymentStart, resp: {Code:0 Message:OK} error: no error",
+    )
+    result = analyze_events([event])
+
+    write_html_report([event], result, tmp_path / "analysis_report.html", stats=stats)
+
+    html = (tmp_path / "analysis_report.html").read_text(encoding="utf-8")
+    manifest = json.loads((tmp_path / "analysis_report.json").read_text(encoding="utf-8"))
+    assert "Log-файлы" not in html
+    assert "<strong>Прочие файлы</strong>" not in html
+    assert 'id="bm-unclassified-root"><details' not in html
+    assert 'id="bm-filter-root"' not in html
+    assert "log_files" not in manifest["stable_sections"]
+    assert "other_files" not in manifest["stable_sections"]
+    assert "unclassified_diagnostics" not in manifest["stable_sections"]
