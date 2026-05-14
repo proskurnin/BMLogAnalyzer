@@ -106,7 +106,7 @@ def test_login_page_contains_version_and_signature(tmp_path, monkeypatch):
     response = client.get("/login")
 
     assert response.status_code == 200
-    assert "версия сервиса 1.0.5" in response.text
+    assert "версия сервиса 1.0.6" in response.text
     assert 'class="brand"' in response.text
     assert "made with ♥ by Roman A. Proskurnin" in response.text
 
@@ -190,6 +190,9 @@ def test_admin_user_management_and_profile_files(tmp_path, monkeypatch):
     assert "Пользователи" in admin_page.text
     assert 'name="archive_retention_days"' in admin_page.text
     assert 'value="10"' in admin_page.text
+    assert "Каталог проверок" in admin_page.text
+    assert "repeat_after_failure_3s" in admin_page.text
+    assert "Следующий этап - включение, выключение и настройка правил без изменения кода." in admin_page.text
     _create_user(client, name="Operator", email="operator@example.com", password="secret", role="user")
 
     client.get("/logout")
@@ -216,7 +219,7 @@ def test_web_index_contains_upload_landing():
     html = _index_html()
 
     assert "BM Log Analyzer" in html
-    assert "версия сервиса 1.0.5" in html
+    assert "версия сервиса 1.0.6" in html
     assert "picker_menu" not in html
     assert "Выбрать файлы</button>" not in html
     assert "Выбрать папку</button>" not in html
@@ -348,6 +351,10 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
     assert "formatMoscowDateTime(payload.generated_at)" in report_response.text
     assert 'timeZone: "Europe/Moscow"' in report_response.text
     assert "(Мск)" in report_response.text
+    assert "Повторить AI-анализ" in report_response.text
+    assert "Обновить статус" in report_response.text
+    assert "Что проверить" in report_response.text
+    assert "Ограничения" in report_response.text
     assert ".bm-auth-topbar { width: 100%; margin: 0 auto; padding: 24px 24px 0; display: grid; justify-items: center; }" in report_response.text
 
     report_manifest = client.get(f"/report/{run_id}/manifest")

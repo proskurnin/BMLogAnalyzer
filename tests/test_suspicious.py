@@ -38,3 +38,20 @@ def test_suspicious_lines_flag_non_success_unknown_and_repeats():
     assert "технический отказ Code:3" in reasons[1]
     assert "через 2 сек." in reasons[1]
     assert "отсутствует в известной таблице" in reasons[11]
+
+
+def test_suspicious_lines_flag_same_error_burst_in_source_log():
+    events = [
+        _event(3, 0, 410, "Ошибка чтения карты"),
+        _event(3, 20, 430, "Ошибка чтения карты"),
+        _event(3, 40, 450, "Ошибка чтения карты"),
+        _event(3, 120, 450, "Ошибка чтения карты"),
+    ]
+
+    rows = suspicious_line_payloads(events)
+    reasons = {int(row["line_number"]): str(row["reason"]) for row in rows}
+
+    assert "Всплеск одинаковых non-success событий: 3 строк" in reasons[1]
+    assert "Message:Ошибка чтения карты" in reasons[21]
+    assert "Всплеск одинаковых non-success событий" in reasons[41]
+    assert "Всплеск одинаковых non-success событий" not in reasons[121]

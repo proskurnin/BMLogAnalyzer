@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.6 - 2026-05-15
+
+### Changed
+
+- Suspicious analysis now detects bursts of identical non-success events in one source log.
+- AI analytics panel now supports status refresh, repeat runs, and renders `what_to_check` and limitations.
+- Admin page now shows the current built-in validation check catalog.
+- Analyzer version bumped to `1.0.6`.
+
 ## 1.0.5 - 2026-05-14
 
 ### Changed

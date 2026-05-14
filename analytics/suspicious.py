@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 
 from analytics.bm_statuses import UNCLASSIFIED_STATUS, classify_bm_status
 from analytics.classifiers import classify_code
 from analytics.durations import percentile
 from analytics.repeats import repeat_attempt_rows
 from core.models import PaymentEvent
+
+BURST_WINDOW_SECONDS = 60
+BURST_MIN_EVENTS = 3
 
 
 @dataclass(frozen=True)
@@ -23,6 +27,7 @@ class SuspiciousLine:
 def suspicious_lines(events: list[PaymentEvent]) -> list[SuspiciousLine]:
     baseline = _normal_baseline(events)
     repeat_reasons = _repeat_reasons(events)
+    burst_reasons = _burst_reasons(events)
     rows: list[SuspiciousLine] = []
 
     for event in events:
@@ -30,6 +35,9 @@ def suspicious_lines(events: list[PaymentEvent]) -> list[SuspiciousLine]:
         repeat_reason = repeat_reasons.get((event.source_file, event.line_number))
         if repeat_reason:
             reasons.append(repeat_reason)
+        burst_reason = burst_reasons.get((event.source_file, event.line_number))
+        if burst_reason:
+            reasons.append(burst_reason)
         if not reasons:
             continue
         rows.append(
@@ -103,4 +111,39 @@ def _repeat_reasons(events: list[PaymentEvent]) -> dict[tuple[str, int], str]:
             "После неуспешного события найден следующий PaymentStart resp "
             f"через {row['repeat_delay_seconds']} сек. в той же source log."
         )
+    return reasons
+
+
+def _burst_reasons(events: list[PaymentEvent]) -> dict[tuple[str, int], str]:
+    grouped: dict[tuple[str, int | None, str], list[PaymentEvent]] = {}
+    for event in events:
+        if event.timestamp is None or classify_code(event.code) == "success":
+            continue
+        key = (event.source_file, event.code, event.message or "")
+        grouped.setdefault(key, []).append(event)
+
+    reasons: dict[tuple[str, int], str] = {}
+    for (_source_file, code, message), group_events in grouped.items():
+        ordered = sorted(group_events, key=lambda item: (item.timestamp, item.line_number))
+        for index, event in enumerate(ordered):
+            if event.timestamp is None:
+                continue
+            window_end = event.timestamp + timedelta(seconds=BURST_WINDOW_SECONDS)
+            window_events = [
+                candidate
+                for candidate in ordered[index:]
+                if candidate.timestamp is not None and candidate.timestamp <= window_end
+            ]
+            if len(window_events) < BURST_MIN_EVENTS:
+                continue
+            reason = (
+                f"Всплеск одинаковых non-success событий: {len(window_events)} строк "
+                f"с Code:{code if code is not None else 'missing'}"
+            )
+            if message:
+                reason += f" и Message:{message}"
+            reason += f" в одном source log за {BURST_WINDOW_SECONDS} сек."
+            for candidate in window_events:
+                reasons[(candidate.source_file, candidate.line_number)] = reason
+
     return reasons

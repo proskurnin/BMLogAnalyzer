@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 from html import escape
 from analytics.ai_analysis import ai_analysis_enabled, run_ai_analysis
+from analytics.check_cases import BUILTIN_CHECKS
 from core.verification import run_healthchecks, run_readiness_check
 from core.version import format_version
 from dataclasses import asdict
@@ -827,6 +828,7 @@ def _report_ai_panel(run_id: str) -> str:
       <div class="collapsible-body">
         <div class="bm-ai-actions">
           <button type="button" class="bm-ai-button" id="bm-ai-run">Запустить AI-анализ</button>
+          <button type="button" class="bm-ai-button bm-ai-button--secondary" id="bm-ai-refresh">Обновить статус</button>
           <span class="muted" id="bm-ai-status">AI-анализ не запускался.</span>
         </div>
         <div id="bm-ai-result" class="bm-ai-result"></div>
@@ -835,6 +837,7 @@ def _report_ai_panel(run_id: str) -> str:
     <style>
       .bm-ai-actions {{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:12px; }}
       .bm-ai-button {{ appearance:none; border:0; border-radius:10px; background:var(--blue,#2457a6); color:#fff; padding:10px 14px; font:inherit; font-weight:700; cursor:pointer; }}
+      .bm-ai-button--secondary {{ background:var(--soft,#f6f8fb); color:var(--blue,#2457a6); border:1px solid var(--line,#d9e0e7); }}
       .bm-ai-button:disabled {{ opacity:.6; cursor:progress; }}
       .bm-ai-result {{ display:grid; gap:12px; }}
       .bm-ai-card {{ border:1px solid var(--line,#d9e0e7); border-radius:12px; padding:12px; background:var(--soft,#f6f8fb); }}
@@ -846,9 +849,10 @@ def _report_ai_panel(run_id: str) -> str:
       (() => {{
         const endpoint = "{endpoint}";
         const runButton = document.getElementById("bm-ai-run");
+        const refreshButton = document.getElementById("bm-ai-refresh");
         const status = document.getElementById("bm-ai-status");
         const resultRoot = document.getElementById("bm-ai-result");
-        if (!runButton || !status || !resultRoot) return;
+        if (!runButton || !refreshButton || !status || !resultRoot) return;
 
         function escapeHtml(value) {{
           return String(value || "")
@@ -879,7 +883,10 @@ def _report_ai_panel(run_id: str) -> str:
         function render(payload) {{
           const analysis = payload.analysis || payload;
           const hypotheses = Array.isArray(analysis.hypotheses) ? analysis.hypotheses : [];
+          const whatToCheck = Array.isArray(analysis.what_to_check) ? analysis.what_to_check : [];
+          const limitations = Array.isArray(analysis.limitations) ? analysis.limitations : [];
           status.textContent = payload.generated_at ? `Готово: ${{formatMoscowDateTime(payload.generated_at)}}` : "AI-анализ готов.";
+          runButton.textContent = "Повторить AI-анализ";
           resultRoot.innerHTML = `
             <div class="bm-ai-card">
               <h3>Кратко</h3>
@@ -894,16 +901,31 @@ def _report_ai_panel(run_id: str) -> str:
                 ${{Array.isArray(item.what_to_check) && item.what_to_check.length ? `<ul>${{item.what_to_check.map((value) => `<li>${{escapeHtml(value)}}</li>`).join("")}}</ul>` : ""}}
               </div>
             `).join("")}}
+            ${{whatToCheck.length ? `
+              <div class="bm-ai-card">
+                <h3>Что проверить</h3>
+                <ul>${{whatToCheck.map((value) => `<li>${{escapeHtml(value)}}</li>`).join("")}}</ul>
+              </div>
+            ` : ""}}
+            ${{limitations.length ? `
+              <div class="bm-ai-card">
+                <h3>Ограничения</h3>
+                <ul>${{limitations.map((value) => `<li>${{escapeHtml(value)}}</li>`).join("")}}</ul>
+              </div>
+            ` : ""}}
           `;
         }}
 
         async function loadExisting() {{
+          status.textContent = "Проверяем сохранённый AI-анализ...";
           const response = await fetch(endpoint);
           const payload = await response.json();
           if (response.ok && payload.schema_version) {{
             render(payload);
           }} else if (payload.enabled === false) {{
             status.textContent = "AI-анализ выключен в настройках сервера.";
+          }} else {{
+            status.textContent = "AI-анализ ещё не запускался.";
           }}
         }}
 
@@ -921,6 +943,11 @@ def _report_ai_panel(run_id: str) -> str:
           }} finally {{
             runButton.disabled = false;
           }}
+        }});
+        refreshButton.addEventListener("click", () => {{
+          loadExisting().catch((error) => {{
+            status.textContent = error instanceof Error ? error.message : String(error);
+          }});
         }});
         loadExisting();
       }})();
@@ -1095,6 +1122,19 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
             </tr>
             """
         )
+    check_rows = []
+    for check in BUILTIN_CHECKS:
+        check_rows.append(
+            f"""
+            <tr>
+              <td><code>{escape(check.check_id)}</code></td>
+              <td><strong>{escape(check.title)}</strong><br><span class="muted">{escape(check.description)}</span></td>
+              <td>{escape(check.severity)}</td>
+              <td>{"включена" if check.enabled else "выключена"}</td>
+              <td>{escape(check.version)}</td>
+            </tr>
+            """
+        )
     error_html = f'<div class="error">{escape(error)}</div>' if error else ""
     return f"""
 <!doctype html>
@@ -1130,6 +1170,14 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
           <button type="submit">Сохранить</button>
         </form>
         <div class="muted">Через заданное число дней удаляются архивы и распаковки. Табличные данные сохраняются, ссылка на скачивание исчезает.</div>
+        <h2>Каталог проверок</h2>
+        <div class="muted">Текущие built-in правила анализа. Следующий этап - включение, выключение и настройка правил без изменения кода.</div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>ID</th><th>Проверка</th><th>Severity</th><th>Статус</th><th>Версия</th></tr></thead>
+            <tbody>{"".join(check_rows)}</tbody>
+          </table>
+        </div>
         <div class="table-wrap">
           <table>
             <thead><tr><th>Имя</th><th>Email</th><th>Пароль</th><th>Роль</th><th>Действия</th></tr></thead>
