@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.0 - 2026-05-14
+
+### Added
+
+- AI analysis scaffold for report-level hypotheses based on factual report context.
+- Dedicated AI proxy settings via `BM_AI_HTTPS_PROXY` and `BM_AI_HTTP_PROXY`.
+- Upload report rebuild action from the uploads table.
+- Suspicious findings section in HTML reports.
+- Archive retention policy settings in the admin area.
+
+### Changed
+
+- Empty report sections are hidden when there is no data to show.
+- Analyzer version bumped to `1.0.0`.
+
 ## 0.34.0 - 2026-05-12
 
 ### Added
