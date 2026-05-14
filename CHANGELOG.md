@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.1 - 2026-05-14
+
+### Changed
+
+- Upload history now labels upload time as Moscow time and formats it as `ДД.ММ.ГГГГ (ЧЧ:ММ:СС)`.
+- Analyzer version bumped to `1.0.1`.
+
 ## 1.0.0 - 2026-05-14
 
 ### Added

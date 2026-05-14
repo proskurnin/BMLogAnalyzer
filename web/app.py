@@ -1911,7 +1911,7 @@ def _uploads_html(user=None) -> str:
             <thead>
               <tr>
                 <th style="width:44px;"></th>
-                <th>Дата загрузки</th>
+                <th>Дата загрузки (Мск)</th>
                 <th>Пользователь</th>
                 <th>Имя загруженного файла</th>
                 <th>Отчёт</th>
@@ -1957,7 +1957,7 @@ def _uploads_html(user=None) -> str:
         return `
           <tr>
             <td><input class="row-checkbox" type="checkbox" data-upload-id="${item.upload_id}" ${isSelected ? 'checked' : ''}></td>
-            <td>${item.created_at}</td>
+            <td>${formatMoscowDateTime(item.created_at)}</td>
             <td>${item.owner_name || item.owner_email || 'Не указан'}</td>
             <td>${fileHtml}</td>
             <td data-report-cell="${item.upload_id}">${reportHtml}</td>
@@ -1988,6 +1988,27 @@ def _uploads_html(user=None) -> str:
           button.addEventListener('click', () => rebuildUploadReport(button.dataset.rebuildUploadId, button));
         });
         renderSelectedCount();
+      }
+
+      function formatMoscowDateTime(value) {
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) {
+          return value || '';
+        }
+        const parts = new Intl.DateTimeFormat('ru-RU', {
+          timeZone: 'Europe/Moscow',
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false,
+        }).formatToParts(date).reduce((acc, part) => {
+          acc[part.type] = part.value;
+          return acc;
+        }, {});
+        return `${parts.day}.${parts.month}.${parts.year} (${parts.hour}:${parts.minute}:${parts.second})`;
       }
 
       async function rebuildUploadReport(uploadId, button) {

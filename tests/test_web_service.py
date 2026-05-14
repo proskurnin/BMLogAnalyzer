@@ -106,7 +106,7 @@ def test_login_page_contains_version_and_signature(tmp_path, monkeypatch):
     response = client.get("/login")
 
     assert response.status_code == 200
-    assert "версия сервиса 1.0.0" in response.text
+    assert "версия сервиса 1.0.1" in response.text
     assert 'class="brand"' in response.text
     assert "made with ♥ by Roman A. Proskurnin" in response.text
 
@@ -216,7 +216,7 @@ def test_web_index_contains_upload_landing():
     html = _index_html()
 
     assert "BM Log Analyzer" in html
-    assert "версия сервиса 1.0.0" in html
+    assert "версия сервиса 1.0.1" in html
     assert "picker_menu" not in html
     assert "Выбрать файлы</button>" not in html
     assert "Выбрать папку</button>" not in html
@@ -244,6 +244,9 @@ def test_uploads_page_contains_table_and_actions():
     html = response.text
     assert "Загрузки" in html
     assert "Сформировать отчёт по выбранным" in html
+    assert "Дата загрузки (Мск)" in html
+    assert "formatMoscowDateTime(item.created_at)" in html
+    assert "timeZone: 'Europe/Moscow'" in html
     assert "Пользователь" in html
     assert "window.location.href = data.report_url" in html
     assert "Выбрано 0" in html
