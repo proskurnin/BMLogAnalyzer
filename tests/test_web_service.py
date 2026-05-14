@@ -188,6 +188,8 @@ def test_admin_user_management_and_profile_files(tmp_path, monkeypatch):
     admin_page = client.get("/admin")
     assert admin_page.status_code == 200
     assert "Пользователи" in admin_page.text
+    assert 'name="archive_retention_days"' in admin_page.text
+    assert 'value="10"' in admin_page.text
     _create_user(client, name="Operator", email="operator@example.com", password="secret", role="user")
 
     client.get("/logout")
@@ -247,7 +249,7 @@ def test_uploads_page_contains_table_and_actions():
     assert "Выбрано 0" in html
     assert "uploads_body" in html
     assert "/api/uploads" in html
-    assert "/uploads/download/" in html
+    assert "item.download_url" in html
     assert "Отчёт для каждой загрузки формируется сразу после приёма файла" in html
 
 

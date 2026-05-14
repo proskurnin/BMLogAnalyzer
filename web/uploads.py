@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import datetime, timezone
+from dataclasses import replace
+from datetime import datetime, timezone, timedelta
 import json
 import secrets
 import shutil
@@ -106,7 +107,7 @@ def list_uploads(
         payload.setdefault("status_message", "")
         payload.setdefault("owner_email", "")
         payload.setdefault("owner_name", "")
-        item = UploadItemModel(**payload)
+        item = _apply_upload_storage_state(UploadItemModel(**payload))
         if owner_email is None or item.owner_email == owner_email:
             items.append(item)
     items.sort(key=lambda item: item.created_at, reverse=True)
@@ -125,7 +126,7 @@ def load_upload(upload_id: str, storage_dir: Path | None = None) -> UploadItemMo
     payload.setdefault("status_message", "")
     payload.setdefault("owner_email", "")
     payload.setdefault("owner_name", "")
-    return UploadItemModel(**payload)
+    return _apply_upload_storage_state(UploadItemModel(**payload))
 
 
 def update_upload_status(
@@ -192,6 +193,32 @@ def collect_upload_files(upload_ids: list[str], storage_dir: Path | None = None)
     return files
 
 
+def cleanup_expired_upload_storage(*, retention_days: int) -> dict[str, int]:
+    root = _upload_root()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, retention_days))
+    expired_uploads = 0
+    expired_workspaces = 0
+
+    for path in sorted((root / "items").glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        created_at = _parse_datetime(payload.get("created_at"))
+        if created_at is None or created_at > cutoff:
+            continue
+        expired_uploads += int(_expire_upload_payload(path, payload))
+
+    for workspace in sorted(root.glob("bm-log-analyzer-upload-*")):
+        if not workspace.is_dir():
+            continue
+        if _path_mtime(workspace) <= cutoff:
+            shutil.rmtree(workspace, ignore_errors=True)
+            expired_workspaces += 1
+
+    return {"expired_uploads": expired_uploads, "expired_upload_workspaces": expired_workspaces}
+
+
 def summary_from_uploads(uploaded: list[UploadItemModel], rejected_count: int = 0) -> dict[str, Any]:
     total_size = sum(item.size_bytes for item in uploaded)
     uploaded_count = len(uploaded)
@@ -233,3 +260,39 @@ def _file_word(count: int) -> str:
 def _not_uploaded_phrase(count: int) -> str:
     verb = "не загружен" if count % 10 == 1 and count % 100 != 11 else "не загружены"
     return f"{count} {_file_word(count)} {verb}"
+
+
+def _apply_upload_storage_state(item: UploadItemModel) -> UploadItemModel:
+    stored_path = Path(item.stored_path)
+    if stored_path.exists():
+        return item
+    if item.download_url or item.status != "expired":
+        return replace(item, status="expired", status_message=item.status_message or "Срок хранения истёк", download_url="")
+    return item
+
+
+def _expire_upload_payload(path: Path, payload: dict[str, Any]) -> bool:
+    stored_path = Path(payload.get("stored_path") or "")
+    if stored_path.exists():
+        shutil.rmtree(stored_path.parent, ignore_errors=True)
+    payload["status"] = "expired"
+    payload["status_message"] = "Срок хранения истёк"
+    payload["download_url"] = ""
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return True
+
+
+def _parse_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _path_mtime(path: Path) -> datetime:
+    return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)

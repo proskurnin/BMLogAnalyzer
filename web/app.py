@@ -25,6 +25,7 @@ from web.auth import (
 from web.history import delete_history_run, latest_history, list_history, load_history_run, new_run_id, record_history, run_directory, run_report_path
 from web.service import AnalysisRequest, analyze_request, execute_uploaded_analysis, build_summary_snapshot
 from web.settings import load_settings, require_production_bootstrap_settings
+from web.retention import cleanup_expired_storage, load_storage_policy, update_storage_policy
 from web.uploads import (
     collect_upload_files,
     delete_upload,
@@ -61,11 +62,13 @@ def create_app() -> Any:
     require_production_bootstrap_settings(settings)
     ensure_default_admin()
     cleanup_expired_sessions()
+    cleanup_expired_storage()
     app = FastAPI(title="BM Log Analyzer", version=format_version())
 
     @app.middleware("http")
     async def require_auth(request: Request, call_next):
         ensure_default_admin()
+        cleanup_expired_storage()
         path = request.url.path
         if path in {"/login", "/health"}:
             return await call_next(request)
@@ -152,6 +155,15 @@ def create_app() -> Any:
     def admin_delete_user(email: str = Form(...)):
         try:
             delete_user(email)
+        except ValueError as exc:
+            return HTMLResponse(_admin_html(None, str(exc)), status_code=400)
+        return RedirectResponse("/admin", status_code=303)
+
+    @app.post("/admin/settings")
+    def admin_update_settings(archive_retention_days: int = Form(...)):
+        try:
+            update_storage_policy(archive_retention_days=archive_retention_days)
+            cleanup_expired_storage()
         except ValueError as exc:
             return HTMLResponse(_admin_html(None, str(exc)), status_code=400)
         return RedirectResponse("/admin", status_code=303)
@@ -727,8 +739,9 @@ def _login_html(error: str = "") -> str:
 """.strip()
 
 
-def _admin_html(user=None, error: str = "") -> str:
+def _admin_html(user=None, error: str = "", policy=None) -> str:
     effective_user = user or get_user("admin@example.com")
+    policy = policy or load_storage_policy()
     rows = []
     for item in list_users():
         role_options = "".join(
@@ -784,6 +797,14 @@ def _admin_html(user=None, error: str = "") -> str:
           </select>
           <button type="submit">Добавить</button>
         </form>
+        <h2>Хранение архивов</h2>
+        <form method="post" action="/admin/settings" class="create-form">
+          <label>Срок хранения, дни
+            <input name="archive_retention_days" type="number" min="1" step="1" value="{policy.archive_retention_days}" required>
+          </label>
+          <button type="submit">Сохранить</button>
+        </form>
+        <div class="muted">Через заданное число дней удаляются архивы и распаковки. Табличные данные сохраняются, ссылка на скачивание исчезает.</div>
         <div class="table-wrap">
           <table>
             <thead><tr><th>Имя</th><th>Email</th><th>Пароль</th><th>Роль</th><th>Действия</th></tr></thead>
@@ -801,12 +822,17 @@ def _profile_html(user) -> str:
     uploads = list_uploads(owner_email=user.email)
     rows = []
     for item in uploads:
+        download_cell = (
+            f'<a href="{escape(item.download_url)}">Скачать</a>'
+            if item.download_url
+            else '<span class="muted">Срок хранения истёк</span>'
+        )
         rows.append(
             f"""
             <tr>
               <td>{escape(item.created_at)}</td>
               <td>{escape(item.original_name)}</td>
-              <td><a href="{escape(item.download_url or f'/uploads/download/{item.upload_id}')}">Скачать</a></td>
+              <td>{download_cell}</td>
               <td>
                 <form method="post" action="/profile/uploads/{escape(item.upload_id)}/delete">
                   <button type="submit" class="danger">Удалить</button>
@@ -866,6 +892,7 @@ def _shared_page_css() -> str:
       h1 { margin:0 0 16px; font-size:24px; }
       h2 { margin:16px 0 10px; font-size:18px; }
       .create-form, .row-form, .forms-grid { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+      .create-form label { display:grid; gap:6px; align-items:start; }
       .create-form { margin-bottom:16px; }
       input, select { border:1px solid var(--line); border-radius:10px; padding:10px 12px; font:inherit; color:var(--text); background:#fff; }
       button { border:0; border-radius:10px; padding:10px 14px; background:var(--blue); color:#fff; font:inherit; font-weight:700; cursor:pointer; }
@@ -1655,13 +1682,15 @@ def _uploads_html(user=None) -> str:
             : status === 'error'
               ? `<span class="report-empty">${item.status_message || 'Ошибка формирования отчёта'}</span>`
               : `<span class="report-empty">${item.status_message || 'Ожидает обработки'}</span>`;
-        const fileUrl = item.download_url || `/uploads/download/${item.upload_id}`;
+        const fileHtml = item.download_url
+          ? `<a class="file-link" href="${item.download_url}" target="_blank" rel="noreferrer">${item.original_name}</a>`
+          : `<span class="report-empty">${item.original_name} · ${item.status_message || 'Срок хранения истёк'}</span>`;
         return `
           <tr>
             <td><input class="row-checkbox" type="checkbox" data-upload-id="${item.upload_id}"></td>
             <td>${item.created_at}</td>
             <td>${item.owner_name || item.owner_email || 'Не указан'}</td>
-            <td><a class="file-link" href="${fileUrl}" target="_blank" rel="noreferrer">${item.original_name}</a></td>
+            <td>${fileHtml}</td>
             <td>${reportHtml}</td>
           </tr>`;
       }

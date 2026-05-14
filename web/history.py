@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import json
 import secrets
 import shutil
@@ -225,3 +225,41 @@ def delete_history_run(run_id: str, storage_dir: Path | None = None) -> bool:
         filtered = [line for line in lines if json.loads(line).get("run_id") != run_id]
         index.write_text("\n".join(filtered) + ("\n" if filtered else ""), encoding="utf-8")
     return True
+
+
+def cleanup_expired_history_artifacts(*, retention_days: int) -> dict[str, int]:
+    root = _history_root()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, retention_days))
+    removed_runs = 0
+    removed_workspaces = 0
+
+    for path in sorted((root / "runs").glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        created_at = _parse_datetime(payload.get("created_at"))
+        if created_at is None or created_at > cutoff:
+            continue
+        run_id = payload.get("run_id") or path.stem
+        run_dir = root / "runs" / run_id
+        for child_name in ("input", "extracted"):
+            child = run_dir / child_name
+            if child.exists():
+                shutil.rmtree(child, ignore_errors=True)
+                removed_workspaces += 1
+        removed_runs += 1
+
+    return {"expired_history_runs": removed_runs, "expired_history_workspaces": removed_workspaces}
+
+
+def _parse_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)

@@ -84,6 +84,7 @@ The HTML report also includes a collapsed validator analytics section grouped by
 The root page `/` is upload-only. It does not expose analytics, reports, or history.
 The admin upload registry is available at `/uploads`. It lists uploaded files, lets an admin download each file locally, shows the current report state, and can generate a report for multiple selected uploads.
 Upload storage is kept in `_workdir/upload_store`.
+The retention period for uploaded archives and extracted workspaces is configurable in the admin panel and defaults to 10 days. When it expires, the file data is removed from disk, but the registry records remain.
 Role-based access control is planned separately: the product flow already separates upload and admin views, but authentication is not implemented yet.
 
 Stable contracts exposed by the core/web layer:
