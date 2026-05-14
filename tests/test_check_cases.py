@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from analytics.check_cases import run_builtin_checks
+from analytics.check_cases import load_check_cases, reset_check_cases, run_builtin_checks, update_check_case
 from tests.test_counters import make_event
 from tests.test_repeats import _with_event_position
 
@@ -33,3 +33,28 @@ def test_builtin_checks_flag_repeat_after_failure():
     assert "repeat_delay_seconds=2" in repeat_results[0].evidence
     assert repeat_results[0].source_file == "a.log"
     assert repeat_results[0].line_number == 10
+
+
+def test_check_case_catalog_can_disable_rule(tmp_path):
+    path = tmp_path / "check_cases.json"
+    update_check_case(
+        "technical_error_code_3",
+        title="Code 3 custom",
+        description="disabled for test",
+        severity="critical",
+        enabled=False,
+        storage_path=path,
+    )
+    checks = load_check_cases(path)
+    disabled = next(check for check in checks if check.check_id == "technical_error_code_3")
+    assert disabled.title == "Code 3 custom"
+    assert disabled.severity == "critical"
+    assert disabled.enabled is False
+    assert disabled.version == "2"
+
+    event = _with_event_position(make_event(3, message="Ошибка чтения карты"), "a.log", 10, datetime(2026, 4, 29, 10, 0, 0))
+    results = run_builtin_checks([event], checks=checks)
+    assert "technical_error_code_3" not in {result.check_id for result in results}
+
+    reset_check_cases(path)
+    assert not path.exists()

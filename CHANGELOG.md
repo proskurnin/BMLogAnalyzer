@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.0 - 2026-05-15
+
+### Added
+
+- Admin-managed validation check catalog stored in `BM_DATA_DIR/web_settings/check_cases.json`.
+- Admin forms to edit validation check title, description, severity and enabled state.
+- Admin action to reset validation checks back to built-in defaults.
+
+### Changed
+
+- Built-in validation checks now read the active catalog, so disabled checks no longer produce CSV or AI-context results.
+- Analyzer version bumped to `1.1.0`.
+
 ## 1.0.6 - 2026-05-15
 
 ### Changed

@@ -106,7 +106,7 @@ def test_login_page_contains_version_and_signature(tmp_path, monkeypatch):
     response = client.get("/login")
 
     assert response.status_code == 200
-    assert "версия сервиса 1.0.6" in response.text
+    assert "версия сервиса 1.1.0" in response.text
     assert 'class="brand"' in response.text
     assert "made with ♥ by Roman A. Proskurnin" in response.text
 
@@ -182,6 +182,7 @@ def test_admin_user_management_and_profile_files(tmp_path, monkeypatch):
     monkeypatch.setattr("web.history._history_root", _mock_history_root(history_root))
     monkeypatch.setattr("web.uploads._upload_root", _mock_upload_root(upload_root))
     monkeypatch.setattr("web.auth._auth_root", _mock_auth_root(auth_root))
+    monkeypatch.setenv("BM_DATA_DIR", str(tmp_path / "data"))
 
     client = TestClient(create_app())
     _login(client)
@@ -192,7 +193,24 @@ def test_admin_user_management_and_profile_files(tmp_path, monkeypatch):
     assert 'value="10"' in admin_page.text
     assert "Каталог проверок" in admin_page.text
     assert "repeat_after_failure_3s" in admin_page.text
-    assert "Следующий этап - включение, выключение и настройка правил без изменения кода." in admin_page.text
+    assert "Правила применяются при формировании" in admin_page.text
+    update_check = client.post(
+        "/admin/check-cases/update",
+        data={
+            "check_id": "technical_error_code_3",
+            "title": "Ошибка чтения карты custom",
+            "description": "custom description",
+            "severity": "critical",
+        },
+        follow_redirects=False,
+    )
+    assert update_check.status_code == 303
+    updated_admin_page = client.get("/admin")
+    assert "Ошибка чтения карты custom" in updated_admin_page.text
+    assert "custom description" in updated_admin_page.text
+    assert "critical" in updated_admin_page.text
+    reset_checks = client.post("/admin/check-cases/reset", follow_redirects=False)
+    assert reset_checks.status_code == 303
     _create_user(client, name="Operator", email="operator@example.com", password="secret", role="user")
 
     client.get("/logout")
@@ -219,7 +237,7 @@ def test_web_index_contains_upload_landing():
     html = _index_html()
 
     assert "BM Log Analyzer" in html
-    assert "версия сервиса 1.0.6" in html
+    assert "версия сервиса 1.1.0" in html
     assert "picker_menu" not in html
     assert "Выбрать файлы</button>" not in html
     assert "Выбрать папку</button>" not in html

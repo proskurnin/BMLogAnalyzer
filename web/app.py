@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 from html import escape
 from analytics.ai_analysis import ai_analysis_enabled, run_ai_analysis
-from analytics.check_cases import BUILTIN_CHECKS
+from analytics.check_cases import list_check_cases, reset_check_cases, update_check_case
 from core.verification import run_healthchecks, run_readiness_check
 from core.version import format_version
 from dataclasses import asdict
@@ -169,6 +169,31 @@ def create_app() -> Any:
             cleanup_expired_storage()
         except ValueError as exc:
             return HTMLResponse(_admin_html(None, str(exc)), status_code=400)
+        return RedirectResponse("/admin", status_code=303)
+
+    @app.post("/admin/check-cases/update")
+    def admin_update_check_case(
+        check_id: str = Form(...),
+        title: str = Form(...),
+        description: str = Form(...),
+        severity: str = Form(...),
+        enabled: str | None = Form(None),
+    ):
+        try:
+            update_check_case(
+                check_id,
+                title=title,
+                description=description,
+                severity=severity,
+                enabled=enabled == "on",
+            )
+        except ValueError as exc:
+            return HTMLResponse(_admin_html(None, str(exc)), status_code=400)
+        return RedirectResponse("/admin", status_code=303)
+
+    @app.post("/admin/check-cases/reset")
+    def admin_reset_check_cases():
+        reset_check_cases()
         return RedirectResponse("/admin", status_code=303)
 
     @app.get("/profile", response_class=HTMLResponse)
@@ -1123,15 +1148,26 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
             """
         )
     check_rows = []
-    for check in BUILTIN_CHECKS:
+    for check in list_check_cases():
+        severity_options = "".join(
+            f'<option value="{severity}" {"selected" if check.severity == severity else ""}>{severity}</option>'
+            for severity in ("info", "warning", "critical")
+        )
         check_rows.append(
             f"""
             <tr>
               <td><code>{escape(check.check_id)}</code></td>
-              <td><strong>{escape(check.title)}</strong><br><span class="muted">{escape(check.description)}</span></td>
-              <td>{escape(check.severity)}</td>
-              <td>{"включена" if check.enabled else "выключена"}</td>
+              <td>
+                <form method="post" action="/admin/check-cases/update" class="row-form row-form--stacked">
+                  <input type="hidden" name="check_id" value="{escape(check.check_id)}">
+                  <input name="title" value="{escape(check.title)}" required>
+                  <textarea name="description" rows="2" required>{escape(check.description)}</textarea>
+              </td>
+              <td><select name="severity">{severity_options}</select></td>
+              <td><label class="check-toggle"><input type="checkbox" name="enabled" {"checked" if check.enabled else ""}> включена</label></td>
               <td>{escape(check.version)}</td>
+              <td><button type="submit">Сохранить</button></td>
+                </form>
             </tr>
             """
         )
@@ -1171,10 +1207,13 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
         </form>
         <div class="muted">Через заданное число дней удаляются архивы и распаковки. Табличные данные сохраняются, ссылка на скачивание исчезает.</div>
         <h2>Каталог проверок</h2>
-        <div class="muted">Текущие built-in правила анализа. Следующий этап - включение, выключение и настройка правил без изменения кода.</div>
+        <div class="muted">Правила применяются при формировании `check_results.csv`, `check_summary.csv` и AI-контекста.</div>
+        <form method="post" action="/admin/check-cases/reset" class="inline-form">
+          <button type="submit">Сбросить к встроенным правилам</button>
+        </form>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>ID</th><th>Проверка</th><th>Severity</th><th>Статус</th><th>Версия</th></tr></thead>
+            <thead><tr><th>ID</th><th>Проверка</th><th>Severity</th><th>Статус</th><th>Версия</th><th>Действия</th></tr></thead>
             <tbody>{"".join(check_rows)}</tbody>
           </table>
         </div>
@@ -1264,10 +1303,14 @@ def _shared_page_css() -> str:
       .panel { width:1180px; max-width:100%; padding:20px 22px; border:1px solid var(--line); border-radius:16px; background:var(--panel); box-shadow:0 16px 42px rgba(24,33,47,.06); }
       h1 { margin:0 0 16px; font-size:24px; }
       h2 { margin:16px 0 10px; font-size:18px; }
-      .create-form, .row-form, .forms-grid { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+      .create-form, .row-form, .forms-grid, .inline-form { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+      .row-form--stacked { align-items:stretch; }
       .create-form label { display:grid; gap:6px; align-items:start; }
       .create-form { margin-bottom:16px; }
-      input, select { border:1px solid var(--line); border-radius:10px; padding:10px 12px; font:inherit; color:var(--text); background:#fff; }
+      .inline-form { margin:10px 0 12px; }
+      input, select, textarea { border:1px solid var(--line); border-radius:10px; padding:10px 12px; font:inherit; color:var(--text); background:#fff; }
+      textarea { min-width:320px; resize:vertical; }
+      .check-toggle { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
       button { border:0; border-radius:10px; padding:10px 14px; background:var(--blue); color:#fff; font:inherit; font-weight:700; cursor:pointer; }
       .danger { background:#b42318; }
       .table-wrap { overflow:auto; border:1px solid var(--line); border-radius:14px; }
