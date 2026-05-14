@@ -249,6 +249,10 @@ def test_uploads_page_contains_table_and_actions():
     assert "Выбрано 0" in html
     assert "uploads_body" in html
     assert "/api/uploads" in html
+    assert "/rebuild" in html
+    assert "пересобрать отчёт" in html
+    assert "data-rebuild-upload-id" in html
+    assert "data-report-cell" in html
     assert "item.download_url" in html
     assert "Отчёт для каждой загрузки формируется сразу после приёма файла" in html
 
@@ -552,3 +556,33 @@ def test_uploads_report_links_update(tmp_path, monkeypatch):
     assert updated.status_code == 200
     assert updated.json()[0]["report_url"].startswith("/report/")
     assert updated.json()[0]["status"] == "ready"
+
+
+def test_upload_rebuild_report_refreshes_existing_upload(tmp_path, monkeypatch):
+    history_root = tmp_path / "history"
+    upload_root = tmp_path / "uploads"
+    auth_root = tmp_path / "auth"
+    monkeypatch.setattr("web.history._history_root", _mock_history_root(history_root))
+    monkeypatch.setattr("web.uploads._upload_root", _mock_upload_root(upload_root))
+    monkeypatch.setattr("web.auth._auth_root", _mock_auth_root(auth_root))
+
+    client = TestClient(create_app())
+    _login(client)
+    store_response = client.post(
+        "/api/uploads/store",
+        files=[("files", ("sample.log", b"2026-04-29 20:50:41.343 PaymentStart, resp: {Code:0 Message:OK} duration=412 ms p: mgt_nbs-oti-4.4.12\n", "text/plain"))],
+    )
+    assert store_response.status_code == 200
+    upload_id = store_response.json()["items"][0]["upload_id"]
+    old_report_url = store_response.json()["items"][0]["report_url"]
+
+    rebuild_response = client.post(f"/api/uploads/{upload_id}/rebuild")
+
+    assert rebuild_response.status_code == 200
+    payload = rebuild_response.json()
+    assert payload["status"] == "ok"
+    assert payload["message"] == "Отчёт пересобран."
+    assert payload["report_url"].startswith("/report/")
+    assert payload["report_url"] != old_report_url
+    assert payload["item"]["status"] == "ready"
+    assert payload["item"]["report_url"] == payload["report_url"]

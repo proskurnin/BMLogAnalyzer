@@ -405,38 +405,7 @@ def create_app() -> Any:
         report_updates: list[dict[str, Any]] = []
         for item in stored:
             update_upload_status(item.upload_id, status="processing", status_message="Формируем отчёт", storage_dir=None)
-            run_id = new_run_id()
-            report_root = run_directory(run_id)
-            report_path = run_report_path(run_id)
-            request = AnalysisRequest(
-                config_path="./config/config.yaml",
-                reports_dir=str(report_root),
-                extracted_dir=None,
-                date=None,
-                reader=None,
-                bm=None,
-                generate_reports=False,
-            )
-            bundle = execute_uploaded_path_analysis(
-                request,
-                [(item.original_name, Path(item.stored_path))],
-                summary=False,
-                storage_dir=report_root,
-            )
-            from reports.html_report import write_html_report
-
-            write_html_report(bundle.events, bundle.result, report_path, stats=bundle.stats)
-            record_history(
-                bundle.snapshot,
-                mode="analysis",
-                source="upload",
-                run_id=run_id,
-                report_path=report_path,
-                owner_email=user.email,
-                owner_name=user.name,
-            )
-            update_upload_reports([item.upload_id], report_run_id=run_id, report_url=f"/report/{run_id}")
-            report_updates.append({"upload_id": item.upload_id, "run_id": run_id, "report_url": f"/report/{run_id}"})
+            report_updates.append(_build_upload_report(item, user))
         refreshed_items = [asdict(load_upload(item.upload_id)) for item in stored]
         return {
             "status": "ok",
@@ -492,6 +461,34 @@ def create_app() -> Any:
             "message": f"Отчёт сформирован для {len(upload_ids)} файлов.",
         }
 
+    @app.post("/api/uploads/{upload_id}/rebuild")
+    def rebuild_upload_report(request: Request, upload_id: str) -> dict[str, Any]:
+        user = _request_user(request)
+        try:
+            item = load_upload(upload_id)
+        except FileNotFoundError:
+            return JSONResponse({"detail": "Загрузка не найдена"}, status_code=404)
+        if item.owner_email != user.email and user.role != "admin":
+            return JSONResponse({"detail": "Доступ запрещён"}, status_code=403)
+        if not Path(item.stored_path).exists():
+            update_upload_status(upload_id, status="error", status_message="Исходный файл удалён")
+            return JSONResponse({"detail": "Исходный файл удалён"}, status_code=404)
+
+        update_upload_status(upload_id, status="processing", status_message="Формируем отчёт")
+        try:
+            report = _build_upload_report(item, user)
+        except Exception as exc:
+            update_upload_status(upload_id, status="error", status_message="Ошибка формирования отчёта")
+            return JSONResponse({"detail": f"Не удалось сформировать отчёт: {exc}"}, status_code=500)
+        refreshed = asdict(load_upload(upload_id))
+        return {
+            "status": "ok",
+            "item": refreshed,
+            "run_id": report["run_id"],
+            "report_url": report["report_url"],
+            "message": "Отчёт пересобран.",
+        }
+
     @app.get("/uploads/download/{upload_id}")
     def upload_download(request: Request, upload_id: str):
         user = _request_user(request)
@@ -532,6 +529,41 @@ def _render_report_manifest(run_id: str):
         if file_path.exists():
             return JSONResponse(json.loads(file_path.read_text(encoding="utf-8")))
     return JSONResponse({"detail": "Отчёт не найден"}, status_code=404)
+
+
+def _build_upload_report(item, user) -> dict[str, Any]:
+    run_id = new_run_id()
+    report_root = run_directory(run_id)
+    report_path = run_report_path(run_id)
+    analysis_request = AnalysisRequest(
+        config_path="./config/config.yaml",
+        reports_dir=str(report_root),
+        extracted_dir=None,
+        date=None,
+        reader=None,
+        bm=None,
+        generate_reports=False,
+    )
+    bundle = execute_uploaded_path_analysis(
+        analysis_request,
+        [(item.original_name, Path(item.stored_path))],
+        summary=False,
+        storage_dir=report_root,
+    )
+    from reports.html_report import write_html_report
+
+    write_html_report(bundle.events, bundle.result, report_path, stats=bundle.stats)
+    record_history(
+        bundle.snapshot,
+        mode="analysis",
+        source="upload",
+        run_id=run_id,
+        report_path=report_path,
+        owner_email=user.email,
+        owner_name=user.name,
+    )
+    update_upload_reports([item.upload_id], report_run_id=run_id, report_url=f"/report/{run_id}")
+    return {"upload_id": item.upload_id, "run_id": run_id, "report_url": f"/report/{run_id}"}
 
 
 def _validate_upload_limits(files: list[tuple[str, bytes]]) -> str:
@@ -1679,6 +1711,9 @@ def _uploads_html(user=None) -> str:
       .button { appearance: none; border: 0; border-radius: 12px; background: linear-gradient(180deg, #2f6fd1, #2457a6); color: #fff; padding: 11px 16px; font: inherit; font-weight: 700; cursor: pointer; }
       .button--ghost { background: #edf2f7; color: var(--text); border: 1px solid var(--line); }
       .button:disabled { opacity: 0.6; cursor: progress; }
+      .icon-button { width: 34px; height: 34px; display: inline-grid; place-items: center; border: 1px solid var(--line); border-radius: 10px; background: #edf2f7; color: var(--blue); font: 700 18px/1 system-ui, sans-serif; cursor: pointer; }
+      .icon-button:hover { background: #e5edf7; }
+      .icon-button:disabled { opacity: 0.5; cursor: progress; }
       .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 14px; }
       table { width: 100%; border-collapse: collapse; background: var(--panel); }
       th, td { padding: 12px 14px; border-bottom: 1px solid #e8edf2; text-align: left; vertical-align: top; }
@@ -1725,6 +1760,7 @@ def _uploads_html(user=None) -> str:
                 <th>Пользователь</th>
                 <th>Имя загруженного файла</th>
                 <th>Отчёт</th>
+                <th style="width:64px;">Действия</th>
               </tr>
             </thead>
             <tbody id="uploads_body"></tbody>
@@ -1750,23 +1786,29 @@ def _uploads_html(user=None) -> str:
 
       function rowHtml(item) {
         const status = (item.status || '').toLowerCase();
-        const reportHtml = item.report_url
-          ? `<a class="report-link" href="${item.report_url}" target="_blank" rel="noreferrer">Открыть отчёт</a>`
-          : status === 'processing'
-            ? `<span class="report-empty">${item.status_message || 'Формируется отчёт...'}</span>`
+        const isProcessing = status === 'processing';
+        const isSelected = selectedUploads.has(item.upload_id);
+        const reportHtml = isProcessing
+          ? `<span class="report-empty">${item.status_message || 'Формируем отчёт'}</span>`
+          : item.report_url
+            ? `<a class="report-link" href="${item.report_url}" target="_blank" rel="noreferrer">Открыть отчёт</a>`
             : status === 'error'
               ? `<span class="report-empty">${item.status_message || 'Ошибка формирования отчёта'}</span>`
               : `<span class="report-empty">${item.status_message || 'Ожидает обработки'}</span>`;
         const fileHtml = item.download_url
           ? `<a class="file-link" href="${item.download_url}" target="_blank" rel="noreferrer">${item.original_name}</a>`
           : `<span class="report-empty">${item.original_name} · ${item.status_message || 'Срок хранения истёк'}</span>`;
+        const rebuildDisabled = isProcessing || !item.download_url ? 'disabled' : '';
         return `
           <tr>
-            <td><input class="row-checkbox" type="checkbox" data-upload-id="${item.upload_id}"></td>
+            <td><input class="row-checkbox" type="checkbox" data-upload-id="${item.upload_id}" ${isSelected ? 'checked' : ''}></td>
             <td>${item.created_at}</td>
             <td>${item.owner_name || item.owner_email || 'Не указан'}</td>
             <td>${fileHtml}</td>
-            <td>${reportHtml}</td>
+            <td data-report-cell="${item.upload_id}">${reportHtml}</td>
+            <td>
+              <button class="icon-button" type="button" title="пересобрать отчёт" aria-label="пересобрать отчёт" data-rebuild-upload-id="${item.upload_id}" ${rebuildDisabled}>↻</button>
+            </td>
           </tr>`;
       }
 
@@ -1776,7 +1818,7 @@ def _uploads_html(user=None) -> str:
         uploadsCount.textContent = `Файлов: ${Array.isArray(items) ? items.length : 0}`;
         uploadsBody.innerHTML = Array.isArray(items) && items.length
           ? items.map((item) => rowHtml(item)).join('')
-          : '<tr><td colspan="5" class="muted">Загрузок пока нет.</td></tr>';
+          : '<tr><td colspan="6" class="muted">Загрузок пока нет.</td></tr>';
         uploadsBody.querySelectorAll('input[data-upload-id]').forEach((checkbox) => {
           checkbox.addEventListener('change', () => {
             if (checkbox.checked) {
@@ -1787,7 +1829,34 @@ def _uploads_html(user=None) -> str:
             renderSelectedCount();
           });
         });
+        uploadsBody.querySelectorAll('button[data-rebuild-upload-id]').forEach((button) => {
+          button.addEventListener('click', () => rebuildUploadReport(button.dataset.rebuildUploadId, button));
+        });
         renderSelectedCount();
+      }
+
+      async function rebuildUploadReport(uploadId, button) {
+        if (!uploadId) {
+          return;
+        }
+        button.disabled = true;
+        const reportCell = uploadsBody.querySelector(`[data-report-cell="${uploadId}"]`);
+        if (reportCell) {
+          reportCell.innerHTML = '<span class="report-empty">Формируем отчёт</span>';
+        }
+        uploadsMessage.textContent = 'Формируем отчёт...';
+        try {
+          const response = await fetch(`/api/uploads/${encodeURIComponent(uploadId)}/rebuild`, { method: 'POST' });
+          const data = await response.json();
+          if (!response.ok) {
+            throw new Error(data?.detail || data?.message || 'Не удалось пересобрать отчёт.');
+          }
+          uploadsMessage.innerHTML = `${data.message || 'Отчёт пересобран.'} <a class="report-link" href="${data.report_url}" target="_blank" rel="noreferrer">Открыть отчёт</a>`;
+          await loadUploads();
+        } catch (error) {
+          uploadsMessage.textContent = error instanceof Error ? error.message : String(error);
+          await loadUploads();
+        }
       }
 
       buildReportButton.addEventListener('click', async () => {
