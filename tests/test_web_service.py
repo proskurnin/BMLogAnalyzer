@@ -106,7 +106,7 @@ def test_login_page_contains_version_and_signature(tmp_path, monkeypatch):
     response = client.get("/login")
 
     assert response.status_code == 200
-    assert "версия сервиса 1.0.4" in response.text
+    assert "версия сервиса 1.0.5" in response.text
     assert 'class="brand"' in response.text
     assert "made with ♥ by Roman A. Proskurnin" in response.text
 
@@ -216,7 +216,7 @@ def test_web_index_contains_upload_landing():
     html = _index_html()
 
     assert "BM Log Analyzer" in html
-    assert "версия сервиса 1.0.4" in html
+    assert "версия сервиса 1.0.5" in html
     assert "picker_menu" not in html
     assert "Выбрать файлы</button>" not in html
     assert "Выбрать папку</button>" not in html
@@ -372,7 +372,7 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
     stable_sections = report_manifest.json()["stable_sections"]
     assert "summary" in stable_sections
     assert "bm_meta" in stable_sections
-    assert "suspicious" in stable_sections
+    assert "suspicious" not in stable_sections
     assert "bm_statuses" in stable_sections
     assert "validator_analytics" in stable_sections
     assert "log_files" not in stable_sections

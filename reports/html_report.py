@@ -171,7 +171,7 @@ def render_html_report(
         [
             _collapsible_other_section(other_groups, other_total),
             f'<script id="report-data" type="application/json">{_json_script(report_data)}</script>',
-            _suspicious_section(suspicious_rows),
+            _suspicious_section(suspicious_rows) if suspicious_rows else "",
             _bm_status_section(events, bm_group_rows, bm_group_payloads, date_chart, unclassified_diag, archive_names),
             _validator_section(validator_sections),
             _modal(),
@@ -202,7 +202,6 @@ def render_html_report_manifest(
     stable_sections = [
         "summary",
         "bm_meta",
-        "suspicious",
         "bm_statuses",
         "grouped_statuses",
         "date_dynamics",
@@ -212,6 +211,9 @@ def render_html_report_manifest(
         stable_sections.insert(2, "log_files")
     if other_total:
         stable_sections.insert(3 if log_total else 2, "other_files")
+    if suspicious_rows:
+        insert_at = stable_sections.index("bm_statuses")
+        stable_sections.insert(insert_at, "suspicious")
     if unclassified_total := sum(int(row.get("count", 0)) for row in _unclassified_diagnostics(events)):
         stable_sections.insert(-1, "unclassified_diagnostics")
     return {
@@ -466,6 +468,8 @@ def _collapsible_other_section(other_groups: list[dict[str, object]], other_tota
 
 
 def _suspicious_section(rows: list[dict[str, object]]) -> str:
+    if not rows:
+        return ""
     rendered_rows = []
     for row in rows:
         source = str(row.get("source_file") or "")
@@ -483,12 +487,11 @@ def _suspicious_section(rows: list[dict[str, object]]) -> str:
             f"<td><code>{escape(raw_line)}</code></td>"
             "</tr>"
         )
-    empty = '<tr><td colspan="4" class="muted">Подозрительных строк не найдено.</td></tr>'
     table = (
         '<div class="table-wrap suspicious-table-wrap">'
         '<table class="status-table status-table--suspicious">'
         '<thead class="status-table-head"><tr><th>Источник</th><th>Код</th><th>Почему подозрительно</th><th>Строка лога</th></tr></thead>'
-        f"<tbody>{''.join(rendered_rows) if rendered_rows else empty}</tbody>"
+        f"<tbody>{''.join(rendered_rows)}</tbody>"
         "</table>"
         "</div>"
     )

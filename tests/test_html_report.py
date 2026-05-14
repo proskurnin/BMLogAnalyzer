@@ -173,8 +173,11 @@ def test_html_report_hides_empty_sections(tmp_path):
     manifest = json.loads((tmp_path / "analysis_report.json").read_text(encoding="utf-8"))
     assert "Log-файлы" not in html
     assert "<strong>Прочие файлы</strong>" not in html
+    assert "Подозрительно" not in html
+    assert "Подозрительных строк не найдено." not in html
     assert 'id="bm-unclassified-root"><details' not in html
     assert 'id="bm-filter-root"' not in html
     assert "log_files" not in manifest["stable_sections"]
     assert "other_files" not in manifest["stable_sections"]
+    assert "suspicious" not in manifest["stable_sections"]
     assert "unclassified_diagnostics" not in manifest["stable_sections"]

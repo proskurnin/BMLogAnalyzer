@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.5 - 2026-05-14
+
+### Changed
+
+- HTML reports now hide the `Подозрительно` section when no suspicious log lines were found.
+- Analyzer version bumped to `1.0.5`.
+
 ## 1.0.4 - 2026-05-14
 
 ### Changed
