@@ -464,13 +464,17 @@ def _suspicious_section(rows: list[dict[str, object]]) -> str:
     )
     return "\n".join(
         [
-            '<section class="section section--suspicious">',
-            '<div class="section-title">',
-            "<h2>Подозрительно</h2>",
-            f"<p>Найдено строк: {len(rows)}. Baseline строится по успешным PaymentStart resp с Code:0.</p>",
-            "</div>",
+            '<details class="collapsible collapsible--suspicious">',
+            "<summary>",
+            "<span>",
+            "<strong>Подозрительно</strong>",
+            f"<em>Найдено строк: {len(rows)}. Baseline строится по успешным PaymentStart resp с Code:0.</em>",
+            "</span>",
+            "</summary>",
+            '<div class="collapsible-body">',
             table,
-            "</section>",
+            "</div>",
+            "</details>",
         ]
     )
 

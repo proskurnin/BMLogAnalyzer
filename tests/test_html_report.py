@@ -87,6 +87,7 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert "BM-статусы" in html
     assert "Подозрительно" in html
     assert "Почему подозрительно" in html
+    assert "collapsible--suspicious" in html
     assert "status-table--suspicious" in html
     assert "Группировка статусов" in html
     assert "BM сведения" in html
