@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.3 - 2026-05-14
+
+### Changed
+
+- AI analytics status now formats generated time as Moscow time: `ДД.ММ.ГГГГ (ЧЧ:ММ:СС) (Мск)`.
+- Analyzer version bumped to `1.0.3`.
+
 ## 1.0.2 - 2026-05-14
 
 ### Changed

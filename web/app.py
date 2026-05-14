@@ -859,10 +859,27 @@ def _report_ai_panel(run_id: str) -> str:
             .replaceAll("'", "&#39;");
         }}
 
+        function formatMoscowDateTime(value) {{
+          if (!value) return "";
+          const date = new Date(value);
+          if (Number.isNaN(date.getTime())) return String(value);
+          const parts = Object.fromEntries(new Intl.DateTimeFormat("ru-RU", {{
+            timeZone: "Europe/Moscow",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: false,
+          }}).formatToParts(date).map((part) => [part.type, part.value]));
+          return `${{parts.day}}.${{parts.month}}.${{parts.year}} (${{parts.hour}}:${{parts.minute}}:${{parts.second}}) (Мск)`;
+        }}
+
         function render(payload) {{
           const analysis = payload.analysis || payload;
           const hypotheses = Array.isArray(analysis.hypotheses) ? analysis.hypotheses : [];
-          status.textContent = payload.generated_at ? `Готово: ${{payload.generated_at}}` : "AI-анализ готов.";
+          status.textContent = payload.generated_at ? `Готово: ${{formatMoscowDateTime(payload.generated_at)}}` : "AI-анализ готов.";
           resultRoot.innerHTML = `
             <div class="bm-ai-card">
               <h3>Кратко</h3>
