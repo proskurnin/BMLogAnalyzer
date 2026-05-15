@@ -2153,6 +2153,9 @@ def _uploads_html(user=None) -> str:
       .report-empty { color: var(--muted); }
       .message { margin-top: 12px; padding: 14px; border: 1px dashed #c8d9f0; border-radius: 12px; background: #f8fbff; }
       .footer { color: var(--muted); font-size: 12px; margin-top: 8px; }
+      .uploads-brand { text-align: right; }
+      .uploads-brand strong { display: block; color: var(--text); font-size: 15px; }
+      .uploads-brand span { display: block; margin-top: 4px; color: var(--muted); font-size: 13px; }
       a { color:var(--blue); text-decoration:none; font-weight:600; }
       {{TOPBAR_CSS}}
       @media (max-width: 720px) { main { padding: 16px; } }
@@ -2166,7 +2169,7 @@ def _uploads_html(user=None) -> str:
           <h1>Загрузки</h1>
           <div class="muted">Загруженные файлы и отчёты по ним.</div>
         </div>
-        <div class="muted">BM Log Analyzer · {{VERSION}}</div>
+        <div class="uploads-brand"><strong>BM Log Analyzer</strong><span>версия сервиса {{VERSION}}</span></div>
       </header>
       <section class="panel">
         <div class="toolbar">
@@ -2343,7 +2346,7 @@ def _uploads_html(user=None) -> str:
     </script>
   </body>
 </html>
-""".replace("{{VERSION}}", format_version()).replace("{{TOPBAR}}", _page_topbar(user)).replace("{{TOPBAR_CSS}}", _topbar_css()).strip()
+""".replace("{{VERSION}}", _version_number()).replace("{{TOPBAR}}", _page_topbar(user)).replace("{{TOPBAR_CSS}}", _topbar_css()).strip()
 
 
 _index_html = _landing_html

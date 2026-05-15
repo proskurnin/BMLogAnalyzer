@@ -82,7 +82,7 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     html = (tmp_path / "analysis_report.html").read_text(encoding="utf-8")
     manifest = (tmp_path / "analysis_report.json").read_text(encoding="utf-8")
     assert "BM Log Analyzer" in html
-    assert f"version {__version__}" in html
+    assert f"отчёт создан в версии сервиса {__version__}" in html
     assert "Log-файлы" in html
     assert "Прочие файлы" in html
     assert "BM-статусы" in html

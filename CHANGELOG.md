@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.1 - 2026-05-15
+
+### Changed
+
+- HTML reports now label the generator version as `отчёт создан в версии сервиса X.Y.Z`.
+- Uploads page now displays product name and service version on separate lines.
+- Analyzer version bumped to `1.2.1`.
+
 ## 1.2.0 - 2026-05-15
 
 ### Added

@@ -137,7 +137,7 @@ def render_html_report(
         '<header class="header">',
         "<div>",
         "<h1>BM Log Analyzer</h1>",
-        f'<span class="version">version {escape(__version__)}</span>',
+        f'<span class="version">отчёт создан в версии сервиса {escape(__version__)}</span>',
         "</div>",
         "</header>",
         '<section class="section">',
