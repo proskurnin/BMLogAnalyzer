@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from html import escape
+from zoneinfo import ZoneInfo
 from analytics.ai_analysis import ai_analysis_enabled, run_ai_analysis
 from analytics.check_cases import create_check_case, list_check_cases, reset_check_cases, update_check_case
 from core.verification import run_healthchecks, run_readiness_check
@@ -1142,24 +1144,38 @@ def _login_html(error: str = "") -> str:
 """.strip()
 
 
+def _format_moscow_datetime(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y (%H:%M:%S)")
+
+
 def _admin_html(user=None, error: str = "", policy=None) -> str:
     effective_user = user or get_user("admin@example.com")
     policy = policy or load_storage_policy()
     rows = []
-    for item in list_users():
+    for item in sorted(list_users(), key=lambda user: user.created_at or "", reverse=True):
         role_options = "".join(
             f'<option value="{role}" {"selected" if item.role == role else ""}>{label}</option>'
             for role, label in (("user", "пользователь"), ("admin", "администратор"))
         )
+        created_at_label = _format_moscow_datetime(item.created_at)
         rows.append(
             f"""
-            <tr>
+            <tr data-sort-name="{escape(item.name.lower())}" data-sort-email="{escape(item.email.lower())}" data-sort-created-at="{escape(item.created_at)}">
               <td>
                 <form method="post" action="/admin/users/update" class="row-form">
                   <input type="hidden" name="email" value="{escape(item.email)}">
                   <input name="name" value="{escape(item.name)}" required>
               </td>
               <td><input name="new_email" type="email" value="{escape(item.email)}" required></td>
+              <td>{escape(created_at_label)}</td>
               <td><input name="password" type="password" placeholder="Оставить без изменений"></td>
               <td><select name="role">{role_options}</select></td>
               <td class="actions">
@@ -1225,7 +1241,7 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
         <h1>Администрирование</h1>
         {error_html}
         <div class="admin-sections">
-          <details class="admin-section">
+          <details class="admin-section" data-section-id="users">
             <summary><span>Пользователи</span><strong>{len(rows)}</strong></summary>
             <div class="admin-section__body">
               <form method="post" action="/admin/users/create" class="create-form">
@@ -1239,14 +1255,14 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
                 <button type="submit">Добавить</button>
               </form>
               <div class="table-wrap">
-                <table>
-                  <thead><tr><th>Имя</th><th>Email</th><th>Пароль</th><th>Роль</th><th>Действия</th></tr></thead>
+                <table id="admin-users-table">
+                  <thead><tr><th><button type="button" class="sort-button" data-sort-key="name">Имя</button></th><th><button type="button" class="sort-button" data-sort-key="email">Email</button></th><th><button type="button" class="sort-button" data-sort-key="created_at">Дата добавления (Мск)</button></th><th>Пароль</th><th>Роль</th><th>Действия</th></tr></thead>
                   <tbody>{"".join(rows)}</tbody>
                 </table>
               </div>
             </div>
           </details>
-          <details class="admin-section">
+          <details class="admin-section" data-section-id="storage">
             <summary><span>Политики хранения</span><strong>{policy.archive_retention_days} дней</strong></summary>
             <div class="admin-section__body">
               <form method="post" action="/admin/settings" class="create-form">
@@ -1258,7 +1274,7 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
               <div class="muted">Через заданное число дней удаляются архивы и распаковки. Табличные данные сохраняются, ссылка на скачивание исчезает.</div>
             </div>
           </details>
-          <details class="admin-section">
+          <details class="admin-section" data-section-id="checks">
             <summary><span>Каталог проверок</span><strong>{len(check_rows)}</strong></summary>
             <div class="admin-section__body">
               <div class="muted">Правила применяются при формировании `check_results.csv`, `check_summary.csv` и AI-контекста.</div>
@@ -1294,6 +1310,107 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
         </div>
       </section>
     </main>
+    <script>
+      (() => {{
+        const sectionKey = 'bm.admin.openSections';
+        const sortKey = 'bm.admin.usersSort';
+        const sections = Array.from(document.querySelectorAll('.admin-section[data-section-id]'));
+
+        function readOpenSections() {{
+          try {{
+            const value = JSON.parse(sessionStorage.getItem(sectionKey) || '[]');
+            return new Set(Array.isArray(value) ? value : []);
+          }} catch (error) {{
+            return new Set();
+          }}
+        }}
+
+        function writeOpenSections(value) {{
+          sessionStorage.setItem(sectionKey, JSON.stringify(Array.from(value)));
+        }}
+
+        let openSections = readOpenSections();
+        sections.forEach((section) => {{
+          const sectionId = section.dataset.sectionId;
+          section.open = openSections.has(sectionId);
+          section.addEventListener('toggle', () => {{
+            openSections = readOpenSections();
+            if (section.open) {{
+              openSections.add(sectionId);
+            }} else {{
+              openSections.delete(sectionId);
+            }}
+            writeOpenSections(openSections);
+          }});
+          section.querySelectorAll('form').forEach((form) => {{
+            form.addEventListener('submit', () => {{
+              openSections = readOpenSections();
+              openSections.add(sectionId);
+              writeOpenSections(openSections);
+              section.open = true;
+            }});
+          }});
+        }});
+
+        const usersTable = document.getElementById('admin-users-table');
+        if (!usersTable) {{
+          return;
+        }}
+        const tbody = usersTable.querySelector('tbody');
+        const sortButtons = Array.from(usersTable.querySelectorAll('[data-sort-key]'));
+        let sortState;
+        try {{
+          sortState = JSON.parse(sessionStorage.getItem(sortKey) || '{{"key":"created_at","direction":"desc"}}');
+        }} catch (error) {{
+          sortState = {{"key": "created_at", "direction": "desc"}};
+        }}
+        if (!sortState || !sortState.key) {{
+          sortState = {{"key": "created_at", "direction": "desc"}};
+        }}
+
+        function rowValue(row, key) {{
+          if (key === 'created_at') {{
+            const value = Date.parse(row.dataset.sortCreatedAt || '');
+            return Number.isNaN(value) ? 0 : value;
+          }}
+          if (key === 'email') {{
+            return row.dataset.sortEmail || '';
+          }}
+          return row.dataset.sortName || '';
+        }}
+
+        function renderSort() {{
+          const direction = sortState.direction === 'asc' ? 1 : -1;
+          const rows = Array.from(tbody.querySelectorAll('tr'));
+          rows.sort((left, right) => {{
+            const leftValue = rowValue(left, sortState.key);
+            const rightValue = rowValue(right, sortState.key);
+            if (leftValue < rightValue) return -1 * direction;
+            if (leftValue > rightValue) return 1 * direction;
+            return 0;
+          }});
+          rows.forEach((row) => tbody.appendChild(row));
+          sortButtons.forEach((button) => {{
+            const active = button.dataset.sortKey === sortState.key;
+            button.dataset.sortDirection = active ? sortState.direction : '';
+            button.setAttribute('aria-sort', active ? (sortState.direction === 'asc' ? 'ascending' : 'descending') : 'none');
+          }});
+          sessionStorage.setItem(sortKey, JSON.stringify(sortState));
+        }}
+
+        sortButtons.forEach((button) => {{
+          button.addEventListener('click', () => {{
+            const key = button.dataset.sortKey;
+            sortState = {{
+              key,
+              direction: sortState.key === key && sortState.direction === 'asc' ? 'desc' : 'asc',
+            }};
+            renderSort();
+          }});
+        }});
+        renderSort();
+      }})();
+    </script>
   </body>
 </html>
 """.strip()
@@ -1386,6 +1503,10 @@ def _shared_page_css() -> str:
       table { width:100%; border-collapse:collapse; background:#fff; }
       th, td { padding:12px 14px; border-bottom:1px solid #e8edf2; text-align:left; vertical-align:top; }
       th { background:#f3f6fa; font-weight:700; }
+      .sort-button { appearance:none; border:0; border-radius:0; padding:0; background:transparent; color:inherit; font:inherit; font-weight:700; cursor:pointer; }
+      .sort-button::after { content:""; display:inline-block; width:1.2em; color:var(--muted); text-align:center; }
+      .sort-button[data-sort-direction="asc"]::after { content:"↑"; }
+      .sort-button[data-sort-direction="desc"]::after { content:"↓"; }
       .actions { display:flex; flex-wrap:wrap; gap:8px; }
       .muted { color:var(--muted); }
       .error { margin-bottom:12px; padding:10px 12px; border:1px solid #f4b4a5; border-radius:10px; background:#fff5f3; color:#9f1d12; }

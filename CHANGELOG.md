@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.2 - 2026-05-15
+
+### Changed
+
+- Admin sections now preserve open or closed state for the current browser session and stay open after actions inside them.
+- Admin users table now shows Moscow creation time and supports sorting by name, email, and creation date.
+- Analyzer version bumped to `1.2.2`.
+
 ## 1.2.1 - 2026-05-15
 
 ### Changed
