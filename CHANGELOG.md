@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.0 - 2026-05-15
+
+### Added
+
+- Admins can add custom validation checks based on code, message text, duration, and repeat timing conditions.
+- HTML reports now include a collapsed `Проверки` section when validation checks match log evidence.
+- Report manifests now expose validation check results.
+
+### Changed
+
+- Validation check catalog rows now show editable condition type and value.
+- Analyzer version bumped to `1.2.0`.
+
 ## 1.1.1 - 2026-05-15
 
 ### Changed

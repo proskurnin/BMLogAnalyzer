@@ -10,9 +10,10 @@ from pathlib import Path
 from analytics.archive_inventory import bm_log_count, explicit_reader_log_count, explicit_system_log_count
 from analytics.bm_statuses import UNCLASSIFIED_STATUS, bm_status_summary_rows, classify_bm_status
 from analytics.ai_context import build_ai_context
+from analytics.check_cases import run_builtin_checks
 from analytics.suspicious import suspicious_line_payloads
 from core.contracts import REPORT_MANIFEST_SCHEMA_VERSION
-from core.models import AnalysisResult, ArchiveInventoryRow, PaymentEvent, PipelineStats
+from core.models import AnalysisResult, ArchiveInventoryRow, CheckResult, PaymentEvent, PipelineStats
 from core.version import __version__
 
 LOG_GROUP_SPECS: list[tuple[str, set[str]]] = [
@@ -75,6 +76,7 @@ def render_html_report(
     bm_group_payloads = _bm_group_payloads(events, archive_names)
     validator_sections = _validator_analytics(events, archive_names)
     suspicious_rows = suspicious_line_payloads(events)
+    check_results = run_builtin_checks(events)
     date_chart = _bm_date_chart(events)
     unclassified_diag = _unclassified_diagnostics(events)
     report_data = _report_data(
@@ -171,6 +173,7 @@ def render_html_report(
         [
             _collapsible_other_section(other_groups, other_total),
             f'<script id="report-data" type="application/json">{_json_script(report_data)}</script>',
+            _check_results_section(check_results),
             _suspicious_section(suspicious_rows) if suspicious_rows else "",
             _bm_status_section(events, bm_group_rows, bm_group_payloads, date_chart, unclassified_diag, archive_names),
             _validator_section(validator_sections),
@@ -199,6 +202,7 @@ def render_html_report_manifest(
     archive_names = _archive_name_set(stats.input_files if stats else [])
     validator_sections = _validator_analytics(events, archive_names)
     suspicious_rows = suspicious_line_payloads(events)
+    check_results = run_builtin_checks(events)
     stable_sections = [
         "summary",
         "bm_meta",
@@ -214,6 +218,9 @@ def render_html_report_manifest(
     if suspicious_rows:
         insert_at = stable_sections.index("bm_statuses")
         stable_sections.insert(insert_at, "suspicious")
+    if check_results:
+        insert_at = stable_sections.index("bm_statuses")
+        stable_sections.insert(insert_at, "validation_checks")
     if unclassified_total := sum(int(row.get("count", 0)) for row in _unclassified_diagnostics(events)):
         stable_sections.insert(-1, "unclassified_diagnostics")
     return {
@@ -236,6 +243,7 @@ def render_html_report_manifest(
             "other_groups",
             "validator_sections",
             "suspicious_lines",
+            "validation_checks",
         ],
         "stable_sections": stable_sections,
         "counts": {
@@ -251,6 +259,7 @@ def render_html_report_manifest(
             "technical_error": result.technical_error_count,
             "unknown": result.unknown_count,
             "suspicious": len(suspicious_rows),
+            "validation_checks": len(check_results),
         },
         "sections": stable_sections,
         "status_groups": [str(row["status"]) for row in summary_rows],
@@ -259,6 +268,7 @@ def render_html_report_manifest(
         "other_groups": [str(group["label"]) for group in other_groups],
         "validator_sections": [str(item["validator"]) for item in validator_sections],
         "suspicious_lines": suspicious_rows,
+        "validation_checks": [_check_result_payload(item) for item in check_results],
     }
 
 
@@ -510,6 +520,66 @@ def _suspicious_section(rows: list[dict[str, object]]) -> str:
             "</details>",
         ]
     )
+
+
+def _check_results_section(results: list[CheckResult]) -> str:
+    if not results:
+        return ""
+    rows = []
+    for result in results:
+        location = result.source_file
+        if result.line_number is not None:
+            location = f"{location}:{result.line_number}"
+        timestamp = result.timestamp.isoformat(sep=" ") if result.timestamp else ""
+        rows.append(
+            '<tr class="status-row status-row--check">'
+            f"<td><strong>{escape(location)}</strong><br><span class=\"muted\">{escape(timestamp)}</span></td>"
+            f"<td>{escape(result.severity)}</td>"
+            f"<td><strong>{escape(result.title)}</strong><br><span class=\"muted\">{escape(result.check_id)}</span></td>"
+            f"<td>{escape(result.evidence)}</td>"
+            f"<td><code>{escape(result.raw_line)}</code></td>"
+            "</tr>"
+        )
+    severity_counts: dict[str, int] = defaultdict(int)
+    for result in results:
+        severity_counts[result.severity] += 1
+    summary = ", ".join(f"{severity}: {count}" for severity, count in sorted(severity_counts.items()))
+    return "\n".join(
+        [
+            '<details class="collapsible collapsible--checks">',
+            "<summary>",
+            "<span>",
+            "<strong>Проверки</strong>",
+            f"<em>Сработало правил: {len(results)}. {escape(summary)}</em>",
+            "</span>",
+            "</summary>",
+            '<div class="collapsible-body">',
+            '<div class="table-wrap checks-table-wrap">',
+            '<table class="status-table status-table--checks">',
+            '<thead class="status-table-head"><tr><th>Источник</th><th>Severity</th><th>Проверка</th><th>Evidence</th><th>Строка лога</th></tr></thead>',
+            f"<tbody>{''.join(rows)}</tbody>",
+            "</table>",
+            "</div>",
+            "</div>",
+            "</details>",
+        ]
+    )
+
+
+def _check_result_payload(result: CheckResult) -> dict[str, object]:
+    return {
+        "check_id": result.check_id,
+        "title": result.title,
+        "severity": result.severity,
+        "status": result.status,
+        "source_file": result.source_file,
+        "line_number": result.line_number,
+        "timestamp": result.timestamp.isoformat(sep=" ") if result.timestamp else "",
+        "code": result.code,
+        "message": result.message or "",
+        "evidence": result.evidence,
+        "raw_line": result.raw_line,
+    }
 
 
 def _archive_records(input_files: list[str]) -> list[dict[str, object]]:
@@ -2494,6 +2564,9 @@ h1, h2, p { margin: 0; }
 .status-table--suspicious code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .status-row--suspicious td { background: #fffaf0; }
 .suspicious-table-wrap { max-height: 560px; }
+.status-table--checks code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.status-row--check td { background: #f8fbff; }
+.checks-table-wrap { max-height: 560px; }
 .status-table--grouped .status-row--group td { background: transparent; }
 .status-table--grouped .status-row--success td { background: #eef8ee; }
 .status-table--grouped .status-row--clickable:hover td { background: rgba(39, 100, 163, 0.04); }

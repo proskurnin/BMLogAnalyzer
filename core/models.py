@@ -141,6 +141,8 @@ class CheckCase:
     severity: str
     enabled: bool = True
     version: str = "1"
+    condition_type: str = "builtin"
+    condition_value: str = ""
 
 
 @dataclass(frozen=True)

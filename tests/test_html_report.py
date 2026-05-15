@@ -87,6 +87,9 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert "Прочие файлы" in html
     assert "BM-статусы" in html
     assert "Подозрительно" in html
+    assert "Проверки" in html
+    assert "Сработало правил" in html
+    assert "status-table--checks" in html
     assert "Почему подозрительно" in html
     assert "collapsible--suspicious" in html
     assert "status-table--suspicious" in html
@@ -154,6 +157,7 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert '"validator_sections"' in manifest
     assert '"suspicious"' in manifest
     assert '"suspicious_lines"' in manifest
+    assert '"validation_checks"' in manifest
     ai_context = json.loads((tmp_path / "analysis_report.ai_context.json").read_text(encoding="utf-8"))
     assert ai_context["schema_version"] == "bm-log-analyzer.ai-context.v1"
     assert ai_context["summary"]["events"] == 6
@@ -175,9 +179,11 @@ def test_html_report_hides_empty_sections(tmp_path):
     assert "<strong>Прочие файлы</strong>" not in html
     assert "Подозрительно" not in html
     assert "Подозрительных строк не найдено." not in html
+    assert "Проверки" not in html
     assert 'id="bm-unclassified-root"><details' not in html
     assert 'id="bm-filter-root"' not in html
     assert "log_files" not in manifest["stable_sections"]
     assert "other_files" not in manifest["stable_sections"]
     assert "suspicious" not in manifest["stable_sections"]
+    assert "validation_checks" not in manifest["stable_sections"]
     assert "unclassified_diagnostics" not in manifest["stable_sections"]

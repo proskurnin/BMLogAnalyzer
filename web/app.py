@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 from html import escape
 from analytics.ai_analysis import ai_analysis_enabled, run_ai_analysis
-from analytics.check_cases import list_check_cases, reset_check_cases, update_check_case
+from analytics.check_cases import create_check_case, list_check_cases, reset_check_cases, update_check_case
 from core.verification import run_healthchecks, run_readiness_check
 from core.version import format_version
 from dataclasses import asdict
@@ -177,6 +177,8 @@ def create_app() -> Any:
         title: str = Form(...),
         description: str = Form(...),
         severity: str = Form(...),
+        condition_type: str = Form("builtin"),
+        condition_value: str = Form(""),
         enabled: str | None = Form(None),
     ):
         try:
@@ -185,6 +187,30 @@ def create_app() -> Any:
                 title=title,
                 description=description,
                 severity=severity,
+                condition_type=condition_type,
+                condition_value=condition_value,
+                enabled=enabled == "on",
+            )
+        except ValueError as exc:
+            return HTMLResponse(_admin_html(None, str(exc)), status_code=400)
+        return RedirectResponse("/admin", status_code=303)
+
+    @app.post("/admin/check-cases/create")
+    def admin_create_check_case(
+        title: str = Form(...),
+        description: str = Form(""),
+        severity: str = Form(...),
+        condition_type: str = Form(...),
+        condition_value: str = Form(...),
+        enabled: str | None = Form(None),
+    ):
+        try:
+            create_check_case(
+                title=title,
+                description=description,
+                severity=severity,
+                condition_type=condition_type,
+                condition_value=condition_value,
                 enabled=enabled == "on",
             )
         except ValueError as exc:
@@ -1153,6 +1179,16 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
             f'<option value="{severity}" {"selected" if check.severity == severity else ""}>{severity}</option>'
             for severity in ("info", "warning", "critical")
         )
+        condition_options = "".join(
+            f'<option value="{condition}" {"selected" if check.condition_type == condition else ""}>{label}</option>'
+            for condition, label in (
+                ("builtin", "Встроенная"),
+                ("code", "Код"),
+                ("message_contains", "Сообщение содержит"),
+                ("duration_gt", "Длительность больше"),
+                ("repeat_within_seconds", "Повтор в течение N секунд"),
+            )
+        )
         check_rows.append(
             f"""
             <tr>
@@ -1163,6 +1199,7 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
                   <input name="title" value="{escape(check.title)}" required>
                   <textarea name="description" rows="2" required>{escape(check.description)}</textarea>
               </td>
+              <td><select name="condition_type">{condition_options}</select><input name="condition_value" value="{escape(check.condition_value)}" placeholder="Значение условия"></td>
               <td><select name="severity">{severity_options}</select></td>
               <td><label class="check-toggle"><input type="checkbox" name="enabled" {"checked" if check.enabled else ""}> включена</label></td>
               <td>{escape(check.version)}</td>
@@ -1225,12 +1262,30 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
             <summary><span>Каталог проверок</span><strong>{len(check_rows)}</strong></summary>
             <div class="admin-section__body">
               <div class="muted">Правила применяются при формировании `check_results.csv`, `check_summary.csv` и AI-контекста.</div>
+              <form method="post" action="/admin/check-cases/create" class="create-form">
+                <input name="title" placeholder="Название проверки" required>
+                <input name="description" placeholder="Описание">
+                <select name="condition_type" required>
+                  <option value="code">Код</option>
+                  <option value="message_contains">Сообщение содержит</option>
+                  <option value="duration_gt">Длительность больше</option>
+                  <option value="repeat_within_seconds">Повтор в течение N секунд</option>
+                </select>
+                <input name="condition_value" placeholder="Значение условия" required>
+                <select name="severity">
+                  <option value="warning">warning</option>
+                  <option value="info">info</option>
+                  <option value="critical">critical</option>
+                </select>
+                <label class="check-toggle"><input type="checkbox" name="enabled" checked> включена</label>
+                <button type="submit">Добавить проверку</button>
+              </form>
               <form method="post" action="/admin/check-cases/reset" class="inline-form">
                 <button type="submit">Сбросить к встроенным правилам</button>
               </form>
               <div class="table-wrap">
                 <table>
-                  <thead><tr><th>ID</th><th>Проверка</th><th>Severity</th><th>Статус</th><th>Версия</th><th>Действия</th></tr></thead>
+                  <thead><tr><th>ID</th><th>Проверка</th><th>Условие</th><th>Severity</th><th>Статус</th><th>Версия</th><th>Действия</th></tr></thead>
                   <tbody>{"".join(check_rows)}</tbody>
                 </table>
               </div>
