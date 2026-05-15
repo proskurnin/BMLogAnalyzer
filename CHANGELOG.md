@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.5 - 2026-05-15
+
+### Changed
+
+- Uploads table now shows uploaded file size in Mb before the report column.
+- Analyzer version bumped to `1.2.5`.
+
 ## 1.2.4 - 2026-05-15
 
 ### Changed

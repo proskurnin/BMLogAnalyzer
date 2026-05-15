@@ -2311,6 +2311,7 @@ def _uploads_html(user=None) -> str:
                 <th>Дата загрузки (Мск)</th>
                 <th>Пользователь</th>
                 <th>Имя загруженного файла</th>
+                <th>Размер</th>
                 <th>Отчёт</th>
                 <th style="width:64px;">Действия</th>
               </tr>
@@ -2357,6 +2358,7 @@ def _uploads_html(user=None) -> str:
             <td>${formatMoscowDateTime(item.created_at)}</td>
             <td>${item.owner_name || item.owner_email || 'Не указан'}</td>
             <td>${fileHtml}</td>
+            <td>${formatUploadSize(item.size_bytes)}</td>
             <td data-report-cell="${item.upload_id}">${reportHtml}</td>
             <td>
               <button class="icon-button" type="button" title="пересобрать отчёт" aria-label="пересобрать отчёт" data-rebuild-upload-id="${item.upload_id}" ${rebuildDisabled}>↻</button>
@@ -2406,6 +2408,11 @@ def _uploads_html(user=None) -> str:
           return acc;
         }, {});
         return `${parts.day}.${parts.month}.${parts.year} (${parts.hour}:${parts.minute}:${parts.second})`;
+      }
+
+      function formatUploadSize(bytes) {
+        const size = Number(bytes || 0);
+        return `${(size / (1024 * 1024)).toFixed(2)} Mb`;
       }
 
       async function rebuildUploadReport(uploadId, button) {
