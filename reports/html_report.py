@@ -1059,10 +1059,13 @@ def _bm_carrier_records(events: list[PaymentEvent], archive_names: set[str]) -> 
     records: list[dict[str, object]] = []
     nbs_events = [event for event in events if _is_nbs_event(event)]
     askp_events = [event for event in events if _is_askp_event(event)]
+    mcd2_events = [event for event in events if _is_mcd2_event(event)]
     if nbs_events:
         records.append(_bm_selectable_record("carrier", "НБС", nbs_events, archive_names, markers=True))
     if askp_events:
         records.append(_bm_selectable_record("carrier", "АСКП", askp_events, archive_names, markers=True))
+    if mcd2_events:
+        records.append(_bm_selectable_record("carrier", "МЦД-2", mcd2_events, archive_names, markers=True))
     return records
 
 
@@ -1464,6 +1467,8 @@ def _bm_carriers(events: list[PaymentEvent]) -> str:
         for event in events
     ):
         carriers.append("АСКП")
+    if any(_is_mcd2_event(event) for event in events):
+        carriers.append("МЦД-2")
     return ", ".join(dict.fromkeys(carriers)) if carriers else "missing"
 
 
@@ -1508,6 +1513,14 @@ def _is_askp_event(event: PaymentEvent) -> bool:
     )
 
 
+def _is_mcd2_event(event: PaymentEvent) -> bool:
+    return bool(
+        event.carrier == "mmv2"
+        or (event.package and event.package.lower().startswith("mmv2-"))
+        or (event.raw_line and "mmv2-" in event.raw_line.lower())
+    )
+
+
 def _carrier_markers(event: PaymentEvent) -> set[str]:
     markers: set[str] = set()
     if event.package:
@@ -1516,12 +1529,16 @@ def _carrier_markers(event: PaymentEvent) -> set[str]:
             markers.add("mgt_nbs")
         if "mgt_askp" in lowered:
             markers.add("mgt_askp")
+        if lowered.startswith("mmv2-"):
+            markers.add("mmv2")
     if event.raw_line:
         lowered = event.raw_line.lower()
         if "mgt_nbs" in lowered:
             markers.add("mgt_nbs")
         if "mgt_askp" in lowered:
             markers.add("mgt_askp")
+        if "mmv2-" in lowered:
+            markers.add("mmv2")
     return markers
 
 

@@ -71,6 +71,23 @@ def test_parses_mcd_astra_package():
     assert event.reader_type is None
 
 
+def test_parses_mmv2_x86_package():
+    line = (
+        "2026-04-29 20:50:41 PaymentStart resp: "
+        "{Code:0 Message:OK} duration=250 ms p: mmv2-x86_64-1.1.7"
+    )
+
+    event = parse_payment_start_response(line)
+
+    assert event is not None
+    assert event.package == "mmv2-x86_64-1.1.7"
+    assert event.carrier == "mmv2"
+    assert event.platform == "x86_64"
+    assert event.bm_version == "1.1.7"
+    assert event.bm_type is None
+    assert event.reader_type is None
+
+
 def test_handles_missing_duration():
     event = parse_payment_start_response(
         "2026-04-29 20:50:41.343 PaymentStart, resp: {Code:17 Message:Нет карты в поле} p: mgt_nbs-oti-4.4.2"

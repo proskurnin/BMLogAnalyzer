@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.7 - 2026-05-15
+
+### Changed
+
+- HTML reports now map `mmv2-*` BM packages to carrier `МЦД-2` while keeping BM version parsing, for example `mmv2-x86_64-1.1.7` -> `1.1.7`.
+- Analyzer version bumped to `1.2.7`.
+
 ## 1.2.6 - 2026-05-15
 
 ### Changed

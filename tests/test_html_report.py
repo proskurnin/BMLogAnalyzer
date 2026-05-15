@@ -178,6 +178,28 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert ai_context["summary"]["events"] == 6
 
 
+def test_html_report_maps_mmv2_package_to_mcd2_carrier(tmp_path):
+    event = replace(
+        make_event(0, 250, "1.1.7", message="OK"),
+        package="mmv2-x86_64-1.1.7",
+        carrier="mmv2",
+        platform="x86_64",
+        bm_type=None,
+        reader_type=None,
+        raw_line="2026-04-29 PaymentStart, resp: {Code:0 Message:OK} p: mmv2-x86_64-1.1.7",
+    )
+    result = analyze_events([event])
+
+    write_html_report([event], result, tmp_path / "analysis_report.html")
+
+    html = (tmp_path / "analysis_report.html").read_text(encoding="utf-8")
+    manifest = json.loads((tmp_path / "analysis_report.json").read_text(encoding="utf-8"))
+    assert "МЦД-2" in html
+    assert "1.1.7" in html
+    assert "mmv2" in html
+    assert manifest["counts"]["events"] == 1
+
+
 def test_html_report_hides_empty_sections(tmp_path):
     stats = PipelineStats(scanned_lines=1, malformed_payment_lines=0, extracted_files=0)
     event = replace(
