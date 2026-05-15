@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.6 - 2026-05-15
+
+### Changed
+
+- Checks section now shows matched rule count out of enabled rules and explains enabled rules that did not match.
+- Analyzer version bumped to `1.2.6`.
+
 ## 1.2.5 - 2026-05-15
 
 ### Changed

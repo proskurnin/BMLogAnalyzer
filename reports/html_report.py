@@ -10,10 +10,10 @@ from pathlib import Path
 from analytics.archive_inventory import bm_log_count, explicit_reader_log_count, explicit_system_log_count
 from analytics.bm_statuses import UNCLASSIFIED_STATUS, bm_status_summary_rows, classify_bm_status
 from analytics.ai_context import build_ai_context
-from analytics.check_cases import run_builtin_checks
+from analytics.check_cases import load_check_cases, run_builtin_checks
 from analytics.suspicious import suspicious_line_payloads
 from core.contracts import REPORT_MANIFEST_SCHEMA_VERSION
-from core.models import AnalysisResult, ArchiveInventoryRow, CheckResult, PaymentEvent, PipelineStats
+from core.models import AnalysisResult, ArchiveInventoryRow, CheckCase, CheckResult, PaymentEvent, PipelineStats
 from core.version import __version__
 
 LOG_GROUP_SPECS: list[tuple[str, set[str]]] = [
@@ -79,7 +79,8 @@ def render_html_report(
     bm_group_payloads = _bm_group_payloads(events, archive_names)
     validator_sections = _validator_analytics(events, archive_names)
     suspicious_rows = suspicious_line_payloads(events)
-    check_results = run_builtin_checks(events)
+    check_cases = [check for check in load_check_cases() if check.enabled]
+    check_results = run_builtin_checks(events, checks=check_cases)
     date_chart = _bm_date_chart(events)
     unclassified_diag = _unclassified_diagnostics(events)
     report_data = _report_data(
@@ -179,7 +180,7 @@ def render_html_report(
         [
             _collapsible_other_section(other_groups, other_total),
             f'<script id="report-data" type="application/json">{_json_script(report_data)}</script>',
-            _check_results_section(check_results),
+            _check_results_section(check_results, check_cases, events),
             _suspicious_section(suspicious_rows) if suspicious_rows else "",
             _bm_status_section(events, bm_group_rows, bm_group_payloads, date_chart, unclassified_diag, archive_names),
             _validator_section(validator_sections),
@@ -208,7 +209,8 @@ def render_html_report_manifest(
     archive_names = _archive_name_set(stats.input_files if stats else [])
     validator_sections = _validator_analytics(events, archive_names)
     suspicious_rows = suspicious_line_payloads(events)
-    check_results = run_builtin_checks(events)
+    check_cases = [check for check in load_check_cases() if check.enabled]
+    check_results = run_builtin_checks(events, checks=check_cases)
     stable_sections = [
         "summary",
         "bm_meta",
@@ -224,7 +226,7 @@ def render_html_report_manifest(
     if suspicious_rows:
         insert_at = stable_sections.index("bm_statuses")
         stable_sections.insert(insert_at, "suspicious")
-    if check_results:
+    if check_cases:
         insert_at = stable_sections.index("bm_statuses")
         stable_sections.insert(insert_at, "validation_checks")
     if unclassified_total := sum(int(row.get("count", 0)) for row in _unclassified_diagnostics(events)):
@@ -531,9 +533,12 @@ def _suspicious_section(rows: list[dict[str, object]]) -> str:
     )
 
 
-def _check_results_section(results: list[CheckResult]) -> str:
-    if not results:
+def _check_results_section(results: list[CheckResult], checks: list[CheckCase], events: list[PaymentEvent]) -> str:
+    if not checks:
         return ""
+    matched_check_ids = {result.check_id for result in results}
+    active_check_count = len(checks)
+    unmatched_checks = [check for check in checks if check.check_id not in matched_check_ids]
     rows = []
     for result in results:
         location = result.source_file
@@ -553,26 +558,83 @@ def _check_results_section(results: list[CheckResult]) -> str:
     for result in results:
         severity_counts[result.severity] += 1
     summary = ", ".join(f"{severity}: {count}" for severity, count in sorted(severity_counts.items()))
-    return "\n".join(
+    unmatched_rows = []
+    for check in unmatched_checks:
+        unmatched_rows.append(
+            '<tr class="status-row status-row--check-muted">'
+            f"<td>{escape(check.severity)}</td>"
+            f"<td><strong>{escape(check.title)}</strong><br><span class=\"muted\">{escape(check.check_id)}</span></td>"
+            f"<td>{escape(_unmatched_check_reason(check, events))}</td>"
+            "</tr>"
+        )
+    unmatched_block = ""
+    if unmatched_rows:
+        unmatched_block = "\n".join(
+            [
+                '<h3 class="checks-subtitle">Не сработали</h3>',
+                '<div class="table-wrap checks-table-wrap">',
+                '<table class="status-table status-table--checks">',
+                '<thead class="status-table-head"><tr><th>Severity</th><th>Проверка</th><th>Почему не сработала</th></tr></thead>',
+                f"<tbody>{''.join(unmatched_rows)}</tbody>",
+                "</table>",
+                "</div>",
+            ]
+        )
+    matched_block = "\n".join(
         [
-            '<details class="collapsible collapsible--checks">',
-            "<summary>",
-            "<span>",
-            "<strong>Проверки</strong>",
-            f"<em>Сработало правил: {len(results)}. {escape(summary)}</em>",
-            "</span>",
-            "</summary>",
-            '<div class="collapsible-body">',
             '<div class="table-wrap checks-table-wrap">',
             '<table class="status-table status-table--checks">',
             '<thead class="status-table-head"><tr><th>Источник</th><th>Severity</th><th>Проверка</th><th>Evidence</th><th>Строка лога</th></tr></thead>',
             f"<tbody>{''.join(rows)}</tbody>",
             "</table>",
             "</div>",
+        ]
+    )
+    if not rows:
+        matched_block = '<p class="muted checks-empty">Сработавших строк нет.</p>'
+    summary_text = escape(summary) if summary else "нет сработавших правил"
+    return "\n".join(
+        [
+            '<details class="collapsible collapsible--checks">',
+            "<summary>",
+            "<span>",
+            "<strong>Проверки</strong>",
+            f"<em>Сработало правил: {len(matched_check_ids)} из {active_check_count}. {summary_text}</em>",
+            "</span>",
+            "</summary>",
+            '<div class="collapsible-body">',
+            matched_block,
+            unmatched_block,
             "</div>",
             "</details>",
         ]
     )
+
+
+def _unmatched_check_reason(check: CheckCase, events: list[PaymentEvent]) -> str:
+    if not events:
+        return "Нет разобранных PaymentStart resp событий для проверки."
+    if check.condition_type == "builtin":
+        if check.check_id == "repeat_after_failure_3s":
+            return "Не найден повторный PaymentStart resp в том же source log в интервале 0-3 секунды после non-success события."
+        if check.check_id == "technical_error_code_3":
+            return "В разобранных событиях нет PaymentStart resp с Code:3."
+        if check.check_id == "timeout_code_16":
+            return "В разобранных событиях нет PaymentStart resp с Code:16."
+        if check.check_id == "many_declines_code_255":
+            return "В разобранных событиях нет PaymentStart resp с Code:255."
+        if check.check_id == "unknown_code_detected":
+            return "В разобранных событиях нет кодов вне таблицы классификации."
+        return "Условие встроенной проверки не найдено в разобранных событиях."
+    if check.condition_type == "code":
+        return f"В разобранных событиях нет PaymentStart resp с Code:{check.condition_value}."
+    if check.condition_type == "message_contains":
+        return f"В сообщениях и raw-строках нет фрагмента: {check.condition_value}."
+    if check.condition_type == "duration_gt":
+        return f"Нет событий с duration_ms больше {check.condition_value}."
+    if check.condition_type == "repeat_within_seconds":
+        return f"Не найден повторный PaymentStart resp в заданном интервале: {check.condition_value} секунд."
+    return "Условие проверки не найдено в разобранных событиях."
 
 
 def _check_result_payload(result: CheckResult) -> dict[str, object]:
@@ -2619,6 +2681,9 @@ h1, h2, p { margin: 0; }
 .suspicious-table-wrap { max-height: 560px; }
 .status-table--checks code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .status-row--check td { background: #f8fbff; }
+.status-row--check-muted td { background: #fbfcfe; color: #4f5d6b; }
+.checks-subtitle { margin: 16px 0 8px; font-size: 14px; line-height: 1.3; }
+.checks-empty { margin: 0 0 10px; }
 .checks-table-wrap { max-height: 560px; }
 .status-table--grouped .status-row--group td { background: transparent; }
 .status-table--grouped .status-row--success td { background: #eef8ee; }

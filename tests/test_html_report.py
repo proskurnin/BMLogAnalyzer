@@ -98,7 +98,9 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert "BM-статусы" in html
     assert "Подозрительно" in html
     assert "Проверки" in html
-    assert "Сработало правил" in html
+    assert "Сработало правил: 1 из 5" in html
+    assert "Не сработали" in html
+    assert "В разобранных событиях нет PaymentStart resp с Code:16." in html
     assert "status-table--checks" in html
     assert "Почему подозрительно" in html
     assert "collapsible--suspicious" in html
@@ -192,11 +194,13 @@ def test_html_report_hides_empty_sections(tmp_path):
     assert "<strong>Прочие файлы</strong>" not in html
     assert "Подозрительно" not in html
     assert "Подозрительных строк не найдено." not in html
-    assert "Проверки" not in html
+    assert "Проверки" in html
+    assert "Сработало правил: 0 из 5" in html
+    assert "Сработавших строк нет." in html
     assert 'id="bm-unclassified-root"><details' not in html
     assert 'id="bm-filter-root"' not in html
     assert "log_files" not in manifest["stable_sections"]
     assert "other_files" not in manifest["stable_sections"]
     assert "suspicious" not in manifest["stable_sections"]
-    assert "validation_checks" not in manifest["stable_sections"]
+    assert "validation_checks" in manifest["stable_sections"]
     assert "unclassified_diagnostics" not in manifest["stable_sections"]
