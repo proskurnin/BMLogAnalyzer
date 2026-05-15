@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.3 - 2026-05-15
+
+### Changed
+
+- HTML reports now show `Версии ПО ридеров` in `BM сведения`.
+- Reader firmware parsing now recognizes `ReaderVersion` markers in PaymentStart response lines.
+- Analyzer version bumped to `1.2.3`.
+
 ## 1.2.2 - 2026-05-15
 
 ### Changed

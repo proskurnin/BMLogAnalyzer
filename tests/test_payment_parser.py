@@ -131,5 +131,17 @@ def test_parses_payment_and_auth_types_from_structured_line():
     assert event.auth_type == 1
 
 
+def test_parses_reader_version_marker_as_reader_firmware():
+    line = (
+        "2026-04-29 20:50:41 PaymentStart resp: "
+        "{Code:0 Message:OK ReaderVersion:1.44.6518} duration=250 ms p: mgt_nbs-tt-4.4.6"
+    )
+
+    event = parse_payment_start_response(line)
+
+    assert event is not None
+    assert event.reader_firmware == "1.44.6518"
+
+
 def test_malformed_non_payment_line_returns_none():
     assert parse_payment_start_response("not a payment line") is None

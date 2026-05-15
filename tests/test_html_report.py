@@ -76,6 +76,7 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     events[3] = replace(events[3], raw_line="2026-05-05 PaymentStart, resp: {Code:3 Message:Ошибка чтения карты}")
     events[4] = replace(events[4], raw_line="2026-05-06 PaymentStart, resp: {Code:17 Message:Нет карты}")
     events[5] = replace(events[5], raw_line="2026-05-12 PaymentStart, resp: {Code:3 Message:Ошибка чтения карты}")
+    events[2] = replace(events[2], reader_firmware="1.44.6518", raw_line="2026-04-20 PaymentStart, resp: {Code:3 Message:Ошибка чтения карты ReaderVersion:1.44.6518}")
     result = analyze_events(events)
     write_html_report(events, result, tmp_path / "analysis_report.html", stats=stats)
 
@@ -98,6 +99,9 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert "Версии БМ" in html
     assert "Перевозчики" in html
     assert "Ридеры" in html
+    assert "Версии ПО ридеров" in html
+    assert "1.44.6518" in html
+    assert "reader_firmwares" in html
     assert "Даты" in html
     assert "id=\"bm-filter-root\"" in html
     assert "BM logs" in html

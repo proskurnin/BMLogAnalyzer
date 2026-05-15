@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 FIRMWARE_RE = re.compile(
-    r"(?:firmware|fw|reader[_ -]?firmware|reader[_ -]?fw)[:= ]+(?P<version>\d+(?:\.\d+)+)",
+    r"(?:firmware|fw|reader[_ -]?firmware|reader[_ -]?fw|reader[_ -]?version)[:= ]+(?P<version>\d+(?:\.\d+)+)",
     re.IGNORECASE,
 )
 

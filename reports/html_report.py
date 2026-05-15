@@ -70,6 +70,8 @@ def render_html_report(
     bm_carriers = _bm_carriers(events)
     bm_reader_records = _bm_reader_records(events, archive_names)
     reader_types = _reader_types(events)
+    reader_firmware_records = _reader_firmware_records(events, archive_names)
+    reader_firmwares = _reader_firmwares(events)
     bm_period = _bm_period(events)
     bm_date_records = _bm_date_records(events, archive_names)
     bm_group_rows = _bm_status_groups(events)
@@ -87,6 +89,7 @@ def render_html_report(
         bm_version_records=bm_version_records,
         bm_carrier_records=bm_carrier_records,
         bm_reader_records=bm_reader_records,
+        reader_firmware_records=reader_firmware_records,
         bm_date_records=bm_date_records,
         validator_sections=validator_sections,
     )
@@ -98,6 +101,8 @@ def render_html_report(
         carrier_records=bm_carrier_records,
         readers=reader_types,
         reader_records=bm_reader_records,
+        reader_firmwares=reader_firmwares,
+        reader_firmware_records=reader_firmware_records,
         period=bm_period,
         date_records=bm_date_records,
     )
@@ -302,6 +307,8 @@ def _bm_meta_cards(
     carrier_records: list[dict[str, object]],
     readers: str,
     reader_records: list[dict[str, object]],
+    reader_firmwares: str,
+    reader_firmware_records: list[dict[str, object]],
     period: str,
     date_records: list[dict[str, object]],
 ) -> str:
@@ -309,6 +316,7 @@ def _bm_meta_cards(
         ("Версии БМ", versions or "missing", version_records, "versions"),
         ("Перевозчики", carriers or "missing", carrier_records, "carriers"),
         ("Ридеры", readers or "missing", reader_records, "readers"),
+        ("Версии ПО ридеров", reader_firmwares or "missing", reader_firmware_records, "reader_firmwares"),
         ("Даты", period or "missing", date_records, "dates"),
     ]
     return "".join(
@@ -606,6 +614,7 @@ def _report_data(
     bm_version_records: list[dict[str, object]],
     bm_carrier_records: list[dict[str, object]],
     bm_reader_records: list[dict[str, object]],
+    reader_firmware_records: list[dict[str, object]],
     bm_date_records: list[dict[str, object]],
     validator_sections: list[dict[str, object]],
 ) -> dict[str, object]:
@@ -634,6 +643,7 @@ def _report_data(
             "versions": bm_version_records,
             "carriers": bm_carrier_records,
             "readers": bm_reader_records,
+            "reader_firmwares": reader_firmware_records,
             "dates": bm_date_records,
         },
         "validators": validator_sections,
@@ -1004,6 +1014,17 @@ def _bm_reader_records(events: list[PaymentEvent], archive_names: set[str]) -> l
     ]
 
 
+def _reader_firmware_records(events: list[PaymentEvent], archive_names: set[str]) -> list[dict[str, object]]:
+    counts: dict[str, list[PaymentEvent]] = defaultdict(list)
+    for event in events:
+        if event.reader_firmware:
+            counts[event.reader_firmware].append(event)
+    return [
+        _bm_selectable_record("reader_firmware", firmware, firmware_events, archive_names)
+        for firmware, firmware_events in sorted(counts.items())
+    ]
+
+
 def _bm_date_records(events: list[PaymentEvent], archive_names: set[str]) -> list[dict[str, object]]:
     counts: dict[str, list[PaymentEvent]] = defaultdict(list)
     for event in events:
@@ -1369,6 +1390,11 @@ def _reader_types(events: list[PaymentEvent]) -> str:
     return ", ".join(dict.fromkeys(mapping.get(reader_type, reader_type) for reader_type in types)) if types else "missing"
 
 
+def _reader_firmwares(events: list[PaymentEvent]) -> str:
+    firmwares = sorted({event.reader_firmware for event in events if event.reader_firmware})
+    return ", ".join(firmwares) if firmwares else "missing"
+
+
 def _bm_period(events: list[PaymentEvent]) -> str:
     timestamps = sorted(event.timestamp for event in events if event.timestamp)
     if not timestamps:
@@ -1571,11 +1597,12 @@ def _script() -> str:
     'Отказ, операция отклонена'
   ]);
   const filterLabels = {
-    versions: 'Версии БМ',
-    carriers: 'Перевозчики',
-    readers: 'Ридеры',
-    dates: 'Даты'
-  };
+      versions: 'Версии БМ',
+      carriers: 'Перевозчики',
+      readers: 'Ридеры',
+      reader_firmwares: 'Версии ПО ридеров',
+      dates: 'Даты'
+    };
   const filterGroupOrder = [
     { name: 'versions', label: 'Версии БМ' },
     { name: 'carriers', label: 'Перевозчики' },
@@ -1596,6 +1623,7 @@ def _script() -> str:
       versions: new Map((meta.versions || []).map((item) => [String(item.version || ''), item])),
       carriers: new Map((meta.carriers || []).map((item) => [String(item.carrier || ''), item])),
       readers: new Map((meta.readers || []).map((item) => [String(item.reader || ''), item])),
+      reader_firmwares: new Map((meta.reader_firmwares || []).map((item) => [String(item.reader_firmware || ''), item])),
       dates: new Map((meta.dates || []).map((item) => [String(item.date || ''), item]))
     };
   }
@@ -1715,7 +1743,7 @@ def _script() -> str:
       return `
         <div class="modal-item">
           <div class="modal-item-head">
-            <strong>${escapeHtml(String(item.version || item.carrier || item.reader || item.date || ''))}</strong>
+            <strong>${escapeHtml(String(item.version || item.carrier || item.reader || item.reader_firmware || item.date || ''))}</strong>
             <span>${escapeHtml(String(item.count ?? 0))} событий</span>
           </div>
           ${archives ? `<ul class="modal-lines">${archives}</ul>` : '<p class="muted">Нет данных по архивам</p>'}
@@ -1750,10 +1778,11 @@ def _script() -> str:
       versions: 'Найденные версии BM и архивы, где они встречаются.',
       carriers: 'Перевозчики, найденные в логах, и признаки, по которым они определены.',
       readers: 'Типы ридеров и архивы, в которых они встречаются.',
+      reader_firmwares: 'Версии ПО ридеров из маркеров ReaderVersion, firmware или fw.',
       dates: 'Даты из логов и количество событий на каждой дате.'
     };
     const rendered = items.map((item) => {
-      const titleValue = item.version || item.carrier || item.reader || item.date || 'Данные';
+      const titleValue = item.version || item.carrier || item.reader || item.reader_firmware || item.date || 'Данные';
       const count = Number(item.count || 0);
       const archiveRows = (item.archives || []).map((archive) => {
         return `<li>${escapeHtml(String(archive.archive || ''))} · ${escapeHtml(String(archive.count || 0))}</li>`;
