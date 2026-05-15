@@ -30,6 +30,7 @@ class _InventoryBuilder:
     reader_models: set[str] = field(default_factory=set)
     reader_firmware_versions: set[str] = field(default_factory=set)
     error_status_counts: Counter[str] = field(default_factory=Counter)
+    evidence_samples: dict[str, list[str]] = field(default_factory=dict)
 
 
 class LogInventoryCollector:
@@ -149,6 +150,8 @@ def _observe_bm(item: _InventoryBuilder, line: str) -> None:
     if package:
         item.content_hints.add("content:bm_package")
         item.bm_versions.add(package.bm_version)
+        _add_evidence_sample(item, f"bm_version:{package.bm_version}", line)
+        _add_evidence_sample(item, f"carrier:{package.carrier}", line)
     if "PaymentStart" in line:
         item.content_hints.add("content:PaymentStart")
 
@@ -158,10 +161,13 @@ def _observe_reader(item: _InventoryBuilder, line: str) -> None:
     if firmware:
         item.content_hints.add("content:reader_firmware")
         item.reader_firmware_versions.add(firmware)
+        _add_evidence_sample(item, f"reader_firmware:{firmware}", line)
     model_match = READER_MODEL_RE.search(line)
     if model_match:
         item.content_hints.add("content:reader_model")
-        item.reader_models.add(model_match.group("model"))
+        model = model_match.group("model")
+        item.reader_models.add(model)
+        _add_evidence_sample(item, f"reader_model:{model}", line)
 
 
 def _observe_system(item: _InventoryBuilder, line: str) -> None:
@@ -199,6 +205,7 @@ def _build_inventory(item: _InventoryBuilder) -> LogFileInventory:
         reader_models=sorted(item.reader_models),
         reader_firmware_versions=sorted(item.reader_firmware_versions),
         error_status_counts=dict(item.error_status_counts.most_common()),
+        evidence_samples={key: values[:5] for key, values in sorted(item.evidence_samples.items())},
     )
 
 
@@ -211,3 +218,12 @@ def _detect_log_type(item: _InventoryBuilder) -> str:
     if "content:system" in hints or "path:system" in hints:
         return "system"
     return "other"
+
+
+def _add_evidence_sample(item: _InventoryBuilder, key: str, line: str) -> None:
+    samples = item.evidence_samples.setdefault(key, [])
+    if len(samples) >= 5:
+        return
+    value = line.rstrip("\n")
+    if value and value not in samples:
+        samples.append(value)

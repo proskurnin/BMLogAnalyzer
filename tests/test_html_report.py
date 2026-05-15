@@ -197,6 +197,9 @@ def test_html_report_maps_mmv2_package_to_mcd2_carrier(tmp_path):
     assert "МЦД-2" in html
     assert "1.1.7" in html
     assert "mmv2" in html
+    assert "modal-value-link" in html
+    assert "data-evidence-label" in html
+    assert "Строки лога, из которых получено значение" in html
     assert manifest["counts"]["events"] == 1
 
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.0 - 2026-05-15
+
+### Added
+
+- BM meta-card modal values now open evidence rows showing the log snippets used for versions, carriers, readers, dates, and reader firmware values.
+- Admin now includes a `Справочники` section with an editable carrier marker directory stored in JSON settings.
+- Carrier detection now supports editable markers and default MCD mappings: `mmv1` -> `МЦД-1`, `mmv2` -> `МЦД-2`, `mmv3` -> `МЦД-3`, `mmv4` -> `МЦД-4`.
+- Analyzer version bumped to `1.3.0`.
+
 ## 1.2.7 - 2026-05-15
 
 ### Changed

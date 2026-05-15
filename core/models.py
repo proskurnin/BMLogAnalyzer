@@ -101,6 +101,7 @@ class LogFileInventory:
     reader_models: list[str] = field(default_factory=list)
     reader_firmware_versions: list[str] = field(default_factory=list)
     error_status_counts: dict[str, int] = field(default_factory=dict)
+    evidence_samples: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

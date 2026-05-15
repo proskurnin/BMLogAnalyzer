@@ -8,6 +8,7 @@ from typing import Any
 from html import escape
 from zoneinfo import ZoneInfo
 from analytics.ai_analysis import ai_analysis_enabled, run_ai_analysis
+from analytics.carrier_directory import load_carrier_rules, reset_carrier_rules, update_carrier_rules
 from analytics.check_cases import create_check_case, list_check_cases, reset_check_cases, update_check_case
 from core.verification import run_healthchecks, run_readiness_check
 from core.version import format_version
@@ -171,6 +172,19 @@ def create_app() -> Any:
             cleanup_expired_storage()
         except ValueError as exc:
             return HTMLResponse(_admin_html(None, str(exc)), status_code=400)
+        return RedirectResponse("/admin", status_code=303)
+
+    @app.post("/admin/dictionaries/carriers")
+    def admin_update_carriers(
+        carrier_name: list[str] = Form([]),
+        carrier_markers: list[str] = Form([]),
+    ):
+        update_carrier_rules(carrier_name, carrier_markers)
+        return RedirectResponse("/admin", status_code=303)
+
+    @app.post("/admin/dictionaries/carriers/reset")
+    def admin_reset_carriers():
+        reset_carrier_rules()
         return RedirectResponse("/admin", status_code=303)
 
     @app.post("/admin/check-cases/update")
@@ -1224,6 +1238,24 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
             </tr>
             """
         )
+    carrier_rows = []
+    for carrier in load_carrier_rules():
+        carrier_rows.append(
+            f"""
+            <tr>
+              <td><input name="carrier_name" value="{escape(carrier.name)}" placeholder="Название перевозчика"></td>
+              <td><input name="carrier_markers" value="{escape(', '.join(carrier.markers))}" placeholder="Признаки через запятую"></td>
+            </tr>
+            """
+        )
+    carrier_rows.append(
+        """
+        <tr>
+          <td><input name="carrier_name" placeholder="Новый перевозчик"></td>
+          <td><input name="carrier_markers" placeholder="marker1, marker2"></td>
+        </tr>
+        """
+    )
     error_html = f'<div class="error">{escape(error)}</div>' if error else ""
     return f"""
 <!doctype html>
@@ -1305,6 +1337,24 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
                   <tbody>{"".join(check_rows)}</tbody>
                 </table>
               </div>
+            </div>
+          </details>
+          <details class="admin-section" data-section-id="dictionaries">
+            <summary><span>Справочники</span><strong>{len(load_carrier_rules())}</strong></summary>
+            <div class="admin-section__body">
+              <div class="muted">Справочник перевозчиков используется в отчётах для секции BM сведения. Признаки указываются через запятую и ищутся в package/raw-строках логов.</div>
+              <form method="post" action="/admin/dictionaries/carriers">
+                <div class="table-wrap">
+                  <table>
+                    <thead><tr><th>Название перевозчика</th><th>Признаки в логах</th></tr></thead>
+                    <tbody>{"".join(carrier_rows)}</tbody>
+                  </table>
+                </div>
+                <button type="submit">Сохранить справочник</button>
+              </form>
+              <form method="post" action="/admin/dictionaries/carriers/reset" class="inline-form">
+                <button type="submit">Сбросить справочник перевозчиков</button>
+              </form>
             </div>
           </details>
         </div>

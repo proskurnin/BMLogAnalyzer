@@ -106,7 +106,7 @@ def test_login_page_contains_version_and_signature(tmp_path, monkeypatch):
     response = client.get("/login")
 
     assert response.status_code == 200
-    assert "версия сервиса 1.2.7" in response.text
+    assert "версия сервиса 1.3.0" in response.text
     assert 'class="brand"' in response.text
     assert "made with ♥ by Roman A. Proskurnin" in response.text
 
@@ -199,11 +199,16 @@ def test_admin_user_management_and_profile_files(tmp_path, monkeypatch):
     assert "Правила применяются при формировании" in admin_page.text
     assert admin_page.text.index("<span>Пользователи</span>") < admin_page.text.index("<span>Политики хранения</span>")
     assert admin_page.text.index("<span>Политики хранения</span>") < admin_page.text.index("<span>Каталог проверок</span>")
-    assert admin_page.text.count('<details class="admin-section" data-section-id=') == 3
+    assert admin_page.text.index("<span>Каталог проверок</span>") < admin_page.text.index("<span>Справочники</span>")
+    assert admin_page.text.count('<details class="admin-section" data-section-id=') == 4
     assert '<details class="admin-section" open>' not in admin_page.text
     assert 'data-section-id="users"' in admin_page.text
     assert 'data-section-id="storage"' in admin_page.text
     assert 'data-section-id="checks"' in admin_page.text
+    assert 'data-section-id="dictionaries"' in admin_page.text
+    assert "Справочник перевозчиков" in admin_page.text
+    assert "МЦД-2" in admin_page.text
+    assert "mmv2" in admin_page.text
     assert "Срок хранения архивов, дни" in admin_page.text
     assert "Дата добавления (Мск)" in admin_page.text
     assert 'data-sort-key="name"' in admin_page.text
@@ -272,7 +277,7 @@ def test_web_index_contains_upload_landing():
     html = _index_html()
 
     assert "BM Log Analyzer" in html
-    assert "версия сервиса 1.2.7" in html
+    assert "версия сервиса 1.3.0" in html
     assert "picker_menu" not in html
     assert "Выбрать файлы</button>" not in html
     assert "Выбрать папку</button>" not in html
@@ -308,7 +313,7 @@ def test_uploads_page_contains_table_and_actions():
     assert response.status_code == 200
     html = response.text
     assert "Загрузки" in html
-    assert "<strong>BM Log Analyzer</strong><span>версия сервиса 1.2.7</span>" in html
+    assert "<strong>BM Log Analyzer</strong><span>версия сервиса 1.3.0</span>" in html
     assert "BM Log Analyzer ·" not in html
     assert "Сформировать отчёт по выбранным" in html
     assert "Дата загрузки (Мск)" in html

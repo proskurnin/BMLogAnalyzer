@@ -10,6 +10,7 @@ from pathlib import Path
 from analytics.archive_inventory import bm_log_count, explicit_reader_log_count, explicit_system_log_count
 from analytics.bm_statuses import UNCLASSIFIED_STATUS, bm_status_summary_rows, classify_bm_status
 from analytics.ai_context import build_ai_context
+from analytics.carrier_directory import carrier_markers_for_text, carrier_names_for_text, load_carrier_rules
 from analytics.check_cases import load_check_cases, run_builtin_checks
 from analytics.suspicious import suspicious_line_payloads
 from core.contracts import REPORT_MANIFEST_SCHEMA_VERSION
@@ -1040,32 +1041,59 @@ def _bm_selectable_record(
     markers: bool = False,
 ) -> dict[str, object]:
     archives_by_name: dict[str, dict[str, object]] = defaultdict(lambda: {"archive": "", "count": 0})
+    evidence_rows = []
     for event in events:
         archive_name = _archive_from_source(event.source_file, archive_names)
         item = archives_by_name[archive_name]
         item["archive"] = archive_name
         item["count"] = int(item["count"]) + 1
+        evidence_rows.append(_event_evidence_row(event, archive_name))
     record: dict[str, object] = {
         kind: value,
         "count": len(events),
         "archives": [archives_by_name[archive] for archive in sorted(archives_by_name)],
+        "evidence": evidence_rows[:25],
     }
     if markers:
         record["markers"] = sorted({marker for event in events for marker in _carrier_markers(event)})
     return record
 
 
+def _event_evidence_row(event: PaymentEvent, archive_name: str) -> dict[str, object]:
+    return {
+        "archive": archive_name,
+        "source_file": event.source_file,
+        "line_number": event.line_number,
+        "timestamp": event.timestamp.isoformat(sep=" ") if event.timestamp else "",
+        "raw_line": event.raw_line,
+    }
+
+
+def _inventory_evidence_rows(item: object, key: str, archive_name: str) -> list[dict[str, object]]:
+    source_file = str(getattr(item, "source_file", ""))
+    samples = (getattr(item, "evidence_samples", {}) or {}).get(key, [])
+    if not samples:
+        samples = [str(getattr(item, "evidence", ""))]
+    return [
+        {
+            "archive": archive_name,
+            "source_file": source_file,
+            "line_number": "",
+            "timestamp": "",
+            "raw_line": sample,
+        }
+        for sample in samples[:25]
+        if sample
+    ]
+
+
 def _bm_carrier_records(events: list[PaymentEvent], archive_names: set[str]) -> list[dict[str, object]]:
     records: list[dict[str, object]] = []
-    nbs_events = [event for event in events if _is_nbs_event(event)]
-    askp_events = [event for event in events if _is_askp_event(event)]
-    mcd2_events = [event for event in events if _is_mcd2_event(event)]
-    if nbs_events:
-        records.append(_bm_selectable_record("carrier", "НБС", nbs_events, archive_names, markers=True))
-    if askp_events:
-        records.append(_bm_selectable_record("carrier", "АСКП", askp_events, archive_names, markers=True))
-    if mcd2_events:
-        records.append(_bm_selectable_record("carrier", "МЦД-2", mcd2_events, archive_names, markers=True))
+    rules = load_carrier_rules()
+    for rule in rules:
+        rule_events = [event for event in events if _carrier_event_matches(event, rule.markers)]
+        if rule_events:
+            records.append(_bm_selectable_record("carrier", rule.name, rule_events, archive_names, markers=True))
     return records
 
 
@@ -1105,6 +1133,7 @@ def _reader_firmware_records(
                     "reader_firmware": firmware,
                     "count": 1,
                     "archives": [{"archive": archive_name, "count": 1}],
+                    "evidence": _inventory_evidence_rows(item, f"reader_firmware:{firmware}", archive_name),
                 }
             )
             seen.add(firmware)
@@ -1432,21 +1461,11 @@ def _bm_versions(events: list[PaymentEvent]) -> str:
 
 
 def _bm_version_records(events: list[PaymentEvent], archive_names: set[str]) -> list[dict[str, object]]:
-    counts: dict[str, int] = defaultdict(int)
-    archives_by_version: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    grouped: dict[str, list[PaymentEvent]] = defaultdict(list)
     for event in events:
         if event.bm_version:
-            counts[event.bm_version] += 1
-            archive_name = _archive_from_source(event.source_file, archive_names)
-            archives_by_version[event.bm_version][archive_name] += 1
-    records: list[dict[str, object]] = []
-    for version in sorted(counts):
-        archives = [
-            {"archive": archive, "count": archives_by_version[version][archive]}
-            for archive in sorted(archives_by_version[version])
-        ]
-        records.append({"version": version, "count": counts[version], "archives": archives})
-    return records
+            grouped[event.bm_version].append(event)
+    return [_bm_selectable_record("version", version, grouped[version], archive_names) for version in sorted(grouped)]
 
 
 def _bm_version_count(events: list[PaymentEvent]) -> int:
@@ -1455,20 +1474,9 @@ def _bm_version_count(events: list[PaymentEvent]) -> int:
 
 def _bm_carriers(events: list[PaymentEvent]) -> str:
     carriers: list[str] = []
-    if any(
-        (event.package and "mgt_nbs" in event.package.lower())
-        or (event.raw_line and "mgt_nbs" in event.raw_line.lower())
-        for event in events
-    ):
-        carriers.append("НБС")
-    if any(
-        (event.package and "mgt_askp" in event.package.lower())
-        or (event.raw_line and "askp" in event.raw_line.lower())
-        for event in events
-    ):
-        carriers.append("АСКП")
-    if any(_is_mcd2_event(event) for event in events):
-        carriers.append("МЦД-2")
+    rules = load_carrier_rules()
+    for event in events:
+        carriers.extend(carrier_names_for_text(_carrier_search_text(event), rules))
     return ", ".join(dict.fromkeys(carriers)) if carriers else "missing"
 
 
@@ -1499,47 +1507,21 @@ def _bm_period(events: list[PaymentEvent]) -> str:
     return f"{start_text} - {end_text}"
 
 
-def _is_nbs_event(event: PaymentEvent) -> bool:
-    return bool(
-        (event.package and "mgt_nbs" in event.package.lower())
-        or (event.raw_line and "mgt_nbs" in event.raw_line.lower())
-    )
+def _carrier_event_matches(event: PaymentEvent, markers: list[str]) -> bool:
+    text = _carrier_search_text(event)
+    return any(marker.lower() in text for marker in markers)
 
 
-def _is_askp_event(event: PaymentEvent) -> bool:
-    return bool(
-        (event.package and "mgt_askp" in event.package.lower())
-        or (event.raw_line and "askp" in event.raw_line.lower())
-    )
-
-
-def _is_mcd2_event(event: PaymentEvent) -> bool:
-    return bool(
-        event.carrier == "mmv2"
-        or (event.package and event.package.lower().startswith("mmv2-"))
-        or (event.raw_line and "mmv2-" in event.raw_line.lower())
+def _carrier_search_text(event: PaymentEvent) -> str:
+    return " ".join(
+        value.lower()
+        for value in (event.carrier, event.package, event.raw_line)
+        if value
     )
 
 
 def _carrier_markers(event: PaymentEvent) -> set[str]:
-    markers: set[str] = set()
-    if event.package:
-        lowered = event.package.lower()
-        if "mgt_nbs" in lowered:
-            markers.add("mgt_nbs")
-        if "mgt_askp" in lowered:
-            markers.add("mgt_askp")
-        if lowered.startswith("mmv2-"):
-            markers.add("mmv2")
-    if event.raw_line:
-        lowered = event.raw_line.lower()
-        if "mgt_nbs" in lowered:
-            markers.add("mgt_nbs")
-        if "mgt_askp" in lowered:
-            markers.add("mgt_askp")
-        if "mmv2-" in lowered:
-            markers.add("mmv2")
-    return markers
+    return carrier_markers_for_text(_carrier_search_text(event))
 
 
 def _archive_from_source(source_file: str, archive_names: set[str]) -> str:
@@ -1665,6 +1647,7 @@ def _script() -> str:
   const bmUnclassifiedRoot = document.getElementById('bm-unclassified-root');
   const activeFiltersRoot = document.getElementById('active-filters');
   const bmFilterRoot = document.getElementById('bm-filter-root');
+  let currentMetaState = null;
   const statusOrder = [
     'Успешный онлайн (БЕЗ МИР)',
     'Успешный онлайн МИР',
@@ -1756,6 +1739,7 @@ def _script() -> str:
       : format === 'records'
       ? renderRecordItems(payload)
       : renderFileItems(payload);
+    currentMetaState = kind === 'meta' ? { label, metaKind, payload } : null;
     modal.hidden = false;
     document.body.classList.add('modal-open');
     syncFilterButtonState();
@@ -1887,6 +1871,8 @@ def _script() -> str:
     const rendered = items.map((item) => {
       const titleValue = item.version || item.carrier || item.reader || item.reader_firmware || item.date || 'Данные';
       const count = Number(item.count || 0);
+      const evidence = item.evidence || [];
+      const evidencePayload = escapeHtml(JSON.stringify(evidence));
       const archiveRows = (item.archives || []).map((archive) => {
         return `<li>${escapeHtml(String(archive.archive || ''))} · ${escapeHtml(String(archive.count || 0))}</li>`;
       }).join('');
@@ -1896,7 +1882,9 @@ def _script() -> str:
       return `
         <div class="modal-item">
           <div class="modal-item-head">
-            <strong>${escapeHtml(String(titleValue))}</strong>
+            <button type="button" class="modal-value-link" data-evidence-label="${escapeHtml(String(titleValue))}" data-evidence="${evidencePayload}">
+              ${escapeHtml(String(titleValue))}
+            </button>
             <span>${escapeHtml(String(count))} событий</span>
           </div>
           ${normalizedKind === 'carriers' && markerRows ? markerRows : ''}
@@ -1909,6 +1897,31 @@ def _script() -> str:
         <span class="muted">Всего: ${escapeHtml(String(total))}</span>
       </div>
       ${rendered}`;
+  }
+
+  function renderEvidenceDetails(label, evidence) {
+    if (!evidence || !evidence.length) {
+      return `
+        <button type="button" class="modal-back" data-action="back-to-meta">Назад</button>
+        <p class="muted">Строки-источники для этого значения не сохранены.</p>`;
+    }
+    const rows = evidence.map((line) => `
+      <li>
+        <div class="modal-line-head">
+          <span>${escapeHtml(String(line.source_file || line.archive || ''))}</span>
+          <em>${escapeHtml(String(line.line_number || ''))}${line.timestamp ? ` · ${escapeHtml(String(line.timestamp))}` : ''}</em>
+        </div>
+        <code>${highlightLine(String(line.raw_line || ''), [label])}</code>
+      </li>`).join('');
+    return `
+      <button type="button" class="modal-back" data-action="back-to-meta">Назад</button>
+      <div class="modal-item">
+        <div class="modal-item-head">
+          <strong>${escapeHtml(String(label))}</strong>
+          <span>${escapeHtml(String(evidence.length))} строк</span>
+        </div>
+        <ul class="modal-lines">${rows}</ul>
+      </div>`;
   }
 
   function renderFilterPanel() {
@@ -2007,6 +2020,7 @@ def _script() -> str:
 
   function closeModal() {
     modal.hidden = true;
+    currentMetaState = null;
     document.body.classList.remove('modal-open');
   }
 
@@ -2505,6 +2519,7 @@ def _script() -> str:
       : format === 'records'
       ? renderRecordItems(payload)
       : renderFileItems(payload);
+    currentMetaState = kind === 'meta' ? { label, metaKind, payload } : null;
     modal.hidden = false;
     document.body.classList.add('modal-open');
     syncFilterButtonState();
@@ -2512,6 +2527,7 @@ def _script() -> str:
 
   function closeModal() {
     modal.hidden = true;
+    currentMetaState = null;
     document.body.classList.remove('modal-open');
   }
 
@@ -2534,6 +2550,27 @@ def _script() -> str:
     openModal(interactive);
   });
   document.addEventListener('click', (event) => {
+    const evidenceButton = event.target.closest('[data-evidence]');
+    if (evidenceButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      const label = evidenceButton.dataset.evidenceLabel || 'Данные';
+      const evidence = JSON.parse(evidenceButton.dataset.evidence || '[]');
+      title.textContent = label;
+      subtitle.textContent = 'Строки лога, из которых получено значение';
+      body.innerHTML = renderEvidenceDetails(label, evidence);
+      return;
+    }
+    const backToMeta = event.target.closest('[data-action="back-to-meta"]');
+    if (backToMeta && currentMetaState) {
+      event.preventDefault();
+      event.stopPropagation();
+      title.textContent = currentMetaState.label;
+      subtitle.textContent = 'Подробная информация по выбранному блоку';
+      body.innerHTML = renderMetaDetails(currentMetaState.label, currentMetaState.metaKind, currentMetaState.payload);
+      syncFilterButtonState();
+      return;
+    }
     const clearAll = event.target.closest('[data-action="clear-all-filters"]');
     if (clearAll) {
       event.preventDefault();
@@ -2740,6 +2777,10 @@ h1, h2, p { margin: 0; }
 .modal-item { border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: var(--soft); }
 .modal-item-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
 .modal-item-head span { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.modal-value-link { appearance: none; border: 0; background: transparent; padding: 0; color: var(--primary); font: inherit; font-weight: 700; cursor: pointer; text-align: left; }
+.modal-value-link:hover { text-decoration: underline; }
+.modal-back { appearance: none; border: 1px solid #cfd8e3; background: #fff; color: var(--primary); border-radius: 6px; padding: 7px 10px; font-weight: 700; cursor: pointer; margin-bottom: 12px; }
+.modal-back:hover { background: #f6f8fb; }
 .modal-files, .modal-lines { margin: 10px 0 0; padding-left: 18px; color: var(--text); max-height: 44vh; overflow: auto; }
 .modal-files li, .modal-lines li { margin-top: 4px; word-break: break-word; }
 .modal-line-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; margin-bottom: 4px; }
