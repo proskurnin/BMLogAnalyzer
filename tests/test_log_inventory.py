@@ -15,7 +15,7 @@ def test_collects_log_inventory_by_type_versions_dates_and_reader_metadata():
         "bm/a.log",
         "2026-04-30 10:00:00.000 PaymentStart, resp: {Code:0 Message:OK} p: mgt_nbs-oti-4.4.12",
     )
-    collector.observe_line("reader/r.log", "2026-05-01 reader model=RDR-1 firmware:1.2.3 error: bad frame")
+    collector.observe_line("reader/r.log", "2026-05-01 reader model=RDR-1 ReaderVersion:1.2.3 error: bad frame")
     collector.observe_line("system/syslog.log", "2026-05-02 kernel: timeout waiting for service")
     collector.observe_line("misc/app.log", "2026-05-03 hello")
 

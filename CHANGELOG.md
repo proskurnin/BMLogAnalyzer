@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.4 - 2026-05-15
+
+### Changed
+
+- `Версии ПО ридеров` in HTML reports now also uses reader firmware values found by log inventory outside PaymentStart response lines.
+- Analyzer version bumped to `1.2.4`.
+
 ## 1.2.3 - 2026-05-15
 
 ### Changed

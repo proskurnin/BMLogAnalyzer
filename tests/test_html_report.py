@@ -3,7 +3,7 @@ from dataclasses import replace
 import json
 
 from analytics.counters import analyze_events
-from core.models import ArchiveInventoryRow, PipelineStats
+from core.models import ArchiveInventoryRow, LogFileInventory, PipelineStats
 from core.version import __version__
 from reports.html_report import write_html_report
 from tests.test_counters import make_event
@@ -16,6 +16,15 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
         extracted_files=4,
         input_files=["input/2007201.zip"],
         analyzed_files=["input/bm.log", "input/reader.log", "input/system.log", "input/other.log"],
+        log_inventory=[
+            LogFileInventory(
+                source_file="_workdir/extracted/2007201.zip/logs/reader/reader.log",
+                log_type="reader",
+                detection_method="content",
+                evidence="content:reader_firmware",
+                reader_firmware_versions=["1.44.6518"],
+            )
+        ],
         archive_inventory=[
             ArchiveInventoryRow(
                 archive="input/2007201.zip",
@@ -76,7 +85,7 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     events[3] = replace(events[3], raw_line="2026-05-05 PaymentStart, resp: {Code:3 Message:Ошибка чтения карты}")
     events[4] = replace(events[4], raw_line="2026-05-06 PaymentStart, resp: {Code:17 Message:Нет карты}")
     events[5] = replace(events[5], raw_line="2026-05-12 PaymentStart, resp: {Code:3 Message:Ошибка чтения карты}")
-    events[2] = replace(events[2], reader_firmware="1.44.6518", raw_line="2026-04-20 PaymentStart, resp: {Code:3 Message:Ошибка чтения карты ReaderVersion:1.44.6518}")
+    events[2] = replace(events[2], raw_line="2026-04-20 PaymentStart, resp: {Code:3 Message:Ошибка чтения карты}")
     result = analyze_events(events)
     write_html_report(events, result, tmp_path / "analysis_report.html", stats=stats)
 

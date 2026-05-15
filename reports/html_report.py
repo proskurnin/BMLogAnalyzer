@@ -70,8 +70,9 @@ def render_html_report(
     bm_carriers = _bm_carriers(events)
     bm_reader_records = _bm_reader_records(events, archive_names)
     reader_types = _reader_types(events)
-    reader_firmware_records = _reader_firmware_records(events, archive_names)
-    reader_firmwares = _reader_firmwares(events)
+    log_inventory = stats.log_inventory if stats else []
+    reader_firmware_records = _reader_firmware_records(events, archive_names, log_inventory)
+    reader_firmwares = _reader_firmwares(events, log_inventory)
     bm_period = _bm_period(events)
     bm_date_records = _bm_date_records(events, archive_names)
     bm_group_rows = _bm_status_groups(events)
@@ -1014,15 +1015,35 @@ def _bm_reader_records(events: list[PaymentEvent], archive_names: set[str]) -> l
     ]
 
 
-def _reader_firmware_records(events: list[PaymentEvent], archive_names: set[str]) -> list[dict[str, object]]:
+def _reader_firmware_records(
+    events: list[PaymentEvent],
+    archive_names: set[str],
+    log_inventory: list[object] | None = None,
+) -> list[dict[str, object]]:
     counts: dict[str, list[PaymentEvent]] = defaultdict(list)
     for event in events:
         if event.reader_firmware:
             counts[event.reader_firmware].append(event)
-    return [
+    records = [
         _bm_selectable_record("reader_firmware", firmware, firmware_events, archive_names)
         for firmware, firmware_events in sorted(counts.items())
     ]
+    seen = {str(record["reader_firmware"]) for record in records}
+    for item in log_inventory or []:
+        firmwares = getattr(item, "reader_firmware_versions", []) or []
+        for firmware in firmwares:
+            if firmware in seen:
+                continue
+            archive_name = _archive_from_source(str(getattr(item, "source_file", "")), archive_names)
+            records.append(
+                {
+                    "reader_firmware": firmware,
+                    "count": 1,
+                    "archives": [{"archive": archive_name, "count": 1}],
+                }
+            )
+            seen.add(firmware)
+    return sorted(records, key=lambda record: str(record["reader_firmware"]))
 
 
 def _bm_date_records(events: list[PaymentEvent], archive_names: set[str]) -> list[dict[str, object]]:
@@ -1390,8 +1411,11 @@ def _reader_types(events: list[PaymentEvent]) -> str:
     return ", ".join(dict.fromkeys(mapping.get(reader_type, reader_type) for reader_type in types)) if types else "missing"
 
 
-def _reader_firmwares(events: list[PaymentEvent]) -> str:
-    firmwares = sorted({event.reader_firmware for event in events if event.reader_firmware})
+def _reader_firmwares(events: list[PaymentEvent], log_inventory: list[object] | None = None) -> str:
+    firmwares = {event.reader_firmware for event in events if event.reader_firmware}
+    for item in log_inventory or []:
+        firmwares.update(getattr(item, "reader_firmware_versions", []) or [])
+    firmwares = sorted(firmwares)
     return ", ".join(firmwares) if firmwares else "missing"
 
 
