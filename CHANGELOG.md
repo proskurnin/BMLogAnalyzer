@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.0 - 2026-05-15
+
+### Added
+
+- Admin dictionaries now provide full carrier management with per-row create, edit, delete, reset, and regex/contains matching modes.
+- Admin user and carrier rows now use compact icon actions for save/delete.
+- Report links in upload/history flows now open in the current window.
+- Analyzer version bumped to `1.4.0`.
+
 ## 1.3.0 - 2026-05-15
 
 ### Added

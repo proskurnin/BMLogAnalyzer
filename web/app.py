@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -8,7 +9,7 @@ from typing import Any
 from html import escape
 from zoneinfo import ZoneInfo
 from analytics.ai_analysis import ai_analysis_enabled, run_ai_analysis
-from analytics.carrier_directory import load_carrier_rules, reset_carrier_rules, update_carrier_rules
+from analytics.carrier_directory import create_carrier_rule, delete_carrier_rule, load_carrier_rules, reset_carrier_rules, update_carrier_rule
 from analytics.check_cases import create_check_case, list_check_cases, reset_check_cases, update_check_case
 from core.verification import run_healthchecks, run_readiness_check
 from core.version import format_version
@@ -174,12 +175,37 @@ def create_app() -> Any:
             return HTMLResponse(_admin_html(None, str(exc)), status_code=400)
         return RedirectResponse("/admin", status_code=303)
 
-    @app.post("/admin/dictionaries/carriers")
-    def admin_update_carriers(
-        carrier_name: list[str] = Form([]),
-        carrier_markers: list[str] = Form([]),
+    @app.post("/admin/dictionaries/carriers/create")
+    def admin_create_carrier(
+        name: str = Form(...),
+        markers: str = Form(...),
+        match_type: str = Form("contains"),
     ):
-        update_carrier_rules(carrier_name, carrier_markers)
+        try:
+            create_carrier_rule(name=name, markers=markers, match_type=match_type)
+        except (ValueError, re.error) as exc:
+            return HTMLResponse(_admin_html(None, str(exc)), status_code=400)
+        return RedirectResponse("/admin", status_code=303)
+
+    @app.post("/admin/dictionaries/carriers/update")
+    def admin_update_carrier(
+        original_name: str = Form(...),
+        name: str = Form(...),
+        markers: str = Form(...),
+        match_type: str = Form("contains"),
+    ):
+        try:
+            update_carrier_rule(original_name, name=name, markers=markers, match_type=match_type)
+        except (ValueError, re.error) as exc:
+            return HTMLResponse(_admin_html(None, str(exc)), status_code=400)
+        return RedirectResponse("/admin", status_code=303)
+
+    @app.post("/admin/dictionaries/carriers/delete")
+    def admin_delete_carrier(name: str = Form(...)):
+        try:
+            delete_carrier_rule(name)
+        except ValueError as exc:
+            return HTMLResponse(_admin_html(None, str(exc)), status_code=400)
         return RedirectResponse("/admin", status_code=303)
 
     @app.post("/admin/dictionaries/carriers/reset")
@@ -1170,11 +1196,21 @@ def _format_moscow_datetime(value: str) -> str:
     return parsed.astimezone(ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y (%H:%M:%S)")
 
 
+def _icon(name: str) -> str:
+    icons = {
+        "save": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h12l2 2v16H5z"/><path d="M8 3v6h8V3"/><path d="M8 21v-7h8v7"/></svg>',
+        "trash": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 15h10l1-15"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>',
+    }
+    return icons[name]
+
+
 def _admin_html(user=None, error: str = "", policy=None) -> str:
     effective_user = user or get_user("admin@example.com")
     policy = policy or load_storage_policy()
     rows = []
     for item in sorted(list_users(), key=lambda user: user.created_at or "", reverse=True):
+        update_form_id = f"user-update-{abs(hash(item.email))}"
+        delete_form_id = f"user-delete-{abs(hash(item.email))}"
         role_options = "".join(
             f'<option value="{role}" {"selected" if item.role == role else ""}>{label}</option>'
             for role, label in (("user", "пользователь"), ("admin", "администратор"))
@@ -1184,21 +1220,19 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
             f"""
             <tr data-sort-name="{escape(item.name.lower())}" data-sort-email="{escape(item.email.lower())}" data-sort-created-at="{escape(item.created_at)}">
               <td>
-                <form method="post" action="/admin/users/update" class="row-form">
-                  <input type="hidden" name="email" value="{escape(item.email)}">
-                  <input name="name" value="{escape(item.name)}" required>
+                <form id="{update_form_id}" method="post" action="/admin/users/update"></form>
+                <input form="{update_form_id}" type="hidden" name="email" value="{escape(item.email)}">
+                <input form="{update_form_id}" name="name" value="{escape(item.name)}" required>
               </td>
-              <td><input name="new_email" type="email" value="{escape(item.email)}" required></td>
+              <td><input form="{update_form_id}" name="new_email" type="email" value="{escape(item.email)}" required></td>
               <td>{escape(created_at_label)}</td>
-              <td><input name="password" type="password" placeholder="Оставить без изменений"></td>
-              <td><select name="role">{role_options}</select></td>
+              <td><input form="{update_form_id}" name="password" type="password" placeholder="Оставить"></td>
+              <td><select form="{update_form_id}" name="role">{role_options}</select></td>
               <td class="actions">
-                  <button type="submit">Сохранить</button>
-                </form>
-                <form method="post" action="/admin/users/delete">
-                  <input type="hidden" name="email" value="{escape(item.email)}">
-                  <button type="submit" class="danger">Удалить</button>
-                </form>
+                <button form="{update_form_id}" type="submit" class="icon-button" title="Сохранить" aria-label="Сохранить">{_icon("save")}</button>
+                <form id="{delete_form_id}" method="post" action="/admin/users/delete"></form>
+                <input form="{delete_form_id}" type="hidden" name="email" value="{escape(item.email)}">
+                <button form="{delete_form_id}" type="submit" class="icon-button icon-button--danger" title="Удалить" aria-label="Удалить">{_icon("trash")}</button>
               </td>
             </tr>
             """
@@ -1233,29 +1267,38 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
               <td><select name="severity">{severity_options}</select></td>
               <td><label class="check-toggle"><input type="checkbox" name="enabled" {"checked" if check.enabled else ""}> включена</label></td>
               <td>{escape(check.version)}</td>
-              <td><button type="submit">Сохранить</button></td>
+              <td><button type="submit" class="icon-button" title="Сохранить" aria-label="Сохранить">{_icon("save")}</button></td>
                 </form>
             </tr>
             """
         )
     carrier_rows = []
     for carrier in load_carrier_rules():
+        update_form_id = f"carrier-update-{abs(hash(carrier.name))}"
+        delete_form_id = f"carrier-delete-{abs(hash(carrier.name))}"
+        match_options = "".join(
+            f'<option value="{match_type}" {"selected" if carrier.match_type == match_type else ""}>{label}</option>'
+            for match_type, label in (("contains", "Текст"), ("regex", "Regex"))
+        )
         carrier_rows.append(
             f"""
             <tr>
-              <td><input name="carrier_name" value="{escape(carrier.name)}" placeholder="Название перевозчика"></td>
-              <td><input name="carrier_markers" value="{escape(', '.join(carrier.markers))}" placeholder="Признаки через запятую"></td>
+              <td>
+                <form id="{update_form_id}" method="post" action="/admin/dictionaries/carriers/update"></form>
+                <input form="{update_form_id}" type="hidden" name="original_name" value="{escape(carrier.name)}">
+                <input form="{update_form_id}" name="name" value="{escape(carrier.name)}" placeholder="Название перевозчика" required>
+              </td>
+              <td><select form="{update_form_id}" name="match_type">{match_options}</select></td>
+              <td><input form="{update_form_id}" name="markers" value="{escape(', '.join(carrier.markers))}" placeholder="Признаки через запятую" required></td>
+              <td class="actions">
+                <button form="{update_form_id}" type="submit" class="icon-button" title="Сохранить" aria-label="Сохранить">{_icon("save")}</button>
+                <form id="{delete_form_id}" method="post" action="/admin/dictionaries/carriers/delete"></form>
+                <input form="{delete_form_id}" type="hidden" name="name" value="{escape(carrier.name)}">
+                <button form="{delete_form_id}" type="submit" class="icon-button icon-button--danger" title="Удалить" aria-label="Удалить">{_icon("trash")}</button>
+              </td>
             </tr>
             """
         )
-    carrier_rows.append(
-        """
-        <tr>
-          <td><input name="carrier_name" placeholder="Новый перевозчик"></td>
-          <td><input name="carrier_markers" placeholder="marker1, marker2"></td>
-        </tr>
-        """
-    )
     error_html = f'<div class="error">{escape(error)}</div>' if error else ""
     return f"""
 <!doctype html>
@@ -1301,7 +1344,7 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
                 <label>Срок хранения архивов, дни
                   <input name="archive_retention_days" type="number" min="1" step="1" value="{policy.archive_retention_days}" required>
                 </label>
-                <button type="submit">Сохранить</button>
+                <button type="submit" class="icon-button" title="Сохранить" aria-label="Сохранить">{_icon("save")}</button>
               </form>
               <div class="muted">Через заданное число дней удаляются архивы и распаковки. Табличные данные сохраняются, ссылка на скачивание исчезает.</div>
             </div>
@@ -1342,16 +1385,23 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
           <details class="admin-section" data-section-id="dictionaries">
             <summary><span>Справочники</span><strong>{len(load_carrier_rules())}</strong></summary>
             <div class="admin-section__body">
-              <div class="muted">Справочник перевозчиков используется в отчётах для секции BM сведения. Признаки указываются через запятую и ищутся в package/raw-строках логов.</div>
-              <form method="post" action="/admin/dictionaries/carriers">
+              <h2>Перевозчики</h2>
+              <div class="muted">Признаки указываются через запятую. В режиме Regex каждый признак применяется как регулярное выражение к package/raw-строкам логов.</div>
+              <form method="post" action="/admin/dictionaries/carriers/create" class="create-form">
+                <input name="name" placeholder="Название перевозчика" required>
+                <select name="match_type">
+                  <option value="contains">Текст</option>
+                  <option value="regex">Regex</option>
+                </select>
+                <input name="markers" placeholder="Признаки через запятую" required>
+                <button type="submit">Добавить</button>
+              </form>
                 <div class="table-wrap">
-                  <table>
-                    <thead><tr><th>Название перевозчика</th><th>Признаки в логах</th></tr></thead>
+                  <table class="compact-table">
+                    <thead><tr><th>Название перевозчика</th><th>Тип</th><th>Признаки в логах</th><th>Действия</th></tr></thead>
                     <tbody>{"".join(carrier_rows)}</tbody>
                   </table>
                 </div>
-                <button type="submit">Сохранить справочник</button>
-              </form>
               <form method="post" action="/admin/dictionaries/carriers/reset" class="inline-form">
                 <button type="submit">Сбросить справочник перевозчиков</button>
               </form>
@@ -1551,13 +1601,18 @@ def _shared_page_css() -> str:
       .danger { background:#b42318; }
       .table-wrap { overflow:auto; border:1px solid var(--line); border-radius:14px; }
       table { width:100%; border-collapse:collapse; background:#fff; }
-      th, td { padding:12px 14px; border-bottom:1px solid #e8edf2; text-align:left; vertical-align:top; }
+      th, td { padding:8px 10px; border-bottom:1px solid #e8edf2; text-align:left; vertical-align:middle; }
+      td input, td select { width:100%; min-width:0; padding:7px 8px; }
+      .compact-table td { padding:6px 8px; }
       th { background:#f3f6fa; font-weight:700; }
       .sort-button { appearance:none; border:0; border-radius:0; padding:0; background:transparent; color:inherit; font:inherit; font-weight:700; cursor:pointer; }
       .sort-button::after { content:""; display:inline-block; width:1.2em; color:var(--muted); text-align:center; }
       .sort-button[data-sort-direction="asc"]::after { content:"↑"; }
       .sort-button[data-sort-direction="desc"]::after { content:"↓"; }
-      .actions { display:flex; flex-wrap:wrap; gap:8px; }
+      .actions { display:flex; flex-wrap:nowrap; gap:6px; align-items:center; }
+      .icon-button { width:32px; height:32px; display:inline-grid; place-items:center; padding:0; border-radius:8px; }
+      .icon-button svg { width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+      .icon-button--danger { background:#b42318; }
       .muted { color:var(--muted); }
       .error { margin-bottom:12px; padding:10px 12px; border:1px solid #f4b4a5; border-radius:10px; background:#fff5f3; color:#9f1d12; }
       .admin-sections { display:grid; gap:12px; }
@@ -1653,7 +1708,7 @@ def _index_html() -> str:
         <div class="actions">
           <button id="upload" class="button" type="button">Загрузить</button>
         </div>
-        <a id="report_link" class="report-link" href="#" target="_blank" rel="noreferrer" hidden>Посмотреть отчёт</a>
+        <a id="report_link" class="report-link" href="#" hidden>Посмотреть отчёт</a>
         <div class="footer-note">После завершения появится сообщение «Сессия загрузки завершена».</div>
       </section>
       <section class="section">
@@ -1665,7 +1720,7 @@ def _index_html() -> str:
           <strong id="latest_report_title"></strong>
           <div id="latest_report_meta" class="meta"></div>
           <div class="meta">
-            <a id="latest_report_link" href="/api/runs/latest/report" target="_blank" rel="noreferrer">Открыть последний отчёт</a>
+            <a id="latest_report_link" href="/api/runs/latest/report">Открыть последний отчёт</a>
             <a href="/api/runs/latest/manifest" target="_blank" rel="noreferrer">JSON manifest</a>
           </div>
         </div>
@@ -1695,7 +1750,7 @@ def _index_html() -> str:
           <div id="history_detail_meta" class="meta"></div>
           <div id="history_detail_counts" class="meta"></div>
           <div class="meta">
-            <a id="history_detail_link" href="#" target="_blank" rel="noreferrer">Открыть отчёт</a>
+            <a id="history_detail_link" href="#">Открыть отчёт</a>
             <a id="history_detail_manifest_link" href="#" target="_blank" rel="noreferrer">JSON manifest</a>
             <button id="history_detail_delete" class="button" type="button" style="padding:8px 12px;background:#b42318;border-color:#b42318;">Удалить</button>
           </div>
@@ -2394,7 +2449,7 @@ def _uploads_html(user=None) -> str:
         const reportHtml = isProcessing
           ? `<span class="report-empty">${item.status_message || 'Формируем отчёт'}</span>`
           : item.report_url
-            ? `<a class="report-link" href="${item.report_url}" target="_blank" rel="noreferrer">Открыть отчёт</a>`
+            ? `<a class="report-link" href="${item.report_url}">Открыть отчёт</a>`
             : status === 'error'
               ? `<span class="report-empty">${item.status_message || 'Ошибка формирования отчёта'}</span>`
               : `<span class="report-empty">${item.status_message || 'Ожидает обработки'}</span>`;
@@ -2481,7 +2536,7 @@ def _uploads_html(user=None) -> str:
           if (!response.ok) {
             throw new Error(data?.detail || data?.message || 'Не удалось пересобрать отчёт.');
           }
-          uploadsMessage.innerHTML = `${data.message || 'Отчёт пересобран.'} <a class="report-link" href="${data.report_url}" target="_blank" rel="noreferrer">Открыть отчёт</a>`;
+          uploadsMessage.innerHTML = `${data.message || 'Отчёт пересобран.'} <a class="report-link" href="${data.report_url}">Открыть отчёт</a>`;
           await loadUploads();
         } catch (error) {
           uploadsMessage.textContent = error instanceof Error ? error.message : String(error);
@@ -2506,7 +2561,7 @@ def _uploads_html(user=None) -> str:
           if (!response.ok) {
             throw new Error(data?.detail || data?.message || 'Не удалось сформировать отчёт.');
           }
-          uploadsMessage.innerHTML = `${data.message || 'Отчёт сформирован.'} <a class="report-link" href="${data.report_url}" target="_blank" rel="noreferrer">Открыть отчёт</a>`;
+          uploadsMessage.innerHTML = `${data.message || 'Отчёт сформирован.'} <a class="report-link" href="${data.report_url}">Открыть отчёт</a>`;
           selectedUploads.clear();
           await loadUploads();
           if (data.report_url) {

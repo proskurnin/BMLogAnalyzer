@@ -106,7 +106,7 @@ def test_login_page_contains_version_and_signature(tmp_path, monkeypatch):
     response = client.get("/login")
 
     assert response.status_code == 200
-    assert "версия сервиса 1.3.0" in response.text
+    assert "версия сервиса 1.4.0" in response.text
     assert 'class="brand"' in response.text
     assert "made with ♥ by Roman A. Proskurnin" in response.text
 
@@ -206,9 +206,14 @@ def test_admin_user_management_and_profile_files(tmp_path, monkeypatch):
     assert 'data-section-id="storage"' in admin_page.text
     assert 'data-section-id="checks"' in admin_page.text
     assert 'data-section-id="dictionaries"' in admin_page.text
-    assert "Справочник перевозчиков" in admin_page.text
+    assert "Перевозчики" in admin_page.text
+    assert "Признаки указываются через запятую" in admin_page.text
     assert "МЦД-2" in admin_page.text
     assert "mmv2" in admin_page.text
+    assert 'action="/admin/dictionaries/carriers/create"' in admin_page.text
+    assert 'action="/admin/dictionaries/carriers/update"' in admin_page.text
+    assert 'action="/admin/dictionaries/carriers/delete"' in admin_page.text
+    assert "<svg viewBox=\"0 0 24 24\"" in admin_page.text
     assert "Срок хранения архивов, дни" in admin_page.text
     assert "Дата добавления (Мск)" in admin_page.text
     assert 'data-sort-key="name"' in admin_page.text
@@ -218,6 +223,27 @@ def test_admin_user_management_and_profile_files(tmp_path, monkeypatch):
     assert "bm.admin.usersSort" in admin_page.text
     assert "section.querySelectorAll('form')" in admin_page.text
     assert "01.01.1970" not in admin_page.text
+    create_carrier = client.post(
+        "/admin/dictionaries/carriers/create",
+        data={"name": "Тест", "match_type": "regex", "markers": r"test-\d+"},
+        follow_redirects=False,
+    )
+    assert create_carrier.status_code == 303
+    carrier_admin_page = client.get("/admin")
+    assert "Тест" in carrier_admin_page.text
+    assert "test-\\d+" in carrier_admin_page.text
+    update_carrier = client.post(
+        "/admin/dictionaries/carriers/update",
+        data={"original_name": "Тест", "name": "Тест-2", "match_type": "contains", "markers": "test2"},
+        follow_redirects=False,
+    )
+    assert update_carrier.status_code == 303
+    carrier_admin_page = client.get("/admin")
+    assert "Тест-2" in carrier_admin_page.text
+    delete_carrier = client.post("/admin/dictionaries/carriers/delete", data={"name": "Тест-2"}, follow_redirects=False)
+    assert delete_carrier.status_code == 303
+    carrier_admin_page = client.get("/admin")
+    assert "Тест-2" not in carrier_admin_page.text
     create_check = client.post(
         "/admin/check-cases/create",
         data={
@@ -277,7 +303,7 @@ def test_web_index_contains_upload_landing():
     html = _index_html()
 
     assert "BM Log Analyzer" in html
-    assert "версия сервиса 1.3.0" in html
+    assert "версия сервиса 1.4.0" in html
     assert "picker_menu" not in html
     assert "Выбрать файлы</button>" not in html
     assert "Выбрать папку</button>" not in html
@@ -313,7 +339,7 @@ def test_uploads_page_contains_table_and_actions():
     assert response.status_code == 200
     html = response.text
     assert "Загрузки" in html
-    assert "<strong>BM Log Analyzer</strong><span>версия сервиса 1.3.0</span>" in html
+    assert "<strong>BM Log Analyzer</strong><span>версия сервиса 1.4.0</span>" in html
     assert "BM Log Analyzer ·" not in html
     assert "Сформировать отчёт по выбранным" in html
     assert "Дата загрузки (Мск)" in html
@@ -324,6 +350,7 @@ def test_uploads_page_contains_table_and_actions():
     assert html.index("Размер") < html.index("Отчёт")
     assert "formatUploadSize(item.size_bytes)" in html
     assert "window.location.href = data.report_url" in html
+    assert 'class="report-link" href="${item.report_url}" target="_blank"' not in html
     assert "Выбрано 0" in html
     assert "uploads_body" in html
     assert "/api/uploads" in html

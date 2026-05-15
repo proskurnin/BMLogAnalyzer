@@ -1091,7 +1091,7 @@ def _bm_carrier_records(events: list[PaymentEvent], archive_names: set[str]) -> 
     records: list[dict[str, object]] = []
     rules = load_carrier_rules()
     for rule in rules:
-        rule_events = [event for event in events if _carrier_event_matches(event, rule.markers)]
+        rule_events = [event for event in events if carrier_names_for_text(_carrier_search_text(event), [rule])]
         if rule_events:
             records.append(_bm_selectable_record("carrier", rule.name, rule_events, archive_names, markers=True))
     return records
@@ -1505,11 +1505,6 @@ def _bm_period(events: list[PaymentEvent]) -> str:
     if start.date() == end.date():
         return start_text
     return f"{start_text} - {end_text}"
-
-
-def _carrier_event_matches(event: PaymentEvent, markers: list[str]) -> bool:
-    text = _carrier_search_text(event)
-    return any(marker.lower() in text for marker in markers)
 
 
 def _carrier_search_text(event: PaymentEvent) -> str:
