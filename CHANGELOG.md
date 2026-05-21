@@ -1,295 +1,103 @@
 # Changelog
 
+Формат записей:
+
+- `## X.Y.Z - YYYY-MM-DD`
+- короткие пункты на русском
+- без свободного текста между версиями
+
 ## 1.6.16 - 2026-05-21
 
-### Changed
-
-- Analyzer version bumped to `1.6.16`.
+- Обновлена версия сервиса до `1.6.16`.
 
 ## 1.6.15 - 2026-05-21
 
-### Changed
-
-- Release Notes in admin now use a restrained monochrome palette with a subtle current-version marker.
-- Analyzer version bumped to `1.6.15`.
+- Release Notes в админке стали спокойнее по тону и типографике, а текущая версия выделяется только очень деликатно.
 
 ## 1.6.14 - 2026-05-21
 
-### Changed
-
-- Release Notes in admin now use a denser three-column layout on very wide screens and a dedicated marker for the current release.
-- Analyzer version bumped to `1.6.14`.
+- Release Notes в админке теперь плотнее на очень широких экранах, а текущая версия получила отдельный маркер.
 
 ## 1.6.13 - 2026-05-21
 
-### Changed
-
-- Release Notes in admin now use a two-column layout on wide screens and stronger color accents for fresh releases.
-- Analyzer version bumped to `1.6.13`.
+- Release Notes в админке теперь показываются в двух колонках на широких экранах, а свежие версии получили более заметные цветовые акценты.
 
 ## 1.6.12 - 2026-05-21
 
-### Changed
-
-- Release Notes in admin can now keep several versions open at once and use richer card styling for the version history.
-- Analyzer version bumped to `1.6.12`.
+- В Release Notes можно раскрывать сразу несколько версий, а карточки стали более выразительными и удобными для чтения.
 
 ## 1.6.11 - 2026-05-21
 
-### Changed
-
-- Release Notes in admin now use Russian descriptions only, and the version header is formatted as `X.Y.Z (DD.MM.YYYY)` without file links.
-- Analyzer version bumped to `1.6.11`.
+- Release Notes в админке теперь показывают только русскоязычные описания изменений, а заголовок версии оформлен как X.Y.Z (ДД.ММ.ГГГГ).
 
 ## 1.6.10 - 2026-05-21
 
-### Changed
-
-- Release Notes in admin now show only Russian descriptions, with headers formatted as `X.Y.Z (DD.MM.YYYY)` and no file links.
-- Analyzer version bumped to `1.6.10`.
+- Release Notes в админке теперь показывают только русскоязычные описания изменений без ссылок на файлы.
 
 ## 1.6.9 - 2026-05-21
 
-### Changed
-
-- Removed related commit links from admin Release Notes while keeping version and file links.
-- Analyzer version bumped to `1.6.9`.
+- Из Release Notes убраны связанные коммиты, а версии по-прежнему отображаются в сворачиваемом списке.
 
 ## 1.6.8 - 2026-05-21
 
-### Changed
-
-- Release Notes in admin now behave like an accordion per version and include links to relevant source files.
-- Release Notes now also show related GitHub commit links.
-- Analyzer version bumped to `1.6.8`.
+- Release Notes в админке стали аккордеоном по версиям и получили ссылки на связанные файлы.
 
 ## 1.6.7 - 2026-05-21
 
-### Changed
-
-- Admin area now shows a collapsed `Release Notes` block sourced from `CHANGELOG.md`, with the newest version first.
-- Analyzer version bumped to `1.6.7`.
+- В админке появился отдельный блок Release Notes, который берёт список версий из CHANGELOG.md.
 
 ## 1.6.1 - 2026-05-20
 
-### Changed
-
-- HTML report BM-status toggle now survives client-side re-rendering of the table.
-- Report responses now send no-cache headers so fresh reports are not hidden by browser cache.
-- Analyzer version bumped to `1.6.1`.
+- HTML-отчёт BM-статусов перестал терять переключатель при повторной отрисовке таблицы, а ответы сервиса теперь отключают кэш браузера.
 
 ## 1.6.0 - 2026-05-20
 
-### Added
-
-- Protocol interaction scenarios now support multiple source sections and multiple source quotes with editable multiline fields in admin.
-- HTML and CSV protocol scenario outputs now separate source document, sections, and quotes.
-- Analyzer version bumped to `1.6.0`.
+- Сценарии из протокола взаимодействия получили несколько разделов и цитат источника, а их вывод появился в отчётах и админке.
 
 ## 1.5.0 - 2026-05-18
 
-### Changed
-
-- BM status classification now folds `QR-код просрочен` into `Отказ, QR-код недействителен`.
-- Uploads page now shows shorter report labels, report creation time, and inline rebuild progress.
-- Admin auth journal stays open while paging.
-- HTML report BM-status table now hides zero rows on demand.
-- Check tables are sorted by severity and styled by priority.
-- Analyzer version bumped to `1.5.0`.
+- BM-статусы получили нормализацию QR-кода, а в отчётах и загрузках появились дополнительные улучшения интерфейса и поведения.
 
 ## 1.4.1 - 2026-05-18
 
-### Changed
-
-- Analyzer version bumped to `1.4.1`.
+- Обновлена версия аналитика без функциональных изменений.
 
 ## 1.4.0 - 2026-05-15
 
-### Added
-
-- Admin dictionaries now provide full carrier management with per-row create, edit, delete, reset, and regex/contains matching modes.
-- Admin user and carrier rows now use compact icon actions for save/delete.
-- Report links in upload/history flows now open in the current window.
-- Analyzer version bumped to `1.4.0`.
+- В админке появились полные справочники перевозчиков с редактированием, удалением и сбросом.
 
 ## 1.3.0 - 2026-05-15
 
-### Added
-
-- BM meta-card modal values now open evidence rows showing the log snippets used for versions, carriers, readers, dates, and reader firmware values.
-- Admin now includes a `Справочники` section with an editable carrier marker directory stored in JSON settings.
-- Carrier detection now supports editable markers and default MCD mappings: `mmv1` -> `МЦД-1`, `mmv2` -> `МЦД-2`, `mmv3` -> `МЦД-3`, `mmv4` -> `МЦД-4`.
-- Analyzer version bumped to `1.3.0`.
+- В отчётах появились модальные доказательства по метаданным BM, а в админке стал доступен справочник перевозчиков.
 
 ## 1.2.7 - 2026-05-15
 
-### Changed
-
-- HTML reports now map `mmv2-*` BM packages to carrier `МЦД-2` while keeping BM version parsing, for example `mmv2-x86_64-1.1.7` -> `1.1.7`.
-- Analyzer version bumped to `1.2.7`.
+- HTML-отчёты начали отображать `mmv2-*` как `МЦД-2` без потери BM-версии.
 
 ## 1.2.6 - 2026-05-15
 
-### Changed
-
-- Checks section now shows matched rule count out of enabled rules and explains enabled rules that did not match.
-- Analyzer version bumped to `1.2.6`.
+- В разделе проверок появился счётчик сработавших правил и пояснения по несработавшим правилам.
 
 ## 1.2.5 - 2026-05-15
 
-### Changed
-
-- Uploads table now shows uploaded file size in Mb before the report column.
-- Analyzer version bumped to `1.2.5`.
+- В таблице загрузок появился размер файла перед колонкой отчёта.
 
 ## 1.2.4 - 2026-05-15
 
-### Changed
-
-- `Версии ПО ридеров` in HTML reports now also uses reader firmware values found by log inventory outside PaymentStart response lines.
-- Analyzer version bumped to `1.2.4`.
+- В HTML-отчётах версии ПО ридеров начали собираться также из инвентаризации файлов, а не только из PaymentStart.
 
 ## 1.2.3 - 2026-05-15
 
-### Changed
+- В HTML-отчётах появился отдельный блок версий ПО ридеров.
 
-- HTML reports now show `Версии ПО ридеров` in `BM сведения`.
-- Reader firmware parsing now recognizes `ReaderVersion` markers in PaymentStart response lines.
-- Analyzer version bumped to `1.2.3`.
+## 1.2.2 - 2026-05-14
 
-## 1.2.2 - 2026-05-15
+- В админке состояние секций стало сохраняться между действиями, а таблица пользователей получила сортировку и московское время.
 
-### Changed
+## 1.2.1 - 2026-05-14
 
-- Admin sections now preserve open or closed state for the current browser session and stay open after actions inside them.
-- Admin users table now shows Moscow creation time and supports sorting by name, email, and creation date.
-- Analyzer version bumped to `1.2.2`.
+- Версия сервиса стала отображаться отдельной строкой в логине и на странице загрузок.
 
-## 1.2.1 - 2026-05-15
+## 1.2.0 - 2026-05-14
 
-### Changed
-
-- HTML reports now label the generator version as `отчёт создан в версии сервиса X.Y.Z`.
-- Uploads page now displays product name and service version on separate lines.
-- Analyzer version bumped to `1.2.1`.
-
-## 1.2.0 - 2026-05-15
-
-### Added
-
-- Admins can add custom validation checks based on code, message text, duration, and repeat timing conditions.
-- HTML reports now include a collapsed `Проверки` section when validation checks match log evidence.
-- Report manifests now expose validation check results.
-
-### Changed
-
-- Validation check catalog rows now show editable condition type and value.
-- Analyzer version bumped to `1.2.0`.
-
-## 1.1.1 - 2026-05-15
-
-### Changed
-
-- Admin page sections are now collapsed by default and ordered as users, storage policies, and validation checks.
-- Analyzer version bumped to `1.1.1`.
-
-## 1.1.0 - 2026-05-15
-
-### Added
-
-- Admin-managed validation check catalog stored in `BM_DATA_DIR/web_settings/check_cases.json`.
-- Admin forms to edit validation check title, description, severity and enabled state.
-- Admin action to reset validation checks back to built-in defaults.
-
-### Changed
-
-- Built-in validation checks now read the active catalog, so disabled checks no longer produce CSV or AI-context results.
-- Analyzer version bumped to `1.1.0`.
-
-## 1.0.6 - 2026-05-15
-
-### Changed
-
-- Suspicious analysis now detects bursts of identical non-success events in one source log.
-- AI analytics panel now supports status refresh, repeat runs, and renders `what_to_check` and limitations.
-- Admin page now shows the current built-in validation check catalog.
-- Analyzer version bumped to `1.0.6`.
-
-## 1.0.5 - 2026-05-14
-
-### Changed
-
-- HTML reports now hide the `Подозрительно` section when no suspicious log lines were found.
-- Analyzer version bumped to `1.0.5`.
-
-## 1.0.4 - 2026-05-14
-
-### Changed
-
-- Upload completion actions now render as a separate centered button row below the upload result message.
-- Analyzer version bumped to `1.0.4`.
-
-## 1.0.3 - 2026-05-14
-
-### Changed
-
-- AI analytics status now formats generated time as Moscow time: `ДД.ММ.ГГГГ (ЧЧ:ММ:СС) (Мск)`.
-- Analyzer version bumped to `1.0.3`.
-
-## 1.0.2 - 2026-05-14
-
-### Changed
-
-- Upload completion now shows actions to open the latest upload-session report or go to `/uploads`.
-- Multi-file upload sessions now return a combined report URL covering all files uploaded in that session.
-- Analyzer version bumped to `1.0.2`.
-
-## 1.0.1 - 2026-05-14
-
-### Changed
-
-- Upload history now labels upload time as Moscow time and formats it as `ДД.ММ.ГГГГ (ЧЧ:ММ:СС)`.
-- Analyzer version bumped to `1.0.1`.
-
-## 1.0.0 - 2026-05-14
-
-### Added
-
-- AI analysis scaffold for report-level hypotheses based on factual report context.
-- Dedicated AI proxy settings via `BM_AI_HTTPS_PROXY` and `BM_AI_HTTP_PROXY`.
-- Upload report rebuild action from the uploads table.
-- Suspicious findings section in HTML reports.
-- Archive retention policy settings in the admin area.
-
-### Changed
-
-- Empty report sections are hidden when there is no data to show.
-- Analyzer version bumped to `1.0.0`.
-
-## 0.34.0 - 2026-05-12
-
-### Added
-
-- Authentication for the web resource.
-- Role-based access for users and administrators.
-- Admin user management page at `/admin`.
-- `/profile` page with profile updates and per-user uploaded file list.
-- Owner metadata for uploaded files and generated reports.
-- `Пользователь` column on `/uploads`.
-- Production environment settings via `BM_*` variables.
-- Upload limits for file count, per-file size, and total session size.
-- Deployment documentation and production env example.
-
-### Changed
-
-- The web UI is now hidden behind authorization.
-- Administrator navigation includes upload, upload history, and administration links.
-- Report, upload, and run-history access is scoped by owner for non-admin users.
-- Analyzer version bumped to `0.34.0`.
-
-### Security
-
-- Production startup requires explicit admin credentials.
-- Production refuses the default `admin` password.
-- Session cookies can be marked secure via `BM_COOKIE_SECURE`.
-- Expired sessions are cleaned up at app startup and during session reads.
+- Появился каталог встроенных проверок и связанный с ним блок в HTML-отчётах.

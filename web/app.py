@@ -1471,13 +1471,22 @@ def _release_notes_entries() -> list[dict[str, Any]]:
     if not path.exists():
         return []
     entries: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
+        if not line:
+            continue
         if line.startswith("## "):
             match = re.match(r"^##\s+([0-9]+\.[0-9]+\.[0-9]+)\s+-\s+(.+)$", line)
             if not match:
                 continue
-            entries.append({"version": match.group(1), "date": match.group(2)})
+            current = {"version": match.group(1), "date": match.group(2), "changes": []}
+            entries.append(current)
+            continue
+        if current is None:
+            continue
+        if line.startswith("- "):
+            current.setdefault("changes", []).append(line[2:].strip())
     return entries
 
 
@@ -1487,7 +1496,10 @@ def _release_notes_html() -> str:
         return ""
     rendered_versions = []
     for index, entry in enumerate(entries):
-        description = RELEASE_NOTE_SUMMARIES.get(entry["version"], "Краткое описание изменений отсутствует.")
+        changes = entry.get("changes") or []
+        if not changes:
+            fallback = RELEASE_NOTE_SUMMARIES.get(entry["version"], "Краткое описание изменений отсутствует.")
+            changes = [fallback]
         item_class = "release-notes-item"
         if index == 0:
             item_class += " release-notes-item--current"
@@ -1501,8 +1513,10 @@ def _release_notes_html() -> str:
               </summary>
               <div class="release-notes-item__body">
                 <div class="release-notes-item__description">
-                  <span class="release-notes-item__label">Описание</span>
-                  <p>{escape(description)}</p>
+                  <span class="release-notes-item__label">Изменения</span>
+                  <ul class="release-notes-item__list">
+                    {''.join(f'<li>{escape(change)}</li>' for change in changes)}
+                  </ul>
                 </div>
               </div>
             </details>
@@ -2980,7 +2994,8 @@ def _uploads_html(user=None) -> str:
         width: fit-content; padding: 4px 8px; border-radius: 999px; background: var(--release-accent-soft); color: var(--release-accent);
         font-size: 11px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase;
       }
-      .release-notes-item__description p { margin: 0; color: #273246; line-height: 1.55; }
+      .release-notes-item__list { margin: 0; padding-left: 18px; color: #273246; line-height: 1.55; }
+      .release-notes-item__list li + li { margin-top: 4px; }
       .release-notes-item--fresh { --release-accent: #2457a6; --release-accent-soft: rgba(36, 87, 166, 0.10); --release-accent-strong: rgba(36, 87, 166, 0.26); }
       .release-notes-item--recent { --release-accent: #0f766e; --release-accent-soft: rgba(15, 118, 110, 0.10); --release-accent-strong: rgba(15, 118, 110, 0.26); }
       .release-notes-item--warm { --release-accent: #b45309; --release-accent-soft: rgba(180, 83, 9, 0.10); --release-accent-strong: rgba(180, 83, 9, 0.24); }

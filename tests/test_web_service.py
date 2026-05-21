@@ -222,11 +222,12 @@ def test_admin_user_management_and_profile_files(tmp_path, monkeypatch):
     assert 'data-section-id="release-notes"' in admin_page.text
     assert "release-notes-item--current" in admin_page.text
     assert "Сейчас" in admin_page.text
+    assert "release-notes-item__list" in admin_page.text
     assert "release-notes-item--fresh" not in admin_page.text
     assert "release-notes-item--recent" not in admin_page.text
     assert "release-notes-item--warm" not in admin_page.text
     assert "release-notes-item--archive" not in admin_page.text
-    assert "Release Notes стали спокойнее по тону и типографике, а текущая версия выделяется только очень деликатно." in admin_page.text
+    assert "Обновлена версия сервиса до `1.6.16`." in admin_page.text
     assert "Перевозчики" in admin_page.text
     assert "Признаки указываются через запятую" in admin_page.text
     assert "МЦД-2" in admin_page.text
@@ -248,6 +249,7 @@ def test_admin_user_management_and_profile_files(tmp_path, monkeypatch):
     assert 'class="release-notes-item__version"' in admin_page.text
     assert 'class="release-notes-item__date"' in admin_page.text
     assert 'class="release-notes-item__label"' in admin_page.text
+    assert 'class="release-notes-item__list"' in admin_page.text
     assert 'grid-template-columns: repeat(2, minmax(0, 1fr));' in admin_page.text
     assert 'grid-template-columns: repeat(3, minmax(0, 1fr));' in admin_page.text
     assert 'class="release-notes-item__current"' in admin_page.text
