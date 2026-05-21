@@ -3010,6 +3010,7 @@ def _uploads_html(user=None) -> str:
       @keyframes report-progress-move { 0% { transform: translateX(-120%); } 50% { transform: translateX(80%); } 100% { transform: translateX(220%); } }
       .retention-note { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
       .report-empty { color: var(--muted); }
+      .uploads-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: nowrap; white-space: nowrap; }
       .message { margin-top: 12px; padding: 14px; border: 1px dashed #c8d9f0; border-radius: 12px; background: #f8fbff; }
       .footer { color: var(--muted); font-size: 12px; margin-top: 8px; }
       .uploads-brand { text-align: right; }
@@ -3188,8 +3189,10 @@ def _uploads_html(user=None) -> str:
             <td>${formatUploadSize(item.size_bytes)}</td>
             <td data-report-cell="${item.upload_id}">${reportHtml}</td>
             <td>
-              <button class="icon-button" type="button" title="пересобрать отчёт" aria-label="пересобрать отчёт" data-rebuild-upload-id="${item.upload_id}" ${rebuildDisabled}>↻</button>
-              <button class="icon-button icon-button--danger" type="button" title="удалить файл" aria-label="удалить файл" data-delete-upload-id="${item.upload_id}" ${deleteDisabled}>🗑</button>
+              <div class="uploads-actions">
+                <button class="icon-button" type="button" title="пересобрать отчёт" aria-label="пересобрать отчёт" data-rebuild-upload-id="${item.upload_id}" ${rebuildDisabled}>↻</button>
+                <button class="icon-button icon-button--danger" type="button" title="удалить файл" aria-label="удалить файл" data-delete-upload-id="${item.upload_id}" ${deleteDisabled}>🗑</button>
+              </div>
             </td>
           </tr>`;
       }
