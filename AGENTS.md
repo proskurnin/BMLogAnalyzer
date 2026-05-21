@@ -95,6 +95,15 @@ The web layer should call the same core engine that CLI uses.
 * CSV / Excel / HTML reports
 * pytest for tests
 
+## Release Process
+
+* After any functional change, release to stage first for validation before promoting to prod.
+* Prod deployment is not allowed without a version bump.
+* Before bumping a version, always ask which version type is changing: `major`, `minor`, or `patch`.
+* Every release must be recorded in `CHANGELOG.md` and kept up to date as release notes.
+* Release notes shown on the site must be in Russian and live in a dedicated release-notes section of the admin area or equivalent special page.
+* Treat the release notes as part of the product record, not as an optional comment in a commit message.
+
 ## Initial CLI Workflow
 
 1. Read input path from CLI or config.
