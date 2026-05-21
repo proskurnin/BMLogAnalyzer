@@ -764,6 +764,19 @@ def create_app() -> Any:
             "message": f"Отчёт сформирован для {len(upload_ids)} файлов.",
         }
 
+    @app.delete("/api/uploads/{upload_id}")
+    def delete_upload_api(request: Request, upload_id: str) -> dict[str, Any]:
+        user = _request_user(request)
+        try:
+            item = load_upload(upload_id)
+        except FileNotFoundError:
+            return JSONResponse({"detail": "Загрузка не найдена"}, status_code=404)
+        if item.owner_email != user.email and user.role != "admin":
+            return JSONResponse({"detail": "Доступ запрещён"}, status_code=403)
+        if not delete_upload(upload_id):
+            return JSONResponse({"detail": "Загрузка не найдена"}, status_code=404)
+        return {"status": "ok", "upload_id": upload_id}
+
     @app.post("/api/uploads/{upload_id}/rebuild")
     def rebuild_upload_report(request: Request, upload_id: str) -> dict[str, Any]:
         user = _request_user(request)
@@ -2551,8 +2564,12 @@ def _landing_html(user=None) -> str:
       .signature { color: var(--muted); font-size: 12px; }
       .hint { color: var(--muted); font-size: 12px; text-align: left; }
       .selection-summary { padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: #fafcff; color: var(--text); text-align: left; min-height: 44px; }
-      .selection-summary ul { margin: 0; padding-left: 18px; }
-      .selection-summary li + li { margin-top: 4px; }
+      .selection-summary ul { margin: 6px 0 0; padding-left: 0; list-style: none; display: grid; gap: 6px; }
+      .selection-summary li { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+      .selection-summary li + li { margin-top: 0; }
+      .selection-summary li span { min-width: 0; }
+      .selection-remove { appearance: none; border: 1px solid #f1c0b7; background: #fff5f3; color: #9f1d12; border-radius: 999px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; flex: 0 0 auto; }
+      .selection-remove:hover { background: #ffe8e4; }
       .rejected-list { color: #9a3412; }
       footer { color: var(--muted); font-size: 12px; }
       a { color: var(--blue); text-decoration: none; font-weight: 600; }
@@ -2624,6 +2641,15 @@ def _landing_html(user=None) -> str:
         updateSelectionSummary();
       }
 
+      function removeQueuedFile(key, source) {
+        if (source === 'prepared') {
+          preparedFiles.delete(key);
+        } else {
+          rejectedFiles.delete(key);
+        }
+        updateSelectionSummary();
+      }
+
       function selectedFiles() {
         return [...preparedFiles.values()];
       }
@@ -2643,12 +2669,17 @@ def _landing_html(user=None) -> str:
           return;
         }
         const acceptedHtml = selected.length
-          ? `<div>Подготовлены к загрузке:</div><ul>${selected.map((file) => `<li>${displayName(file)} · ${formatSize(file.size)}</li>`).join('')}</ul>`
+          ? `<div>Подготовлены к загрузке:</div><ul>${selected.map((file) => `<li><span>${escapeHtml(displayName(file))} · ${formatSize(file.size)}</span><button type="button" class="selection-remove" data-remove-file-key="${escapeHtml(fileKey(file))}" data-remove-file-source="prepared">Удалить</button></li>`).join('')}</ul>`
           : '<div>Нет файлов, соответствующих требованиям.</div>';
         const rejectedHtml = rejected.length
-          ? `<div class="rejected-list">Не будут загружены:</div><ul class="rejected-list">${rejected.map((file) => `<li>${displayName(file)} · ${formatSize(file.size)}</li>`).join('')}</ul>`
+          ? `<div class="rejected-list">Не будут загружены:</div><ul class="rejected-list">${rejected.map((file) => `<li><span>${escapeHtml(displayName(file))} · ${formatSize(file.size)}</span><button type="button" class="selection-remove" data-remove-file-key="${escapeHtml(fileKey(file))}" data-remove-file-source="rejected">Удалить</button></li>`).join('')}</ul>`
           : '';
         selectionSummary.innerHTML = `${acceptedHtml}${rejectedHtml}`;
+        selectionSummary.querySelectorAll('button[data-remove-file-key]').forEach((button) => {
+          button.addEventListener('click', () => {
+            removeQueuedFile(button.dataset.removeFileKey || '', button.dataset.removeFileSource || 'prepared');
+          });
+        });
       }
 
       function formatSize(bytes) {
@@ -3066,6 +3097,32 @@ def _uploads_html(user=None) -> str:
         buildReportButton.disabled = selectedUploads.size === 0;
       }
 
+      async function deleteUploadItem(uploadId, button) {
+        if (!uploadId) {
+          return;
+        }
+        if (!window.confirm('Удалить файл?')) {
+          return;
+        }
+        button.disabled = true;
+        uploadsMessage.textContent = 'Удаляем файл...';
+        try {
+          const response = await fetch(`/api/uploads/${encodeURIComponent(uploadId)}`, { method: 'DELETE' });
+          const data = await readJsonResponse(response);
+          if (!response.ok) {
+            throw new Error(data?.detail || data?.message || 'Не удалось удалить файл.');
+          }
+          selectedUploads.delete(uploadId);
+          renderSelectedCount();
+          uploadsMessage.textContent = 'Файл удалён.';
+          await loadUploads(currentUploadsPage);
+        } catch (error) {
+          uploadsMessage.textContent = error instanceof Error ? error.message : String(error);
+        } finally {
+          button.disabled = false;
+        }
+      }
+
       function renderUploadsPager(page, totalPages) {
         if (!uploadsPager) {
           return;
@@ -3121,6 +3178,7 @@ def _uploads_html(user=None) -> str:
           ? `<a class="file-link" href="${item.download_url}" target="_blank" rel="noreferrer">${item.original_name}</a>${item.retention_note ? `<span class="retention-note">${item.retention_note}</span>` : ''}`
           : `<span class="report-empty">${item.original_name} · ${item.status_message || 'Срок хранения истёк'}</span>`;
         const rebuildDisabled = isProcessing || !item.download_url ? 'disabled' : '';
+        const deleteDisabled = '';
         return `
           <tr>
             <td><input class="row-checkbox" type="checkbox" data-upload-id="${item.upload_id}" ${isSelected ? 'checked' : ''}></td>
@@ -3131,6 +3189,7 @@ def _uploads_html(user=None) -> str:
             <td data-report-cell="${item.upload_id}">${reportHtml}</td>
             <td>
               <button class="icon-button" type="button" title="пересобрать отчёт" aria-label="пересобрать отчёт" data-rebuild-upload-id="${item.upload_id}" ${rebuildDisabled}>↻</button>
+              <button class="icon-button icon-button--danger" type="button" title="удалить файл" aria-label="удалить файл" data-delete-upload-id="${item.upload_id}" ${deleteDisabled}>🗑</button>
             </td>
           </tr>`;
       }
@@ -3160,6 +3219,9 @@ def _uploads_html(user=None) -> str:
         });
         uploadsBody.querySelectorAll('button[data-rebuild-upload-id]').forEach((button) => {
           button.addEventListener('click', () => rebuildUploadReport(button.dataset.rebuildUploadId, button));
+        });
+        uploadsBody.querySelectorAll('button[data-delete-upload-id]').forEach((button) => {
+          button.addEventListener('click', () => deleteUploadItem(button.dataset.deleteUploadId, button));
         });
         renderUploadsPager(currentPage, totalPages);
         renderSelectedCount();

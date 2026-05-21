@@ -441,6 +441,8 @@ def test_web_index_contains_upload_landing():
     assert "и ещё" not in html
     assert "/api/uploads/store" in html
     assert "selection_summary" in html
+    assert "data-remove-file-key" in html
+    assert "selection-remove" in html
     assert "renderUploadComplete" in html
     assert "Отчёт" in html
     assert "Перейти в загрузки" in html
@@ -485,6 +487,7 @@ def test_uploads_page_contains_table_and_actions():
     assert "/rebuild" in html
     assert "пересобрать отчёт" in html
     assert "data-rebuild-upload-id" in html
+    assert "data-delete-upload-id" in html
     assert "data-report-cell" in html
     assert "item.download_url" in html
     assert "Отчёт для каждой загрузки формируется сразу после приёма файла" in html
@@ -1011,6 +1014,37 @@ def test_uploads_report_links_update(tmp_path, monkeypatch):
     assert updated.status_code == 200
     assert updated.json()[0]["report_url"].startswith("/report/")
     assert updated.json()[0]["status"] == "ready"
+
+
+def test_upload_delete_api_removes_record_and_file(tmp_path, monkeypatch):
+    history_root = tmp_path / "history"
+    upload_root = tmp_path / "uploads"
+    auth_root = tmp_path / "auth"
+    monkeypatch.setattr("web.history._history_root", _mock_history_root(history_root))
+    monkeypatch.setattr("web.uploads._upload_root", _mock_upload_root(upload_root))
+    monkeypatch.setattr("web.auth._auth_root", _mock_auth_root(auth_root))
+
+    client = TestClient(create_app())
+    _login(client)
+    store_response = client.post(
+        "/api/uploads/store",
+        files=[("files", ("sample.log", b"2026-04-29 20:50:41.343 PaymentStart, resp: {Code:0 Message:OK} duration=412 ms p: mgt_nbs-oti-4.4.12\n", "text/plain"))],
+    )
+    assert store_response.status_code == 200
+    payload = store_response.json()
+    upload_id = payload["items"][0]["upload_id"]
+    stored_path = Path(payload["items"][0]["stored_path"])
+    item_path = upload_root / "items" / f"{upload_id}.json"
+    assert stored_path.exists()
+    assert item_path.exists()
+
+    delete_response = client.delete(f"/api/uploads/{upload_id}")
+    assert delete_response.status_code == 200
+    assert delete_response.json()["status"] == "ok"
+
+    assert not stored_path.exists()
+    assert not item_path.exists()
+    assert client.get("/api/uploads").json() == []
 
 
 def test_upload_rebuild_report_refreshes_existing_upload(tmp_path, monkeypatch):
