@@ -150,18 +150,9 @@ def load_upload(upload_id: str, storage_dir: Path | None = None) -> UploadItemMo
     path = _item_path(upload_id, storage_dir)
     if not path.exists():
         raise FileNotFoundError(upload_id)
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    payload.setdefault("report_run_id", "")
-    payload.setdefault("report_url", "")
-    payload.setdefault("report_has_ai", False)
-    payload.setdefault("report_generated_at", "")
-    payload.setdefault("retention_expires_at", "")
-    payload.setdefault("retention_note", "")
-    payload.setdefault("download_url", f"/uploads/download/{upload_id}")
-    payload.setdefault("status", "ready" if payload.get("report_url") else "stored")
-    payload.setdefault("status_message", "")
-    payload.setdefault("owner_email", "")
-    payload.setdefault("owner_name", "")
+    payload = _load_upload_payload(path)
+    if payload is None:
+        raise FileNotFoundError(upload_id)
     return _decorate_upload_item(UploadItemModel(**payload))
 
 
@@ -169,18 +160,9 @@ def _all_uploads(storage_dir: Path | None = None, owner_email: str | None = None
     root = _upload_root(storage_dir)
     items: list[UploadItemModel] = []
     for path in sorted((root / "items").glob("*.json")):
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        payload.setdefault("report_run_id", "")
-        payload.setdefault("report_url", "")
-        payload.setdefault("report_has_ai", False)
-        payload.setdefault("report_generated_at", "")
-        payload.setdefault("retention_expires_at", "")
-        payload.setdefault("retention_note", "")
-        payload.setdefault("download_url", "")
-        payload.setdefault("status", "ready" if payload.get("report_url") else "stored")
-        payload.setdefault("status_message", "")
-        payload.setdefault("owner_email", "")
-        payload.setdefault("owner_name", "")
+        payload = _load_upload_payload(path)
+        if payload is None:
+            continue
         item = _decorate_upload_item(UploadItemModel(**payload))
         if owner_email is None or item.owner_email == owner_email:
             items.append(item)
@@ -337,6 +319,28 @@ def _decorate_upload_item(item: UploadItemModel) -> UploadItemModel:
     item = _apply_upload_report_state(item)
     item = _apply_upload_retention_state(item)
     return item
+
+
+def _load_upload_payload(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    payload = dict(payload)
+    payload.setdefault("report_run_id", "")
+    payload.setdefault("report_url", "")
+    payload.setdefault("report_has_ai", False)
+    payload.setdefault("report_generated_at", "")
+    payload.setdefault("retention_expires_at", "")
+    payload.setdefault("retention_note", "")
+    payload.setdefault("download_url", "")
+    payload.setdefault("status", "ready" if payload.get("report_url") else "stored")
+    payload.setdefault("status_message", "")
+    payload.setdefault("owner_email", "")
+    payload.setdefault("owner_name", "")
+    return payload
 
 
 def _apply_upload_report_state(item: UploadItemModel) -> UploadItemModel:

@@ -880,6 +880,93 @@ def test_web_history_query_sort_and_delete(tmp_path, monkeypatch):
     assert [item.run_id for item in remaining] == [old_item.run_id]
 
 
+def test_web_history_skips_malformed_index_entries(tmp_path):
+    history_root = tmp_path / "history"
+    history_root.mkdir(parents=True)
+    (history_root / "runs").mkdir(parents=True)
+    (history_root / "index.jsonl").write_text(
+        "\n".join(
+            [
+                '{"run_id":"bad","created_at":"2026-04-29T10:00:00+00:00"',
+                json.dumps(
+                    {
+                        "run_id": "good",
+                        "created_at": "2026-04-29T11:00:00+00:00",
+                        "mode": "analysis",
+                        "source": "upload",
+                        "version": "1.6.15",
+                        "input_path": "./input",
+                        "reports_dir": "./reports",
+                        "total": 1,
+                        "success_count": 1,
+                        "decline_count": 0,
+                        "technical_error_count": 0,
+                        "unknown_count": 0,
+                        "bm_logs": 0,
+                        "reader_logs": 0,
+                        "system_logs": 0,
+                        "report_path": "",
+                        "report_url": "",
+                        "manifest_url": "",
+                        "owner_email": "",
+                        "owner_name": "",
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    items = list_history(history_root, limit=10)
+    assert len(items) == 1
+    assert items[0].run_id == "good"
+
+
+def test_web_uploads_skip_malformed_items(tmp_path, monkeypatch):
+    history_root = tmp_path / "history"
+    upload_root = tmp_path / "uploads"
+    auth_root = tmp_path / "auth"
+    monkeypatch.setattr("web.history._history_root", _mock_history_root(history_root))
+    monkeypatch.setattr("web.uploads._upload_root", _mock_upload_root(upload_root))
+    monkeypatch.setattr("web.auth._auth_root", _mock_auth_root(auth_root))
+
+    items_root = upload_root / "items"
+    items_root.mkdir(parents=True, exist_ok=True)
+    (items_root / "bad.json").write_text('{"upload_id":"bad"', encoding="utf-8")
+    (items_root / "good.json").write_text(
+        json.dumps(
+            {
+                "upload_id": "good",
+                "created_at": "2026-04-29T11:00:00+00:00",
+                "original_name": "sample.log",
+                "stored_path": str(upload_root / "files" / "good" / "sample.log"),
+                "size_bytes": 10,
+                "status": "stored",
+                "status_message": "",
+                "download_url": "/uploads/download/good",
+                "owner_email": DEFAULT_ADMIN_EMAIL,
+                "owner_name": "Administrator",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    files_root = upload_root / "files" / "good"
+    files_root.mkdir(parents=True, exist_ok=True)
+    (files_root / "sample.log").write_text("sample\n", encoding="utf-8")
+
+    client = TestClient(create_app())
+    _login(client)
+    response = client.get("/api/uploads")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["upload_id"] == "good"
+
+
 def test_web_summary_snapshot_is_compact(tmp_path):
     input_dir = tmp_path / "input"
     input_dir.mkdir()

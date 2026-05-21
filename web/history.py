@@ -161,7 +161,11 @@ def list_history(
         for line in handle:
             if not line.strip():
                 continue
-            payload = json.loads(line)
+            try:
+                payload = json.loads(line)
+                item = HistoryItemModel(**_normalize_history_payload(payload))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
             payload.setdefault("report_path", "")
             payload.setdefault("report_url", "")
             payload.setdefault("manifest_url", "")
@@ -178,7 +182,6 @@ def list_history(
                 ).lower()
                 if query_filter not in searchable:
                     continue
-            item = HistoryItemModel(**payload)
             if recent_items is not None:
                 recent_items.append(item)
             else:
@@ -275,3 +278,13 @@ def _parse_datetime(value: str | None) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _normalize_history_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(payload)
+    payload.setdefault("report_path", "")
+    payload.setdefault("report_url", "")
+    payload.setdefault("manifest_url", "")
+    payload.setdefault("owner_email", "")
+    payload.setdefault("owner_name", "")
+    return payload
