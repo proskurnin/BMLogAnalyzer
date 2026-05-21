@@ -4,13 +4,17 @@ This document describes the Docker Compose deployment used by the current FastAP
 
 ## Release checklist
 
-1. Set a release version and changelog entry.
-2. Prepare persistent data directories.
-3. Configure production environment variables.
-4. Set up GitHub Actions secrets for deploy.
-5. Run the test suite before deployment.
-6. Run the service behind Nginx with HTTPS.
-7. Back up the persistent data directories.
+1. Ask which version type is changing: `major`, `minor`, or `patch`.
+2. Set a release version and add a `CHANGELOG.md` entry.
+3. Deploy to stage first and verify the change there before promoting to prod.
+4. Prepare persistent data directories.
+5. Configure production environment variables.
+6. Set up GitHub Actions secrets for deploy.
+7. Run the test suite before deployment.
+8. Run the service behind Nginx with HTTPS.
+9. Back up the persistent data directories.
+
+Prod deployment is not allowed without a version bump. Every release must be recorded in `CHANGELOG.md`, and the same release note should be reflected in the site's dedicated Russian `Release Notes` section.
 
 ## Production environment
 
