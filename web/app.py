@@ -1138,6 +1138,16 @@ def _report_ai_panel(run_id: str) -> str:
             .replaceAll("'", "&#39;");
         }}
 
+        async function readJsonResponse(response) {{
+          const text = await response.text();
+          if (!text) return {{}};
+          try {{
+            return JSON.parse(text);
+          }} catch (error) {{
+            return {{ detail: text, raw: text }};
+          }}
+        }}
+
         function formatMoscowDateTime(value) {{
           if (!value) return "";
           const date = new Date(value);
@@ -1194,7 +1204,7 @@ def _report_ai_panel(run_id: str) -> str:
         async function loadExisting() {{
           status.textContent = "Проверяем сохранённый AI-анализ...";
           const response = await fetch(endpoint);
-          const payload = await response.json();
+          const payload = await readJsonResponse(response);
           if (response.ok && payload.schema_version) {{
             render(payload);
           }} else if (payload.enabled === false) {{
@@ -1210,7 +1220,7 @@ def _report_ai_panel(run_id: str) -> str:
           resultRoot.innerHTML = "";
           try {{
             const response = await fetch(endpoint, {{ method: "POST" }});
-            const payload = await response.json();
+            const payload = await readJsonResponse(response);
             if (!response.ok) throw new Error(payload.detail || "Не удалось выполнить AI-анализ.");
             render(payload);
           }} catch (error) {{
@@ -2283,6 +2293,16 @@ def _index_html() -> str:
       let selectedHistoryMode = 'all';
       let selectedHistoryRunId = '';
 
+      async function readJsonResponse(response) {
+        const text = await response.text();
+        if (!text) return {};
+        try {
+          return JSON.parse(text);
+        } catch (error) {
+          return { detail: text, raw: text };
+        }
+      }
+
       function setProgress(percent, activeStep, message) {
         progressBar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
         statusText.textContent = message;
@@ -2329,7 +2349,7 @@ def _index_html() -> str:
       async function loadHistory() {
         try {
           const latestResponse = await fetch('/api/runs/latest');
-          const latestItem = await latestResponse.json();
+          const latestItem = await readJsonResponse(latestResponse);
           if (latestItem && latestItem.run_id && latestItem.report_url) {
             latestReportEmpty.hidden = true;
             latestReportCard.hidden = false;
@@ -2355,7 +2375,7 @@ def _index_html() -> str:
           }
           query.set('sort', historySort.value || 'desc');
           const response = await fetch(`/api/runs?${query.toString()}`);
-          const items = await response.json();
+          const items = await readJsonResponse(response);
           if (!Array.isArray(items) || !items.length) {
             historyList.innerHTML = '';
             historyEmpty.hidden = false;
@@ -2378,7 +2398,7 @@ def _index_html() -> str:
             node.addEventListener('click', async () => {
               const runId = node.dataset.runId;
               const response = await fetch(`/api/runs/${encodeURIComponent(runId)}`);
-              const item = await response.json();
+              const item = await readJsonResponse(response);
               setHistoryDetail({
                 run_id: item.run_id,
                 created_at: item.created_at,
@@ -2437,7 +2457,7 @@ def _index_html() -> str:
         try {
           const response = await fetch(`/api/runs/${encodeURIComponent(selectedHistoryRunId)}`, { method: 'DELETE' });
           if (!response.ok) {
-            const data = await response.json().catch(() => ({}));
+            const data = await readJsonResponse(response);
             throw new Error(data?.detail || 'Не удалось удалить сессию.');
           }
           setHistoryDetail(null);
@@ -2468,7 +2488,7 @@ def _index_html() -> str:
           setProgress(55, 3, 'Обработка логов...');
           const response = await responsePromise;
           setProgress(80, 4, 'Формирование отчёта...');
-          const data = await response.json();
+          const data = await readJsonResponse(response);
           if (!response.ok) {
             throw new Error(data?.detail || data?.message || 'Не удалось выполнить загрузку.');
           }
@@ -2702,6 +2722,18 @@ def _landing_html(user=None) -> str:
         messageActions.dataset.visible = 'false';
       }
 
+      async function readJsonResponse(response) {
+        const text = await response.text();
+        if (!text) {
+          return {};
+        }
+        try {
+          return JSON.parse(text);
+        } catch (error) {
+          return { detail: text, raw: text };
+        }
+      }
+
       async function collectDirectoryHandleFiles(directoryHandle, prefix = '') {
         const files = [];
         for await (const [name, handle] of directoryHandle.entries()) {
@@ -2814,7 +2846,7 @@ def _landing_html(user=None) -> str:
           setProgress(70, 'Загрузка завершена. Идёт обработка архива...');
           const response = await responsePromise;
           setProgress(100, 'Сессия загрузки завершена.');
-          const data = await response.json();
+          const data = await readJsonResponse(response);
           if (!response.ok) {
             throw new Error(data?.detail || data?.message || 'Не удалось загрузить файлы.');
           }
@@ -3017,6 +3049,18 @@ def _uploads_html(user=None) -> str:
       let currentUploadsPage = 1;
       let currentUploadsTotalPages = 1;
 
+      async function readJsonResponse(response) {
+        const text = await response.text();
+        if (!text) {
+          return {};
+        }
+        try {
+          return JSON.parse(text);
+        } catch (error) {
+          return { detail: text, raw: text };
+        }
+      }
+
       function renderSelectedCount() {
         selectedCount.textContent = `Выбрано ${selectedUploads.size}`;
         buildReportButton.disabled = selectedUploads.size === 0;
@@ -3093,7 +3137,7 @@ def _uploads_html(user=None) -> str:
 
       async function loadUploads(page = currentUploadsPage) {
         const response = await fetch(`/api/uploads?page=${encodeURIComponent(page)}&page_size=${encodeURIComponent(uploadsPageSize)}`);
-        const payload = await response.json();
+        const payload = await readJsonResponse(response);
         const items = Array.isArray(payload) ? payload : payload.items;
         const total = Array.isArray(payload) ? items.length : Number(payload.total || 0);
         const totalPages = Array.isArray(payload) ? 1 : Number(payload.total_pages || 1);
@@ -3193,7 +3237,7 @@ def _uploads_html(user=None) -> str:
         uploadsMessage.textContent = 'Формируем отчёт...';
         try {
           const response = await fetch(`/api/uploads/${encodeURIComponent(uploadId)}/rebuild`, { method: 'POST' });
-          const data = await response.json();
+          const data = await readJsonResponse(response);
           if (!response.ok) {
             throw new Error(data?.detail || data?.message || 'Не удалось пересобрать отчёт.');
           }
@@ -3218,7 +3262,7 @@ def _uploads_html(user=None) -> str:
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ upload_ids: [...selectedUploads] }),
           });
-          const data = await response.json();
+          const data = await readJsonResponse(response);
           if (!response.ok) {
             throw new Error(data?.detail || data?.message || 'Не удалось сформировать отчёт.');
           }
