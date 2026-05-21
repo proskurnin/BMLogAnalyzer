@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.16 - 2026-05-21
+
+### Changed
+
+- Analyzer version bumped to `1.6.16`.
+
 ## 1.6.15 - 2026-05-21
 
 ### Changed
