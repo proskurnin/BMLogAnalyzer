@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from analytics.bm_statuses import bm_status_summary_rows, classify_bm_status
 from tests.test_counters import make_event
 
@@ -11,7 +13,13 @@ def test_classifies_supported_bm_statuses_from_codes_and_markers():
     assert classify_bm_status(make_event(3, message="Ошибка чтения карты")) == "Отказ, ошибка чтения карты"
     assert classify_bm_status(make_event(4, message="Карта в стоп-листе")) == "Отказ, карта в стоп листе"
     assert classify_bm_status(make_event(6, message="Приложите одну карту")) == "Отказ, коллизия"
+    non_emv_event = replace(
+        make_event(6, message="Приложите одну карту"),
+        raw_line="PaymentStart, resp: {Code:6 Message:NON_EMV_CARD}",
+    )
+    assert classify_bm_status(non_emv_event) == "NON_EMV_CARD"
     assert classify_bm_status(make_event(12, message="QR-КОД НЕДЕЙСТВИТЕЛЕН")) == "Отказ, QR-код недействителен"
+    assert classify_bm_status(make_event(12, message="QR-код просрочен")) == "Отказ, QR-код недействителен"
     assert classify_bm_status(make_event(14, message="Операция отклонена")) == "Отказ, операция отклонена"
     assert classify_bm_status(make_event(16, message="Истек таймаут")) == "Отказ, истек таймаут"
     assert classify_bm_status(make_event(255, message="Операция отклонена")) == "Отказ, операция отклонена"
@@ -27,3 +35,20 @@ def test_bm_status_summary_keeps_requested_rows_and_unclassified():
     assert by_status["Отказ, ошибка чтения карты"]["percent"] == 50.0
     assert by_status["Не классифицировано"]["count"] == 1
     assert "Успешный онлайн МИР" in by_status
+
+
+def test_bm_status_summary_places_non_emv_card_after_oda_cda_and_separates_counts():
+    events = [
+        make_event(6, message="Приложите одну карту"),
+        replace(make_event(6, message="NON_EMV_CARD"), raw_line="PaymentStart, resp: {Code:6 Message:NON_EMV_CARD}"),
+        make_event(999, message="ODA failed"),
+    ]
+
+    rows = bm_status_summary_rows(events)
+    statuses = [row["status"] for row in rows]
+    by_status = {row["status"]: row for row in rows}
+
+    assert statuses.index("Отказ, ошибка ODA/CDA") < statuses.index("NON_EMV_CARD")
+    assert by_status["Отказ, коллизия"]["count"] == 1
+    assert by_status["NON_EMV_CARD"]["count"] == 1
+    assert by_status["Отказ, ошибка ODA/CDA"]["count"] == 1

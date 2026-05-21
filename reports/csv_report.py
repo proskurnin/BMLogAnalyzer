@@ -37,6 +37,7 @@ from analytics.log_inventory import (
 )
 from analytics.no_card import no_card_repeat_rows, no_card_repeat_summary_rows
 from analytics.oda_cda import oda_cda_repeat_rows, oda_cda_repeat_summary_rows
+from analytics.protocol_scenarios import run_protocol_scenarios
 from analytics.reader_firmware_timeline import (
     reader_firmware_timeline_rows,
     reader_firmware_timeline_summary_rows,
@@ -52,6 +53,7 @@ from core.models import (
     LogFileInventory,
     PaymentEvent,
     PipelineStats,
+    ProtocolScenarioResult,
 )
 from core.config import ReportConfig
 from core.version import APP_NAME, __version__
@@ -957,6 +959,9 @@ def _write_check_reports(
     results = run_builtin_checks(events)
     _write_if_enabled(config, written, "check_results", output_dir / "check_results.csv", write_check_results, results)
     _write_if_enabled(config, written, "check_summary", output_dir / "check_summary.csv", write_check_summary, results)
+    protocol_results = run_protocol_scenarios(events)
+    _write_if_enabled(config, written, "protocol_scenario_results", output_dir / "protocol_scenario_results.csv", write_protocol_scenario_results, protocol_results)
+    _write_if_enabled(config, written, "protocol_scenario_summary", output_dir / "protocol_scenario_summary.csv", write_protocol_scenario_summary, protocol_results)
 
 
 def write_check_reports(events: list[PaymentEvent], output_dir: Path) -> None:
@@ -1015,6 +1020,69 @@ def write_check_summary(results: list[CheckResult], path: Path) -> None:
                     "check_id": check_id,
                     "title": title,
                     "severity": severity,
+                    "status": status,
+                    "count": count,
+                }
+            )
+
+
+def write_protocol_scenario_results(results: list[ProtocolScenarioResult], path: Path) -> None:
+    fieldnames = [
+        "scenario_id",
+        "title",
+        "status",
+        "source_document",
+        "source_section",
+        "source_sections",
+        "source_quote",
+        "source_quotes",
+        "source_file",
+        "line_number",
+        "timestamp",
+        "evidence",
+        "raw_line",
+        "matched_event_type",
+        "matched_code",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for result in results:
+            writer.writerow(
+                {
+                    "scenario_id": result.scenario_id,
+                    "title": result.title,
+                    "status": result.status,
+                    "source_document": result.source_document,
+                    "source_section": result.source_section,
+                    "source_sections": "\n".join(result.source_sections),
+                    "source_quote": result.source_quote,
+                    "source_quotes": "\n".join(result.source_quotes),
+                    "source_file": result.source_file,
+                    "line_number": result.line_number if result.line_number is not None else "",
+                    "timestamp": result.timestamp.isoformat(sep=" ") if result.timestamp else "",
+                    "evidence": result.evidence,
+                    "raw_line": result.raw_line,
+                    "matched_event_type": result.matched_event_type,
+                    "matched_code": result.matched_code if result.matched_code is not None else "",
+                }
+            )
+
+
+def write_protocol_scenario_summary(results: list[ProtocolScenarioResult], path: Path) -> None:
+    counts: dict[tuple[str, str, str], int] = {}
+    for result in results:
+        key = (result.scenario_id, result.title, result.status)
+        counts[key] = counts.get(key, 0) + 1
+
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["scenario_id", "title", "status", "count"])
+        writer.writeheader()
+        for (scenario_id, title, status), count in sorted(counts.items()):
+            writer.writerow(
+                {
+                    "scenario_id": scenario_id,
+                    "title": title,
                     "status": status,
                     "count": count,
                 }

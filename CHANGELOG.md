@@ -1,5 +1,102 @@
 # Changelog
 
+## 1.6.15 - 2026-05-21
+
+### Changed
+
+- Release Notes in admin now use a restrained monochrome palette with a subtle current-version marker.
+- Analyzer version bumped to `1.6.15`.
+
+## 1.6.14 - 2026-05-21
+
+### Changed
+
+- Release Notes in admin now use a denser three-column layout on very wide screens and a dedicated marker for the current release.
+- Analyzer version bumped to `1.6.14`.
+
+## 1.6.13 - 2026-05-21
+
+### Changed
+
+- Release Notes in admin now use a two-column layout on wide screens and stronger color accents for fresh releases.
+- Analyzer version bumped to `1.6.13`.
+
+## 1.6.12 - 2026-05-21
+
+### Changed
+
+- Release Notes in admin can now keep several versions open at once and use richer card styling for the version history.
+- Analyzer version bumped to `1.6.12`.
+
+## 1.6.11 - 2026-05-21
+
+### Changed
+
+- Release Notes in admin now use Russian descriptions only, and the version header is formatted as `X.Y.Z (DD.MM.YYYY)` without file links.
+- Analyzer version bumped to `1.6.11`.
+
+## 1.6.10 - 2026-05-21
+
+### Changed
+
+- Release Notes in admin now show only Russian descriptions, with headers formatted as `X.Y.Z (DD.MM.YYYY)` and no file links.
+- Analyzer version bumped to `1.6.10`.
+
+## 1.6.9 - 2026-05-21
+
+### Changed
+
+- Removed related commit links from admin Release Notes while keeping version and file links.
+- Analyzer version bumped to `1.6.9`.
+
+## 1.6.8 - 2026-05-21
+
+### Changed
+
+- Release Notes in admin now behave like an accordion per version and include links to relevant source files.
+- Release Notes now also show related GitHub commit links.
+- Analyzer version bumped to `1.6.8`.
+
+## 1.6.7 - 2026-05-21
+
+### Changed
+
+- Admin area now shows a collapsed `Release Notes` block sourced from `CHANGELOG.md`, with the newest version first.
+- Analyzer version bumped to `1.6.7`.
+
+## 1.6.1 - 2026-05-20
+
+### Changed
+
+- HTML report BM-status toggle now survives client-side re-rendering of the table.
+- Report responses now send no-cache headers so fresh reports are not hidden by browser cache.
+- Analyzer version bumped to `1.6.1`.
+
+## 1.6.0 - 2026-05-20
+
+### Added
+
+- Protocol interaction scenarios now support multiple source sections and multiple source quotes with editable multiline fields in admin.
+- HTML and CSV protocol scenario outputs now separate source document, sections, and quotes.
+- Analyzer version bumped to `1.6.0`.
+
+## 1.5.0 - 2026-05-18
+
+### Changed
+
+- BM status classification now folds `QR-код просрочен` into `Отказ, QR-код недействителен`.
+- Uploads page now shows shorter report labels, report creation time, and inline rebuild progress.
+- Admin auth journal stays open while paging.
+- HTML report BM-status table now hides zero rows on demand.
+- Check tables are sorted by severity and styled by priority.
+- Analyzer version bumped to `1.5.0`.
+
+## 1.4.1 - 2026-05-18
+
+### Changed
+
+- Analyzer version bumped to `1.4.1`.
+
 ## 1.4.0 - 2026-05-15
 
 ### Added

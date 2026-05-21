@@ -15,6 +15,7 @@ BM_STATUS_ORDER = [
     "Отказ, карта в стоп листе",
     "Отказ, коллизия",
     "Отказ, ошибка ODA/CDA",
+    "NON_EMV_CARD",
     "Отказ, QR-код недействителен",
     "Отказ, операция отклонена",
     "Отказ, истек таймаут",
@@ -33,6 +34,7 @@ REPEAT_RE = re.compile(r"повтор|следующий проход|repeat", r
 READ_ERROR_RE = re.compile(r"чтени[яе] карт|read", re.IGNORECASE)
 STOP_LIST_RE = re.compile(r"stop[- ]?list|стоп", re.IGNORECASE)
 COLLISION_RE = re.compile(r"collision|коллизи|одну карту", re.IGNORECASE)
+NON_EMV_CARD_RE = re.compile(r"\bNON_EMV_CARD\b", re.IGNORECASE)
 ODA_CDA_RE = re.compile(r"\b(?:oda|cda)\b", re.IGNORECASE)
 NO_CARD_RE = re.compile(r"нет карты|no card", re.IGNORECASE)
 
@@ -73,6 +75,8 @@ def classify_bm_status(event: PaymentEvent) -> str:
 
     if NO_CONFIRM_RE.search(text):
         return "Проход зафейлен (онлайн - не получили конфирм и зарегали как фейл)"
+    if NON_EMV_CARD_RE.search(text):
+        return "NON_EMV_CARD"
     if code == 1 or REPEAT_RE.search(text):
         return "Отказ, повторное предъявление"
     if code == 3 or READ_ERROR_RE.search(text):
@@ -83,7 +87,7 @@ def classify_bm_status(event: PaymentEvent) -> str:
         return "Отказ, коллизия"
     if ODA_CDA_RE.search(text):
         return "Отказ, ошибка ODA/CDA"
-    if code == 12 or "qr-код недействител" in text.lower() or "qr code invalid" in text.lower():
+    if code == 12 or "qr-код недействител" in text.lower() or "qr code invalid" in text.lower() or "qr-код просроч" in text.lower() or "qr code expired" in text.lower():
         return "Отказ, QR-код недействителен"
     if code in {14, 255} or "операция отклонена" in text.lower():
         return "Отказ, операция отклонена"

@@ -159,3 +159,51 @@ class CheckResult:
     message: str | None
     evidence: str
     raw_line: str
+
+
+@dataclass(frozen=True)
+class ProtocolScenarioStep:
+    kind: str
+    label: str
+    event_type: str = ""
+    message_contains: str = ""
+    raw_contains: str = ""
+    code_eq: int | None = None
+    code_ne: int | None = None
+    within_seconds: float | None = None
+    next_event_type: str = ""
+    source_section: str = ""
+
+
+@dataclass(frozen=True)
+class ProtocolScenario:
+    scenario_id: str
+    title: str
+    description: str
+    enabled: bool = True
+    version: str = "1"
+    source_document: str = ""
+    source_section: str = ""
+    source_sections: list[str] = field(default_factory=list)
+    source_quote: str = ""
+    source_quotes: list[str] = field(default_factory=list)
+    steps: list[ProtocolScenarioStep] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ProtocolScenarioResult:
+    scenario_id: str
+    title: str
+    status: str
+    source_document: str
+    source_section: str
+    source_sections: list[str]
+    source_quote: str
+    source_quotes: list[str]
+    source_file: str
+    line_number: int | None
+    timestamp: datetime | None
+    evidence: str
+    raw_line: str
+    matched_event_type: str = ""
+    matched_code: int | None = None

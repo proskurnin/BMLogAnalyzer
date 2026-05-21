@@ -65,6 +65,8 @@ def test_calculates_counts_percentages_and_p90_p95():
     assert result.technical_error_percent == 50.0
     assert result.unknown_count == 0
     assert result.unknown_percent == 0.0
+    assert list(result.by_code) == [0, 3, 16, 255]
+    assert list(result.by_classification) == ["success", "decline", "technical_error"]
     assert result.by_code[0] == 1
     assert result.by_code[3] == 1
     assert result.by_code[16] == 1

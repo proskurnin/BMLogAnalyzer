@@ -44,6 +44,9 @@ upload_store/  uploaded original files
 web_history/   analysis runs and generated reports
 ```
 
+If you want to keep web accounts separate from the rest of the data tree, set `BM_AUTH_DIR` explicitly. By default it resolves to `BM_DATA_DIR/auth`, so stage and prod stay isolated as long as they mount separate data directories.
+The auth directory also stores the session policy and the authorization journal.
+
 ## Server Layout
 
 The deployment mirrors deTilda:
@@ -53,6 +56,8 @@ The deployment mirrors deTilda:
 /opt/bm-log-analyzer-prod/src   production git checkout
 /var/lib/bm-log-analyzer-stage  staging persistent data mounted as /app/_workdir
 /var/lib/bm-log-analyzer-prod   production persistent data mounted as /app/_workdir
+/var/lib/bm-log-analyzer-stage/auth  staging auth data
+/var/lib/bm-log-analyzer-prod/auth   production auth data
 /home/bm/.env.staging           staging secrets, copied into checkout during deploy
 /home/bm/.env.prod              production secrets, copied into checkout during deploy
 ```
@@ -130,6 +135,8 @@ nginx/prod.conf    -> /etc/nginx/sites-available/bm-log-analyzer-prod
 
 Stage uses `bm-stage.proskurnin.ru` and proxies to `127.0.0.1:8010`.
 Production uses `bm.proskurnin.ru` and proxies to `127.0.0.1:8011`.
+
+The staging virtual host is additionally protected with nginx HTTP basic auth. Its password file is expected at `/var/lib/bm-log-analyzer-stage/nginx/bm-stage.htpasswd` on the server.
 
 ## Backup and restore
 

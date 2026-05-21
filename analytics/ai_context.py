@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from analytics.bm_statuses import bm_status_summary_rows
 from analytics.check_cases import run_builtin_checks
+from analytics.protocol_scenarios import run_protocol_scenarios
 from analytics.repeats import repeat_attempt_rows
 from analytics.suspicious import suspicious_line_payloads
 from core.models import AnalysisResult, PaymentEvent, PipelineStats
@@ -23,6 +24,7 @@ def build_ai_context(
     suspicious_rows = suspicious_line_payloads(events)[:MAX_CONTEXT_ROWS]
     repeat_rows = [row for row in repeat_attempt_rows(events) if row.get("repeat_found_within_3s")][:MAX_CONTEXT_ROWS]
     check_rows = [_json_ready(asdict(row)) for row in run_builtin_checks(events)[:MAX_CONTEXT_ROWS]]
+    protocol_rows = [_json_ready(asdict(row)) for row in run_protocol_scenarios(events)[:MAX_CONTEXT_ROWS]]
     return {
         "schema_version": "bm-log-analyzer.ai-context.v1",
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -49,6 +51,7 @@ def build_ai_context(
         "suspicious_lines": suspicious_rows,
         "repeat_after_failure_3s": repeat_rows,
         "builtin_check_results": check_rows,
+        "protocol_scenario_results": protocol_rows,
         "pipeline": {
             "input_files": stats.input_files if stats else [],
             "analyzed_files": stats.analyzed_files if stats else [],

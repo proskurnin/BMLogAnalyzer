@@ -40,16 +40,29 @@ def analyze_events(events: Iterable[PaymentEvent]) -> AnalysisResult:
         technical_error_percent=_percent(technical_error_count, total),
         unknown_count=unknown_count,
         unknown_percent=_percent(unknown_count, total),
-        by_code=dict(sorted(by_code.items(), key=lambda item: str(item[0]))),
+        by_code=dict(sorted(by_code.items(), key=_code_sort_key)),
         by_message=dict(by_message.most_common()),
         by_bm_version=dict(by_bm_version.most_common()),
         by_reader_type=dict(by_reader_type.most_common()),
         by_reader_firmware=dict(by_reader_firmware.most_common()),
-        by_classification=dict(by_classification.most_common()),
+        by_classification={
+            classification: by_classification[classification]
+            for classification in ("success", "decline", "technical_error", "unknown")
+            if by_classification[classification]
+        },
         duration_buckets=dict(duration_buckets),
         p90_ms=percentile(durations, 90),
         p95_ms=percentile(durations, 95),
     )
+
+
+def _code_sort_key(item: tuple[int | str, int]) -> tuple[int, int | str]:
+    code = item[0]
+    if code == MISSING:
+        return (1, 0)
+    if isinstance(code, int):
+        return (0, code)
+    return (2, str(code))
 
 
 def _percent(count: int, total: int) -> float:

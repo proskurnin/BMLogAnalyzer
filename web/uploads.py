@@ -9,7 +9,9 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from web.history import load_history_run
 from web.models import UploadItemModel
+from web.retention import load_storage_policy
 from web.settings import upload_store_dir
 
 ALLOWED_UPLOAD_SUFFIXES = (".log", ".gz", ".zip", ".tar.gz", ".tgz", ".rar")
@@ -129,24 +131,19 @@ def list_uploads(
     storage_dir: Path | None = None,
     *,
     limit: int = 200,
+    offset: int = 0,
     owner_email: str | None = None,
 ) -> list[UploadItemModel]:
-    root = _upload_root(storage_dir)
-    items: list[UploadItemModel] = []
-    for path in sorted((root / "items").glob("*.json")):
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        payload.setdefault("report_run_id", "")
-        payload.setdefault("report_url", "")
-        payload.setdefault("download_url", "")
-        payload.setdefault("status", "ready" if payload.get("report_url") else "stored")
-        payload.setdefault("status_message", "")
-        payload.setdefault("owner_email", "")
-        payload.setdefault("owner_name", "")
-        item = _apply_upload_storage_state(UploadItemModel(**payload))
-        if owner_email is None or item.owner_email == owner_email:
-            items.append(item)
-    items.sort(key=lambda item: item.created_at, reverse=True)
-    return items[:limit]
+    items = _all_uploads(storage_dir=storage_dir, owner_email=owner_email)
+    if offset < 0:
+        offset = 0
+    if limit <= 0:
+        return items[offset:]
+    return items[offset : offset + limit]
+
+
+def count_uploads(storage_dir: Path | None = None, *, owner_email: str | None = None) -> int:
+    return len(_all_uploads(storage_dir=storage_dir, owner_email=owner_email))
 
 
 def load_upload(upload_id: str, storage_dir: Path | None = None) -> UploadItemModel:
@@ -156,12 +153,39 @@ def load_upload(upload_id: str, storage_dir: Path | None = None) -> UploadItemMo
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload.setdefault("report_run_id", "")
     payload.setdefault("report_url", "")
+    payload.setdefault("report_has_ai", False)
+    payload.setdefault("report_generated_at", "")
+    payload.setdefault("retention_expires_at", "")
+    payload.setdefault("retention_note", "")
     payload.setdefault("download_url", f"/uploads/download/{upload_id}")
     payload.setdefault("status", "ready" if payload.get("report_url") else "stored")
     payload.setdefault("status_message", "")
     payload.setdefault("owner_email", "")
     payload.setdefault("owner_name", "")
-    return _apply_upload_storage_state(UploadItemModel(**payload))
+    return _decorate_upload_item(UploadItemModel(**payload))
+
+
+def _all_uploads(storage_dir: Path | None = None, owner_email: str | None = None) -> list[UploadItemModel]:
+    root = _upload_root(storage_dir)
+    items: list[UploadItemModel] = []
+    for path in sorted((root / "items").glob("*.json")):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload.setdefault("report_run_id", "")
+        payload.setdefault("report_url", "")
+        payload.setdefault("report_has_ai", False)
+        payload.setdefault("report_generated_at", "")
+        payload.setdefault("retention_expires_at", "")
+        payload.setdefault("retention_note", "")
+        payload.setdefault("download_url", "")
+        payload.setdefault("status", "ready" if payload.get("report_url") else "stored")
+        payload.setdefault("status_message", "")
+        payload.setdefault("owner_email", "")
+        payload.setdefault("owner_name", "")
+        item = _decorate_upload_item(UploadItemModel(**payload))
+        if owner_email is None or item.owner_email == owner_email:
+            items.append(item)
+    items.sort(key=lambda item: item.created_at, reverse=True)
+    return items
 
 
 def update_upload_status(
@@ -199,6 +223,7 @@ def update_upload_reports(
         payload["status_message"] = ""
         payload["report_run_id"] = report_run_id
         payload["report_url"] = report_url
+        payload["report_has_ai"] = False
         payload["download_url"] = payload.get("download_url") or f"/uploads/download/{upload_id}"
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -305,6 +330,72 @@ def _file_word(count: int) -> str:
 def _not_uploaded_phrase(count: int) -> str:
     verb = "не загружен" if count % 10 == 1 and count % 100 != 11 else "не загружены"
     return f"{count} {_file_word(count)} {verb}"
+
+
+def _decorate_upload_item(item: UploadItemModel) -> UploadItemModel:
+    item = _apply_upload_storage_state(item)
+    item = _apply_upload_report_state(item)
+    item = _apply_upload_retention_state(item)
+    return item
+
+
+def _apply_upload_report_state(item: UploadItemModel) -> UploadItemModel:
+    if not item.report_run_id:
+        return item
+    try:
+        payload = load_history_run(item.report_run_id)
+    except FileNotFoundError:
+        return item
+    report_path = Path(payload.get("report_path") or "")
+    if not report_path.exists():
+        return item
+    ai_result_path = report_path.with_suffix(".ai.json")
+    generated_at = str(payload.get("created_at") or "")
+    if ai_result_path.exists():
+        return replace(item, report_has_ai=True, report_generated_at=generated_at)
+    return replace(item, report_has_ai=False, report_generated_at=generated_at)
+
+
+def _apply_upload_retention_state(item: UploadItemModel) -> UploadItemModel:
+    policy = load_storage_policy()
+    created_at = _parse_datetime(item.created_at)
+    if created_at is None:
+        return replace(item, retention_expires_at="", retention_note="")
+    expires_at = created_at + timedelta(days=max(1, policy.archive_retention_days))
+    note = _format_retention_note(expires_at - datetime.now(timezone.utc))
+    return replace(
+        item,
+        retention_expires_at=expires_at.isoformat(timespec="seconds"),
+        retention_note=note,
+    )
+
+
+def _format_retention_note(delta: timedelta) -> str:
+    total_seconds = int(delta.total_seconds())
+    if total_seconds <= 0:
+        return "срок хранения истёк"
+    minutes_total = total_seconds // 60
+    days, remainder_minutes = divmod(minutes_total, 24 * 60)
+    hours, minutes = divmod(remainder_minutes, 60)
+    parts: list[str] = []
+    if days:
+        parts.append(f"{days} {_plural_ru(days, 'день', 'дня', 'дней')}")
+    if hours:
+        parts.append(f"{hours} {_plural_ru(hours, 'час', 'часа', 'часов')}")
+    if minutes:
+        parts.append(f"{minutes} {_plural_ru(minutes, 'минута', 'минуты', 'минут')}")
+    if not parts:
+        return "меньше минуты"
+    return "до удаления: " + ", ".join(parts)
+
+
+def _plural_ru(value: int, one: str, few: str, many: str) -> str:
+    value = abs(value)
+    if value % 10 == 1 and value % 100 != 11:
+        return one
+    if value % 10 in {2, 3, 4} and value % 100 not in {12, 13, 14}:
+        return few
+    return many
 
 
 def _apply_upload_storage_state(item: UploadItemModel) -> UploadItemModel:

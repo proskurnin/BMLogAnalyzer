@@ -60,6 +60,8 @@ DEFAULT_REPORTS: tuple[str, ...] = (
     "summary_no_card_card_history",
     "check_results",
     "check_summary",
+    "protocol_scenario_results",
+    "protocol_scenario_summary",
     "analysis_report_html",
     "comparison_by_bm_version",
     "comparison_by_reader_type",

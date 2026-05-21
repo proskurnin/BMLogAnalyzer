@@ -1,7 +1,10 @@
+import json
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from web.app import _index_html, create_app
-from web.auth import DEFAULT_ADMIN_EMAIL, DEFAULT_ADMIN_PASSWORD
+from web.auth import DEFAULT_ADMIN_EMAIL, DEFAULT_ADMIN_PASSWORD, record_auth_event
 from web.history import list_history, load_history_run, record_history
 from web.service import AnalysisRequest, analyze_request, build_summary_snapshot
 
@@ -106,7 +109,7 @@ def test_login_page_contains_version_and_signature(tmp_path, monkeypatch):
     response = client.get("/login")
 
     assert response.status_code == 200
-    assert "версия сервиса 1.4.0" in response.text
+    assert "версия сервиса 1.6.15" in response.text
     assert 'class="brand"' in response.text
     assert "made with ♥ by Roman A. Proskurnin" in response.text
 
@@ -189,23 +192,41 @@ def test_admin_user_management_and_profile_files(tmp_path, monkeypatch):
     admin_page = client.get("/admin")
     assert admin_page.status_code == 200
     assert "Пользователи" in admin_page.text
+    assert "Журнал авторизаций" in admin_page.text
     assert "Политики хранения" in admin_page.text
     assert 'name="archive_retention_days"' in admin_page.text
     assert 'value="10"' in admin_page.text
+    assert 'name="session_idle_minutes"' in admin_page.text
+    assert 'value="120"' in admin_page.text
+    assert "Любой авторизованный запрос продлевает её." in admin_page.text
     assert "Каталог проверок" in admin_page.text
     assert "repeat_after_failure_3s" in admin_page.text
     assert "Добавить проверку" in admin_page.text
     assert "Сообщение содержит" in admin_page.text
     assert "Правила применяются при формировании" in admin_page.text
+    assert "validation_check_catalog" in admin_page.text
+    assert "Каждое изменение правила повышает его версию" in admin_page.text
+    assert "Release Notes" in admin_page.text
+    assert "История изменений по версиям" in admin_page.text
+    assert "Новая версия сверху, старые ниже. На широком экране карточки идут в две колонки, а на очень широком экране становятся плотнее. Акцент у текущей версии деликатный." in admin_page.text
     assert admin_page.text.index("<span>Пользователи</span>") < admin_page.text.index("<span>Политики хранения</span>")
     assert admin_page.text.index("<span>Политики хранения</span>") < admin_page.text.index("<span>Каталог проверок</span>")
     assert admin_page.text.index("<span>Каталог проверок</span>") < admin_page.text.index("<span>Справочники</span>")
-    assert admin_page.text.count('<details class="admin-section" data-section-id=') == 4
+    assert admin_page.text.index("<span>Справочники</span>") < admin_page.text.index("<span>Release Notes</span>")
+    assert admin_page.text.count('data-section-id="') == 5
     assert '<details class="admin-section" open>' not in admin_page.text
     assert 'data-section-id="users"' in admin_page.text
     assert 'data-section-id="storage"' in admin_page.text
     assert 'data-section-id="checks"' in admin_page.text
     assert 'data-section-id="dictionaries"' in admin_page.text
+    assert 'data-section-id="release-notes"' in admin_page.text
+    assert "release-notes-item--current" in admin_page.text
+    assert "Сейчас" in admin_page.text
+    assert "release-notes-item--fresh" not in admin_page.text
+    assert "release-notes-item--recent" not in admin_page.text
+    assert "release-notes-item--warm" not in admin_page.text
+    assert "release-notes-item--archive" not in admin_page.text
+    assert "Release Notes стали спокойнее по тону и типографике, а текущая версия выделяется только очень деликатно." in admin_page.text
     assert "Перевозчики" in admin_page.text
     assert "Признаки указываются через запятую" in admin_page.text
     assert "МЦД-2" in admin_page.text
@@ -213,7 +234,62 @@ def test_admin_user_management_and_profile_files(tmp_path, monkeypatch):
     assert 'action="/admin/dictionaries/carriers/create"' in admin_page.text
     assert 'action="/admin/dictionaries/carriers/update"' in admin_page.text
     assert 'action="/admin/dictionaries/carriers/delete"' in admin_page.text
+    assert "Сценарии из протокола взаимодействия" in admin_page.text
+    assert "PaymentStart resp" in admin_page.text
+    assert "PaymentConfirm" in admin_page.text
+    assert "Разделы документа, по одному на строку" in admin_page.text
+    assert "Цитаты из документа, по одной на строку" in admin_page.text
+    assert 'action="/admin/dictionaries/protocol-scenarios/create"' in admin_page.text
+    assert 'action="/admin/dictionaries/protocol-scenarios/update"' in admin_page.text
+    assert 'action="/admin/dictionaries/protocol-scenarios/delete"' in admin_page.text
     assert "<svg viewBox=\"0 0 24 24\"" in admin_page.text
+    assert "release-notes-item" in admin_page.text
+    assert 'class="release-notes-intro"' in admin_page.text
+    assert 'class="release-notes-item__version"' in admin_page.text
+    assert 'class="release-notes-item__date"' in admin_page.text
+    assert 'class="release-notes-item__label"' in admin_page.text
+    assert 'grid-template-columns: repeat(2, minmax(0, 1fr));' in admin_page.text
+    assert 'grid-template-columns: repeat(3, minmax(0, 1fr));' in admin_page.text
+    assert 'class="release-notes-item__current"' in admin_page.text
+    assert 'href="https://github.com/proskurnin/BMLogAnalyzer/blob/main/' not in admin_page.text
+
+
+def test_auth_journal_is_collapsed_and_paginated(tmp_path, monkeypatch):
+    history_root = tmp_path / "history"
+    upload_root = tmp_path / "uploads"
+    auth_root = tmp_path / "auth"
+    monkeypatch.setattr("web.history._history_root", _mock_history_root(history_root))
+    monkeypatch.setattr("web.uploads._upload_root", _mock_upload_root(upload_root))
+    monkeypatch.setattr("web.auth._auth_root", _mock_auth_root(auth_root))
+    monkeypatch.setenv("BM_DATA_DIR", str(tmp_path / "data"))
+
+    client = TestClient(create_app())
+    _login(client)
+    for index in range(12):
+        record_auth_event(
+            "manual_event",
+            email="user@example.com",
+            user_name="User",
+            status="success",
+            details=f"detail {index}",
+            storage_dir=auth_root,
+        )
+
+    first_page = client.get("/admin", params={"auth_page": 1})
+    assert first_page.status_code == 200
+    assert '<details class="auth-journal" open>' in first_page.text
+    assert 'href="/admin?auth_page=2"' in first_page.text
+    assert "Показано 10 из 13." in first_page.text
+    assert "detail 11" in first_page.text
+    assert "detail 0" not in first_page.text
+
+    second_page = client.get("/admin", params={"auth_page": 2})
+    assert second_page.status_code == 200
+    assert "detail 0" in second_page.text
+    assert "detail 11" not in second_page.text
+    assert "href=\"/admin?auth_page=1\"" in second_page.text
+    assert '<span class="current">2</span>' in second_page.text
+    admin_page = first_page
     assert "Срок хранения архивов, дни" in admin_page.text
     assert "Дата добавления (Мск)" in admin_page.text
     assert 'data-sort-key="name"' in admin_page.text
@@ -223,6 +299,52 @@ def test_admin_user_management_and_profile_files(tmp_path, monkeypatch):
     assert "bm.admin.usersSort" in admin_page.text
     assert "section.querySelectorAll('form')" in admin_page.text
     assert "01.01.1970" not in admin_page.text
+    create_protocol_scenario = client.post(
+        "/admin/dictionaries/protocol-scenarios/create",
+        data={
+            "title": "Payment chain",
+            "description": "custom scenario",
+            "source_document": "API_КЗП_БМ_TLV_2_53_13-05-2026.docx",
+            "source_sections": "PaymentStart\nPaymentStart resp",
+            "source_quotes": "PaymentStart. Таймаут по умолчанию 3 секунды.\nPaymentStart resp. Ожидается переход в следующую команду.",
+            "steps": "PaymentStart req\nPaymentStart resp\nPaymentConfirm",
+            "enabled": "on",
+        },
+        follow_redirects=False,
+    )
+    assert create_protocol_scenario.status_code == 303
+    scenario_admin_page = client.get("/admin")
+    assert "Payment chain" in scenario_admin_page.text
+    assert "custom scenario" in scenario_admin_page.text
+    assert "PaymentConfirm" in scenario_admin_page.text
+    assert "Разделы документа, по одному на строку" in scenario_admin_page.text
+    assert "Цитаты из документа, по одной на строку" in scenario_admin_page.text
+    update_protocol_scenario = client.post(
+        "/admin/dictionaries/protocol-scenarios/update",
+        data={
+            "scenario_id": "payment_start_followup_chain",
+            "title": "Цепочка PaymentStart custom",
+            "description": "updated description",
+            "source_document": "manual",
+            "source_sections": "PaymentStart\nPaymentStart resp",
+            "source_quotes": "PaymentStart. Таймаут по умолчанию 3 секунды.\nPaymentStart resp. Ожидается переход в следующую команду.",
+            "steps": "Step 1\nStep 2",
+            "enabled": "on",
+        },
+        follow_redirects=False,
+    )
+    assert update_protocol_scenario.status_code == 303
+    scenario_admin_page = client.get("/admin")
+    assert "Цепочка PaymentStart custom" in scenario_admin_page.text
+    assert "updated description" in scenario_admin_page.text
+    assert "Step 2" in scenario_admin_page.text
+    assert "PaymentStart resp. Ожидается переход в следующую команду." in scenario_admin_page.text
+    delete_protocol_scenario = client.post(
+        "/admin/dictionaries/protocol-scenarios/delete",
+        data={"scenario_id": "custom_payment_chain"},
+        follow_redirects=False,
+    )
+    assert delete_protocol_scenario.status_code == 303
     create_carrier = client.post(
         "/admin/dictionaries/carriers/create",
         data={"name": "Тест", "match_type": "regex", "markers": r"test-\d+"},
@@ -303,7 +425,7 @@ def test_web_index_contains_upload_landing():
     html = _index_html()
 
     assert "BM Log Analyzer" in html
-    assert "версия сервиса 1.4.0" in html
+    assert "версия сервиса 1.6.15" in html
     assert "picker_menu" not in html
     assert "Выбрать файлы</button>" not in html
     assert "Выбрать папку</button>" not in html
@@ -320,7 +442,7 @@ def test_web_index_contains_upload_landing():
     assert "/api/uploads/store" in html
     assert "selection_summary" in html
     assert "renderUploadComplete" in html
-    assert "Открыть отчёт" in html
+    assert "Отчёт" in html
     assert "Перейти в загрузки" in html
     assert "safeReportUrl" in html
     assert 'id="message_actions"' in html
@@ -339,7 +461,7 @@ def test_uploads_page_contains_table_and_actions():
     assert response.status_code == 200
     html = response.text
     assert "Загрузки" in html
-    assert "<strong>BM Log Analyzer</strong><span>версия сервиса 1.4.0</span>" in html
+    assert "<strong>BM Log Analyzer</strong><span>версия сервиса 1.6.15</span>" in html
     assert "BM Log Analyzer ·" not in html
     assert "Сформировать отчёт по выбранным" in html
     assert "Дата загрузки (Мск)" in html
@@ -351,8 +473,14 @@ def test_uploads_page_contains_table_and_actions():
     assert "formatUploadSize(item.size_bytes)" in html
     assert "window.location.href = data.report_url" in html
     assert 'class="report-link" href="${item.report_url}" target="_blank"' not in html
+    assert "Отчёт (+ai)" in html
+    assert "retention-note" in html
+    assert "function formatRetentionNote(createdAt, retentionDays)" in html
+    assert "uploadRetentionDays" in html
     assert "Выбрано 0" in html
     assert "uploads_body" in html
+    assert "uploads_pagination_summary" in html
+    assert "uploads_pager" in html
     assert "/api/uploads" in html
     assert "/rebuild" in html
     assert "пересобрать отчёт" in html
@@ -360,6 +488,43 @@ def test_uploads_page_contains_table_and_actions():
     assert "data-report-cell" in html
     assert "item.download_url" in html
     assert "Отчёт для каждой загрузки формируется сразу после приёма файла" in html
+
+
+def test_uploads_api_is_paginated(tmp_path, monkeypatch):
+    history_root = tmp_path / "history"
+    upload_root = tmp_path / "uploads"
+    auth_root = tmp_path / "auth"
+    monkeypatch.setattr("web.history._history_root", _mock_history_root(history_root))
+    monkeypatch.setattr("web.uploads._upload_root", _mock_upload_root(upload_root))
+    monkeypatch.setattr("web.auth._auth_root", _mock_auth_root(auth_root))
+
+    client = TestClient(create_app())
+    _login(client)
+    for index in range(3):
+        response = client.post(
+            "/api/uploads/store",
+            files=[("files", (f"sample-{index}.log", f"line {index}\n".encode("utf-8"), "text/plain"))],
+        )
+        assert response.status_code == 200
+
+    first_page = client.get("/api/uploads?page=1&page_size=2")
+    assert first_page.status_code == 200
+    first_payload = first_page.json()
+    assert first_payload["page"] == 1
+    assert first_payload["page_size"] == 2
+    assert first_payload["total"] == 3
+    assert first_payload["total_pages"] == 2
+    assert len(first_payload["items"]) == 2
+
+    second_page = client.get("/api/uploads?page=2&page_size=2")
+    assert second_page.status_code == 200
+    second_payload = second_page.json()
+    assert second_payload["page"] == 2
+    assert second_payload["page_size"] == 2
+    assert second_payload["total"] == 3
+    assert second_payload["total_pages"] == 2
+    assert len(second_payload["items"]) == 1
+    assert first_payload["items"][0]["upload_id"] != second_payload["items"][0]["upload_id"]
 
 
 def test_web_history_roundtrip(tmp_path):
@@ -431,8 +596,37 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
     assert report_data["report_url"].startswith("/report/")
 
     run_id = report_data["run_id"]
+    report_path = load_history_run(run_id, history_root)["report_path"]
+    Path(report_path).with_suffix(".ai.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "bm-log-analyzer.ai-analysis.v1",
+                "generated_at": "2026-05-18T10:00:00+00:00",
+                "model": "gpt-4.1-mini",
+                "analysis": {
+                    "summary": "ok",
+                    "hypotheses": [],
+                    "what_to_check": [],
+                    "limitations": [],
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    uploads_response = client.get("/api/uploads")
+    assert uploads_response.status_code == 200
+    uploads_payload = uploads_response.json()
+    assert uploads_payload[0]["report_has_ai"] is True
+    assert uploads_payload[0]["report_generated_at"]
+    assert uploads_payload[0]["retention_note"].startswith("до удаления:")
+
     report_response = client.get(f"/report/{run_id}")
     assert report_response.status_code == 200
+    assert report_response.headers["cache-control"] == "no-store, no-cache, must-revalidate, max-age=0"
+    assert report_response.headers["pragma"] == "no-cache"
+    assert report_response.headers["expires"] == "0"
     assert "BM Log Analyzer" in report_response.text
     assert "Профиль (Administrator)" in report_response.text
     assert "bm-auth-topbar" in report_response.text
@@ -449,6 +643,9 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
 
     report_manifest = client.get(f"/report/{run_id}/manifest")
     assert report_manifest.status_code == 200
+    assert report_manifest.headers["cache-control"] == "no-store, no-cache, must-revalidate, max-age=0"
+    assert report_manifest.headers["pragma"] == "no-cache"
+    assert report_manifest.headers["expires"] == "0"
     assert report_manifest.json()["report_type"] == "analysis_report"
     assert report_manifest.json()["schema_version"] == "bm-log-analyzer.analysis-report.v1"
     assert report_manifest.json()["stable_fields"] == [
@@ -465,7 +662,10 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
         "other_groups",
         "validator_sections",
         "suspicious_lines",
+        "validation_check_catalog",
         "validation_checks",
+        "protocol_scenarios",
+        "protocol_scenario_results",
     ]
     stable_sections = report_manifest.json()["stable_sections"]
     assert "summary" in stable_sections
@@ -501,8 +701,9 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
 
     ai_status = client.get(f"/api/runs/{run_id}/ai-analysis")
     assert ai_status.status_code == 200
-    assert ai_status.json()["status"] == "not_started"
-    assert ai_status.json()["enabled"] is False
+    assert ai_status.json()["schema_version"] == "bm-log-analyzer.ai-analysis.v1"
+    assert ai_status.json()["generated_at"] == "2026-05-18T10:00:00+00:00"
+    assert ai_status.json()["analysis"]["summary"] == "ok"
 
     ai_start = client.post(f"/api/runs/{run_id}/ai-analysis")
     assert ai_start.status_code == 400

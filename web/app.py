@@ -7,10 +7,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from html import escape
+from math import ceil
 from zoneinfo import ZoneInfo
 from analytics.ai_analysis import ai_analysis_enabled, run_ai_analysis
 from analytics.carrier_directory import create_carrier_rule, delete_carrier_rule, load_carrier_rules, reset_carrier_rules, update_carrier_rule
 from analytics.check_cases import create_check_case, list_check_cases, reset_check_cases, update_check_case
+from analytics.protocol_scenarios import DEFAULT_PROTOCOL_SCENARIOS, create_protocol_scenario, delete_protocol_scenario, load_protocol_scenarios, reset_protocol_scenarios, update_protocol_scenario
 from core.verification import run_healthchecks, run_readiness_check
 from core.version import format_version
 from dataclasses import asdict
@@ -25,8 +27,14 @@ from web.auth import (
     destroy_session,
     ensure_default_admin,
     get_user,
+    count_auth_events,
     list_users,
+    load_auth_policy,
+    record_auth_event,
+    read_auth_events,
+    touch_session,
     update_user,
+    update_auth_policy,
     user_from_session,
 )
 from web.history import delete_history_run, latest_history, list_history, load_history_run, new_run_id, record_history, run_directory, run_report_path
@@ -36,6 +44,7 @@ from web.retention import cleanup_expired_storage, cleanup_expired_storage_if_du
 from web.uploads import (
     allocate_upload_path,
     collect_upload_paths,
+    count_uploads,
     delete_upload,
     is_allowed_upload_name,
     list_uploads,
@@ -61,6 +70,33 @@ except ImportError:  # pragma: no cover - optional dependency
     RedirectResponse = None  # type: ignore[assignment]
 
 
+RELEASE_NOTE_SUMMARIES: dict[str, str] = {
+    "1.6.15": "Release Notes стали спокойнее по тону и типографике, а текущая версия выделяется только очень деликатно.",
+    "1.6.14": "Release Notes на ультрашироких экранах показываются плотнее, а текущая версия получила отдельный маркер.",
+    "1.6.13": "Release Notes на широких экранах показываются в двух колонках, а свежие версии получили более заметные цветовые акценты.",
+    "1.6.12": "В Release Notes можно раскрывать сразу несколько версий, а сами карточки стали визуально выразительнее и удобнее для чтения.",
+    "1.6.11": "Release Notes в админке теперь показывают только русскоязычные описания изменений, а заголовок версии оформлен как X.Y.Z (ДД.ММ.ГГГГ).",
+    "1.6.10": "Release Notes в админке теперь показывают только русскоязычные описания изменений без ссылок на файлы.",
+    "1.6.9": "Из Release Notes убраны связанные коммиты, а версии по-прежнему отображаются в сворачиваемом списке.",
+    "1.6.8": "Release Notes в админке стали аккордеоном по версиям и получили ссылки на связанные файлы.",
+    "1.6.7": "В админке появился отдельный блок Release Notes, который берёт список версий из CHANGELOG.md.",
+    "1.6.1": "HTML-отчёт BM-статусов перестал терять переключатель при повторной отрисовке таблицы, а ответы сервиса теперь отключают кэш браузера.",
+    "1.6.0": "Сценарии из протокола взаимодействия получили множественные разделы и цитаты источника, а их вывод появился в отчётах и админке.",
+    "1.5.0": "BM-статусы получили нормализацию QR-кода, в отчётах и загрузках появились дополнительные улучшения интерфейса и поведения.",
+    "1.4.1": "Обновлена версия аналитика без функциональных изменений.",
+    "1.4.0": "В админке появились полные справочники перевозчиков с редактированием, удалением и сбросом.",
+    "1.3.0": "В отчётах появились модальные доказательства по метаданным BM, а в админке стал доступен справочник перевозчиков.",
+    "1.2.7": "HTML-отчёты начали отображать `mmv2-*` как `МЦД-2` без потери BM-версии.",
+    "1.2.6": "В разделе проверок появился счётчик сработавших правил и пояснения по несработавшим правилам.",
+    "1.2.5": "В таблице загрузок появился размер файла перед колонкой отчёта.",
+    "1.2.4": "В HTML-отчётах версии ПО ридеров начали собираться также из инвентаризации файлов, а не только из PaymentStart.",
+    "1.2.3": "В HTML-отчётах появился отдельный блок версий ПО ридеров.",
+    "1.2.2": "В админке состояние секций стало сохраняться между действиями, а таблица пользователей получила сортировку и московское время.",
+    "1.2.1": "Версия сервиса стала отображаться отдельной строкой в логине и на странице загрузок.",
+    "1.2.0": "Появился каталог встроенных проверок и связанный с ним блок в HTML-отчётах.",
+}
+
+
 def create_app() -> Any:
     if FastAPI is None or File is None or Form is None or Request is None or UploadFile is None or HTMLResponse is None or JSONResponse is None or FileResponse is None or RedirectResponse is None:  # pragma: no cover - optional dependency
         exc = ImportError("fastapi")
@@ -79,15 +115,25 @@ def create_app() -> Any:
         path = request.url.path
         if path in {"/login", "/health"}:
             return await call_next(request)
-        user = user_from_session(request.cookies.get(SESSION_COOKIE))
+        token = request.cookies.get(SESSION_COOKIE)
+        user = user_from_session(token)
         request.state.user = user
         if user is None:
-            if path.startswith("/api/") or request.method != "GET":
-                return JSONResponse({"detail": "Требуется авторизация"}, status_code=401)
-            return RedirectResponse("/login", status_code=303)
+            response = (
+                JSONResponse({"detail": "Требуется авторизация"}, status_code=401)
+                if path.startswith("/api/") or request.method != "GET"
+                else RedirectResponse("/login", status_code=303)
+            )
+            if token:
+                response.delete_cookie(SESSION_COOKIE)
+            return response
         if _is_admin_path(path) and user.role != "admin":
             return HTMLResponse("<h1>Доступ запрещён</h1>", status_code=403)
-        return await call_next(request)
+        if token:
+            touch_session(token)
+        response = await call_next(request)
+        _refresh_session_cookie(response, token)
+        return response
 
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request) -> str:
@@ -98,22 +144,49 @@ def create_app() -> Any:
         return _login_html()
 
     @app.post("/login")
-    def login(email: str = Form(...), password: str = Form(...)):
+    def login(request: Request, email: str = Form(...), password: str = Form(...)):
         user = authenticate_user(email, password)
         if user is None:
+            record_auth_event(
+                "login_failed",
+                email=email,
+                status="failed",
+                ip_address=_client_ip(request),
+                user_agent=request.headers.get("user-agent", ""),
+                details="Invalid credentials.",
+            )
             return HTMLResponse(_login_html("Неверный email или пароль."), status_code=401)
+        record_auth_event(
+            "login_success",
+            email=user.email,
+            user_name=user.name,
+            status="success",
+            ip_address=_client_ip(request),
+            user_agent=request.headers.get("user-agent", ""),
+        )
         response = RedirectResponse("/", status_code=303)
+        session_idle_minutes = load_auth_policy().session_idle_minutes
         response.set_cookie(
             SESSION_COOKIE,
             create_session(user.email),
             httponly=True,
             secure=load_settings().cookie_secure,
             samesite="lax",
+            max_age=session_idle_minutes * 60,
         )
         return response
 
     @app.get("/logout")
     def logout(request: Request):
+        user = _request_user(request)
+        record_auth_event(
+            "logout",
+            email=user.email,
+            user_name=user.name,
+            status="success",
+            ip_address=_client_ip(request),
+            user_agent=request.headers.get("user-agent", ""),
+        )
         destroy_session(request.cookies.get(SESSION_COOKIE, ""))
         response = RedirectResponse("/login", status_code=303)
         response.delete_cookie(SESSION_COOKIE)
@@ -124,12 +197,12 @@ def create_app() -> Any:
         return _uploads_html(_request_user(request))
 
     @app.get("/adnin")
-    def adnin_redirect():
+    def admin_alias_redirect():
         return RedirectResponse("/admin", status_code=303)
 
     @app.get("/admin", response_class=HTMLResponse)
-    def admin_page(request: Request) -> str:
-        return _admin_html(_request_user(request))
+    def admin_page(request: Request, auth_page: int = 1) -> str:
+        return _admin_html(_request_user(request), auth_page=auth_page, auth_journal_open="auth_page" in request.query_params)
 
     @app.post("/admin/users/create")
     def admin_create_user(
@@ -175,6 +248,14 @@ def create_app() -> Any:
             return HTMLResponse(_admin_html(None, str(exc)), status_code=400)
         return RedirectResponse("/admin", status_code=303)
 
+    @app.post("/admin/users/session-policy")
+    def admin_update_session_policy(session_idle_minutes: int = Form(...)):
+        try:
+            update_auth_policy(session_idle_minutes=session_idle_minutes)
+        except ValueError as exc:
+            return HTMLResponse(_admin_html(None, str(exc)), status_code=400)
+        return RedirectResponse("/admin", status_code=303)
+
     @app.post("/admin/dictionaries/carriers/create")
     def admin_create_carrier(
         name: str = Form(...),
@@ -211,6 +292,77 @@ def create_app() -> Any:
     @app.post("/admin/dictionaries/carriers/reset")
     def admin_reset_carriers():
         reset_carrier_rules()
+        return RedirectResponse("/admin", status_code=303)
+
+    @app.post("/admin/dictionaries/protocol-scenarios/create")
+    def admin_create_protocol_scenario(
+        title: str = Form(...),
+        description: str = Form(""),
+        steps: str = Form(...),
+        source_document: str = Form(""),
+        source_section: str = Form(""),
+        source_sections: str = Form(""),
+        source_quotes: str = Form(""),
+        source_quote: str = Form(""),
+        enabled: str | None = Form(None),
+    ):
+        try:
+            create_protocol_scenario(
+                title=title,
+                description=description,
+                steps=steps,
+                source_document=source_document,
+                source_section=source_section,
+                source_sections=source_sections,
+                source_quotes=source_quotes,
+                source_quote=source_quote,
+                enabled=enabled == "on",
+            )
+        except ValueError as exc:
+            return HTMLResponse(_admin_html(None, str(exc)), status_code=400)
+        return RedirectResponse("/admin", status_code=303)
+
+    @app.post("/admin/dictionaries/protocol-scenarios/update")
+    def admin_update_protocol_scenario(
+        scenario_id: str = Form(...),
+        title: str = Form(...),
+        description: str = Form(""),
+        steps: str = Form(...),
+        source_document: str = Form(""),
+        source_section: str = Form(""),
+        source_sections: str = Form(""),
+        source_quotes: str = Form(""),
+        source_quote: str = Form(""),
+        enabled: str | None = Form(None),
+    ):
+        try:
+            update_protocol_scenario(
+                scenario_id,
+                title=title,
+                description=description,
+                steps=steps,
+                source_document=source_document,
+                source_section=source_section,
+                source_sections=source_sections,
+                source_quotes=source_quotes,
+                source_quote=source_quote,
+                enabled=enabled == "on",
+            )
+        except ValueError as exc:
+            return HTMLResponse(_admin_html(None, str(exc)), status_code=400)
+        return RedirectResponse("/admin", status_code=303)
+
+    @app.post("/admin/dictionaries/protocol-scenarios/delete")
+    def admin_delete_protocol_scenario(scenario_id: str = Form(...)):
+        try:
+            delete_protocol_scenario(scenario_id)
+        except ValueError as exc:
+            return HTMLResponse(_admin_html(None, str(exc)), status_code=400)
+        return RedirectResponse("/admin", status_code=303)
+
+    @app.post("/admin/dictionaries/protocol-scenarios/reset")
+    def admin_reset_protocol_scenarios():
+        reset_protocol_scenarios()
         return RedirectResponse("/admin", status_code=303)
 
     @app.post("/admin/check-cases/update")
@@ -522,10 +674,25 @@ def create_app() -> Any:
         return {"status": "ok", "run_id": run_id}
 
     @app.get("/api/uploads")
-    def uploads(request: Request, limit: int = 200) -> list[dict[str, Any]]:
+    def uploads(request: Request, limit: int = 200, page: int | None = None, page_size: int | None = None) -> Any:
         user = _request_user(request)
         owner = None if user.role == "admin" else user.email
-        return [asdict(item) for item in list_uploads(limit=limit, owner_email=owner)]
+        if page is None and page_size is None:
+            return [asdict(item) for item in list_uploads(limit=limit, owner_email=owner)]
+        page = max(1, page or 1)
+        page_size = max(1, min(page_size or 25, 200))
+        total = count_uploads(owner_email=owner)
+        total_pages = max(1, ceil(total / page_size)) if total else 1
+        page = min(page, total_pages)
+        offset = (page - 1) * page_size
+        items = [asdict(item) for item in list_uploads(limit=page_size, offset=offset, owner_email=owner)]
+        return {
+            "items": items,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": total_pages,
+        }
 
     @app.post("/api/uploads/store")
     async def store(request: Request, files: list[UploadFile] = File(...)) -> dict[str, Any]:
@@ -642,13 +809,19 @@ def create_app() -> Any:
 def _render_report(run_id: str, user=None):
     report_path = run_report_path(run_id)
     if report_path.exists():
-        return HTMLResponse(_inject_report_topbar(report_path.read_text(encoding="utf-8"), user, run_id=run_id))
+        return HTMLResponse(
+            _inject_report_topbar(report_path.read_text(encoding="utf-8"), user, run_id=run_id),
+            headers=_no_cache_headers(),
+        )
     payload = load_history_run(run_id)
     payload_report_path = payload.get("report_path") or ""
     if payload_report_path:
         file_path = Path(payload_report_path)
         if file_path.exists():
-            return HTMLResponse(_inject_report_topbar(file_path.read_text(encoding="utf-8"), user, run_id=run_id))
+            return HTMLResponse(
+                _inject_report_topbar(file_path.read_text(encoding="utf-8"), user, run_id=run_id),
+                headers=_no_cache_headers(),
+            )
     return HTMLResponse("<h1>Отчёт не найден</h1>", status_code=404)
 
 
@@ -656,14 +829,22 @@ def _render_report_manifest(run_id: str):
     report_path = run_report_path(run_id)
     manifest_path = report_path.with_suffix(".json")
     if manifest_path.exists():
-        return JSONResponse(json.loads(manifest_path.read_text(encoding="utf-8")))
+        return JSONResponse(json.loads(manifest_path.read_text(encoding="utf-8")), headers=_no_cache_headers())
     payload = load_history_run(run_id)
     payload_report_path = payload.get("report_path") or ""
     if payload_report_path:
         file_path = Path(payload_report_path).with_suffix(".json")
         if file_path.exists():
-            return JSONResponse(json.loads(file_path.read_text(encoding="utf-8")))
+            return JSONResponse(json.loads(file_path.read_text(encoding="utf-8")), headers=_no_cache_headers())
     return JSONResponse({"detail": "Отчёт не найден"}, status_code=404)
+
+
+def _no_cache_headers() -> dict[str, str]:
+    return {
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
 
 
 def _report_file_for_run(run_id: str) -> Path | None:
@@ -1052,8 +1233,30 @@ def _request_user(request: Any):
     return request.state.user
 
 
+def _refresh_session_cookie(response: Any, token: str | None) -> None:
+    if not token:
+        return
+    session_idle_minutes = load_auth_policy().session_idle_minutes
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        httponly=True,
+        secure=load_settings().cookie_secure,
+        samesite="lax",
+        max_age=session_idle_minutes * 60,
+    )
+
+
+def _client_ip(request: Any) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    client = getattr(request, "client", None)
+    return getattr(client, "host", "") or ""
+
+
 def _is_admin_path(path: str) -> bool:
-    return path == "/uploads" or path == "/adnin" or path.startswith("/admin") or path == "/api/uploads/report"
+    return path == "/uploads" or path.startswith("/admin") or path == "/api/uploads/report"
 
 
 def _profile_link(user) -> str:
@@ -1096,7 +1299,7 @@ def _page_topbar(user) -> str:
         (() => {{
           const header = document.currentScript.previousElementSibling;
           if (!header || !header.classList.contains('topbar')) return;
-          const current = window.location.pathname === '/adnin' ? '/admin' : window.location.pathname;
+          const current = window.location.pathname;
           header.querySelectorAll('a[data-path]').forEach((link) => {{
             const path = link.dataset.path;
             const active = path === '/' ? current === '/' : current === path || current.startsWith(`${{path}}/`);
@@ -1204,9 +1407,130 @@ def _icon(name: str) -> str:
     return icons[name]
 
 
-def _admin_html(user=None, error: str = "", policy=None) -> str:
+def _auth_journal_pager(*, auth_page: int, total_pages: int, total_events: int, page_size: int) -> str:
+    if total_pages <= 1:
+        return f'<div class="auth-pager"><span class="muted">Показано {total_events} событий.</span></div>'
+    page_links = []
+    previous_page = max(1, auth_page - 1)
+    next_page = min(total_pages, auth_page + 1)
+    page_links.append(
+        f'<a class="{"disabled" if auth_page == 1 else ""}" href="/admin?auth_page={previous_page}">Назад</a>'
+        if auth_page > 1
+        else '<span class="disabled">Назад</span>'
+    )
+    start_page = max(1, auth_page - 2)
+    end_page = min(total_pages, auth_page + 2)
+    if start_page > 1:
+        page_links.append('<span class="disabled">…</span>')
+    for page in range(start_page, end_page + 1):
+        if page == auth_page:
+            page_links.append(f'<span class="current">{page}</span>')
+        else:
+            page_links.append(f'<a href="/admin?auth_page={page}">{page}</a>')
+    if end_page < total_pages:
+        page_links.append('<span class="disabled">…</span>')
+    page_links.append(
+        f'<a class="{"disabled" if auth_page == total_pages else ""}" href="/admin?auth_page={next_page}">Вперёд</a>'
+        if auth_page < total_pages
+        else '<span class="disabled">Вперёд</span>'
+    )
+    return f"""
+    <div class="auth-pager">
+      <span class="muted">Показано {min(page_size, total_events - (auth_page - 1) * page_size)} из {total_events}.</span>
+      <div class="auth-pager__links">{"".join(page_links)}</div>
+    </div>
+    """.strip()
+
+
+def _release_notes_entries() -> list[dict[str, Any]]:
+    path = Path(__file__).resolve().parents[1] / "CHANGELOG.md"
+    if not path.exists():
+        return []
+    entries: list[dict[str, Any]] = []
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if line.startswith("## "):
+            match = re.match(r"^##\s+([0-9]+\.[0-9]+\.[0-9]+)\s+-\s+(.+)$", line)
+            if not match:
+                continue
+            entries.append({"version": match.group(1), "date": match.group(2)})
+    return entries
+
+
+def _release_notes_html() -> str:
+    entries = _release_notes_entries()
+    if not entries:
+        return ""
+    rendered_versions = []
+    for index, entry in enumerate(entries):
+        description = RELEASE_NOTE_SUMMARIES.get(entry["version"], "Краткое описание изменений отсутствует.")
+        item_class = "release-notes-item"
+        if index == 0:
+            item_class += " release-notes-item--current"
+        rendered_versions.append(
+            f"""
+            <details class="{item_class}" {"open" if index == 0 else ""}>
+              <summary>
+                {"<span class=\"release-notes-item__current\">Сейчас</span>" if index == 0 else ""}
+                <span class="release-notes-item__version">{escape(entry["version"])}</span>
+                <strong class="release-notes-item__date">{escape(_format_release_note_date(entry["date"]))}</strong>
+              </summary>
+              <div class="release-notes-item__body">
+                <div class="release-notes-item__description">
+                  <span class="release-notes-item__label">Описание</span>
+                  <p>{escape(description)}</p>
+                </div>
+              </div>
+            </details>
+            """.strip()
+        )
+    return f"""
+    <details class="admin-section admin-section--release-notes" data-section-id="release-notes">
+      <summary><span>Release Notes</span><strong>{len(entries)}</strong></summary>
+      <div class="admin-section__body">
+        <div class="release-notes-intro">
+          <div class="release-notes-intro__title">История изменений по версиям</div>
+          <div class="release-notes-intro__text">Новая версия сверху, старые ниже. На широком экране карточки идут в две колонки, а на очень широком экране становятся плотнее. Акцент у текущей версии деликатный.</div>
+        </div>
+        <div class="release-notes">
+          {"".join(rendered_versions)}
+        </div>
+      </div>
+    </details>
+    """.strip()
+
+
+def _format_release_note_date(value: str) -> str:
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return value
+    return parsed.strftime("%d.%m.%Y")
+
+
+def _admin_html(
+    user=None,
+    error: str = "",
+    policy=None,
+    auth_policy=None,
+    auth_events=None,
+    auth_page: int = 1,
+    auth_journal_open: bool = False,
+) -> str:
     effective_user = user or get_user("admin@example.com")
     policy = policy or load_storage_policy()
+    auth_policy = auth_policy or load_auth_policy()
+    auth_page_size = 10
+    if auth_events is None:
+        total_auth_events = count_auth_events()
+        total_auth_pages = max(1, ceil(total_auth_events / auth_page_size)) if total_auth_events else 1
+        auth_page = max(1, min(auth_page, total_auth_pages))
+        auth_offset = (auth_page - 1) * auth_page_size
+        auth_events = read_auth_events(limit=auth_page_size, offset=auth_offset)
+    else:
+        total_auth_events = len(auth_events)
+        total_auth_pages = 1
+        auth_page = 1
     rows = []
     for item in sorted(list_users(), key=lambda user: user.created_at or "", reverse=True):
         update_form_id = f"user-update-{abs(hash(item.email))}"
@@ -1237,6 +1561,22 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
             </tr>
             """
         )
+    auth_rows = []
+    for event in auth_events:
+        auth_rows.append(
+            f"""
+            <tr>
+              <td>{escape(_format_moscow_datetime(event.created_at))}</td>
+              <td>{escape(event.event_type)}</td>
+              <td>{escape(event.email or event.user_name or "—")}</td>
+              <td>{escape(event.status or "—")}</td>
+              <td>{escape(event.ip_address or "—")}</td>
+              <td>{escape(event.details or "—")}</td>
+            </tr>
+            """
+        )
+    auth_rows_html = "".join(auth_rows) or '<tr><td colspan="6" class="muted">Пока нет событий авторизации.</td></tr>'
+    auth_pager = _auth_journal_pager(auth_page=auth_page, total_pages=total_auth_pages, total_events=total_auth_events, page_size=auth_page_size)
     check_rows = []
     for check in list_check_cases():
         severity_options = "".join(
@@ -1272,6 +1612,39 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
             </tr>
             """
         )
+    scenario_rows = []
+    for scenario in load_protocol_scenarios():
+        update_form_id = f"protocol-scenario-update-{abs(hash(scenario.scenario_id))}"
+        delete_form_id = f"protocol-scenario-delete-{abs(hash(scenario.scenario_id))}"
+        scenario_steps_json = json.dumps([asdict(step) for step in scenario.steps], ensure_ascii=False, indent=2)
+        source_sections_text = "\n".join(scenario.source_sections) if scenario.source_sections else scenario.source_section
+        source_quotes_text = "\n".join(scenario.source_quotes) if scenario.source_quotes else scenario.source_quote
+        scenario_rows.append(
+            f"""
+            <tr>
+              <td>
+                <form id="{update_form_id}" method="post" action="/admin/dictionaries/protocol-scenarios/update"></form>
+                <input form="{update_form_id}" type="hidden" name="scenario_id" value="{escape(scenario.scenario_id)}">
+                <input form="{update_form_id}" name="title" value="{escape(scenario.title)}" required>
+              </td>
+              <td>
+                <textarea form="{update_form_id}" name="description" rows="2" required>{escape(scenario.description)}</textarea>
+                <input form="{update_form_id}" name="source_document" value="{escape(scenario.source_document)}" placeholder="Источник">
+                <textarea form="{update_form_id}" name="source_sections" rows="3" placeholder="Разделы документа, по одному на строку">{escape(source_sections_text)}</textarea>
+                <textarea form="{update_form_id}" name="source_quotes" rows="3" placeholder="Цитаты из документа, по одной на строку">{escape(source_quotes_text)}</textarea>
+              </td>
+              <td><textarea form="{update_form_id}" name="steps" rows="8" required>{escape(scenario_steps_json)}</textarea></td>
+              <td><label class="check-toggle"><input form="{update_form_id}" type="checkbox" name="enabled" {"checked" if scenario.enabled else ""}> включён</label></td>
+              <td>{escape(scenario.version)}</td>
+              <td class="actions">
+                <button form="{update_form_id}" type="submit" class="icon-button" title="Сохранить" aria-label="Сохранить">{_icon("save")}</button>
+                <form id="{delete_form_id}" method="post" action="/admin/dictionaries/protocol-scenarios/delete"></form>
+                <input form="{delete_form_id}" type="hidden" name="scenario_id" value="{escape(scenario.scenario_id)}">
+                <button form="{delete_form_id}" type="submit" class="icon-button icon-button--danger" title="Удалить" aria-label="Удалить">{_icon("trash")}</button>
+              </td>
+            </tr>
+            """
+        )
     carrier_rows = []
     for carrier in load_carrier_rules():
         update_form_id = f"carrier-update-{abs(hash(carrier.name))}"
@@ -1300,6 +1673,7 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
             """
         )
     error_html = f'<div class="error">{escape(error)}</div>' if error else ""
+    release_notes_html = _release_notes_html()
     return f"""
 <!doctype html>
 <html lang="ru">
@@ -1329,12 +1703,36 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
                 </select>
                 <button type="submit">Добавить</button>
               </form>
+              <form method="post" action="/admin/users/session-policy" class="create-form">
+                <label>Разлогинивать после неактивности, минут
+                  <input name="session_idle_minutes" type="number" min="1" step="1" value="{auth_policy.session_idle_minutes}" required>
+                </label>
+                <button type="submit" class="icon-button" title="Сохранить" aria-label="Сохранить">{_icon("save")}</button>
+              </form>
+              <div class="muted">По умолчанию сессия истекает после {auth_policy.session_idle_minutes} минут без активности. Любой авторизованный запрос продлевает её.</div>
               <div class="table-wrap">
                 <table id="admin-users-table">
                   <thead><tr><th><button type="button" class="sort-button" data-sort-key="name">Имя</button></th><th><button type="button" class="sort-button" data-sort-key="email">Email</button></th><th><button type="button" class="sort-button" data-sort-key="created_at">Дата добавления (Мск)</button></th><th>Пароль</th><th>Роль</th><th>Действия</th></tr></thead>
                   <tbody>{"".join(rows)}</tbody>
                 </table>
               </div>
+              <details class="auth-journal" {"open" if auth_journal_open else ""}>
+                <summary>
+                  <span>Журнал авторизаций</span>
+                  <strong>{total_auth_events}</strong>
+                </summary>
+                <div class="auth-journal__body">
+                  <div class="muted">Показано {len(auth_events)} из {total_auth_events} событий на странице {auth_page} из {total_auth_pages}.</div>
+                  {auth_pager}
+                  <div class="table-wrap">
+                    <table class="compact-table">
+                      <thead><tr><th>Время (Мск)</th><th>Событие</th><th>Email</th><th>Статус</th><th>IP</th><th>Детали</th></tr></thead>
+                      <tbody>{auth_rows_html}</tbody>
+                    </table>
+                  </div>
+                  {auth_pager}
+                </div>
+              </details>
             </div>
           </details>
           <details class="admin-section" data-section-id="storage">
@@ -1352,7 +1750,7 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
           <details class="admin-section" data-section-id="checks">
             <summary><span>Каталог проверок</span><strong>{len(check_rows)}</strong></summary>
             <div class="admin-section__body">
-              <div class="muted">Правила применяются при формировании `check_results.csv`, `check_summary.csv` и AI-контекста.</div>
+              <div class="muted">Правила применяются при формировании `check_results.csv`, `check_summary.csv`, AI-контекста и manifest-слоя `validation_check_catalog`. Каждое изменение правила повышает его версию.</div>
               <form method="post" action="/admin/check-cases/create" class="create-form">
                 <input name="title" placeholder="Название проверки" required>
                 <input name="description" placeholder="Описание">
@@ -1405,8 +1803,30 @@ def _admin_html(user=None, error: str = "", policy=None) -> str:
               <form method="post" action="/admin/dictionaries/carriers/reset" class="inline-form">
                 <button type="submit">Сбросить справочник перевозчиков</button>
               </form>
+              <h2>Сценарии из протокола взаимодействия</h2>
+              <div class="muted">Сценарии помогают читать логи как цепочку событий. Их можно включать, отключать и редактировать без изменения кода.</div>
+              <form method="post" action="/admin/dictionaries/protocol-scenarios/create" class="create-form">
+                <input name="title" placeholder="Название сценария" required>
+                <input name="description" placeholder="Описание" required>
+                <input name="source_document" placeholder="Источник, например документ протокола">
+                <textarea name="source_sections" rows="3" placeholder="Разделы документа, по одному на строку"></textarea>
+                <textarea name="source_quotes" rows="3" placeholder="Цитаты из документа, по одной на строку"></textarea>
+                <textarea name="steps" rows="8" placeholder="JSON шагов сценария" required>{escape(json.dumps([asdict(step) for step in DEFAULT_PROTOCOL_SCENARIOS[0].steps], ensure_ascii=False, indent=2))}</textarea>
+                <label class="check-toggle"><input type="checkbox" name="enabled" checked> включён</label>
+                <button type="submit">Добавить сценарий</button>
+              </form>
+              <form method="post" action="/admin/dictionaries/protocol-scenarios/reset" class="inline-form">
+                <button type="submit">Сбросить сценарии к встроенным</button>
+              </form>
+              <div class="table-wrap">
+                <table class="compact-table">
+                  <thead><tr><th>Название сценария</th><th>Описание / источник</th><th>Цепочка шагов</th><th>Статус</th><th>Версия</th><th>Действия</th></tr></thead>
+                  <tbody>{"".join(scenario_rows)}</tbody>
+                </table>
+              </div>
             </div>
           </details>
+          {release_notes_html}
         </div>
       </section>
     </main>
@@ -1594,6 +2014,15 @@ def _shared_page_css() -> str:
       .create-form label { display:grid; gap:6px; align-items:start; }
       .create-form { margin-bottom:16px; }
       .inline-form { margin:10px 0 12px; }
+      .auth-journal { margin-top:16px; padding-top:0; border:1px solid var(--line); border-radius:14px; background:#f8fafc; overflow:hidden; }
+      .auth-journal summary { list-style:none; cursor:pointer; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 14px; font-weight:700; }
+      .auth-journal summary::-webkit-details-marker { display:none; }
+      .auth-journal__body { padding:0 14px 14px; display:grid; gap:10px; }
+      .auth-pager { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; }
+      .auth-pager__links { display:flex; flex-wrap:wrap; gap:8px; }
+      .auth-pager__links a, .auth-pager__links span { display:inline-flex; align-items:center; justify-content:center; min-width:40px; padding:8px 10px; border:1px solid var(--line); border-radius:10px; background:#fff; color:var(--text); font-weight:600; }
+      .auth-pager__links .current { background:var(--blue); border-color:var(--blue); color:#fff; }
+      .auth-pager__links .disabled { opacity:.45; }
       input, select, textarea { border:1px solid var(--line); border-radius:10px; padding:10px 12px; font:inherit; color:var(--text); background:#fff; }
       textarea { min-width:320px; resize:vertical; }
       .check-toggle { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
@@ -1622,6 +2051,75 @@ def _shared_page_css() -> str:
       .admin-section > summary span { font-size:16px; font-weight:800; }
       .admin-section > summary strong { color:var(--blue); background:#e6f1ff; border-radius:999px; padding:4px 10px; font-size:12px; white-space:nowrap; }
       .admin-section__body { display:grid; gap:12px; padding:14px 16px 16px; border-top:1px solid var(--line); }
+      .release-notes {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: minmax(0, 1fr);
+      }
+      @media (min-width: 1180px) {
+        .release-notes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
+      @media (min-width: 1520px) {
+        .release-notes { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      }
+      .release-notes-intro {
+        display: grid; gap: 4px; padding: 14px 16px; border: 1px solid rgba(36, 87, 166, 0.16);
+        border-radius: 16px; background: linear-gradient(180deg, rgba(36, 87, 166, 0.08), rgba(255, 255, 255, 0.96));
+        grid-column: 1 / -1;
+      }
+      .release-notes-intro__title { font-size: 14px; font-weight: 800; color: var(--text); }
+      .release-notes-intro__text { color: var(--muted); font-size: 13px; }
+      .release-notes-item {
+        --release-accent: #475569;
+        --release-accent-soft: rgba(71, 85, 105, 0.08);
+        --release-accent-strong: rgba(71, 85, 105, 0.16);
+        border: 1px solid var(--release-accent-strong); border-radius: 16px; background: #ffffff; overflow: hidden;
+        box-shadow: 0 8px 22px rgba(24, 33, 47, 0.035);
+        position: relative;
+      }
+      .release-notes-item[open] {
+        border-color: var(--release-accent-strong);
+        box-shadow: 0 12px 26px rgba(71, 85, 105, 0.07);
+      }
+      .release-notes-item > summary {
+        padding: 14px 16px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+        list-style: none; background: linear-gradient(90deg, rgba(71, 85, 105, 0.06), transparent 70%);
+        position: relative;
+      }
+      .release-notes-item > summary::-webkit-details-marker { display: none; }
+      .release-notes-item > summary span {
+        font-weight: 700; font-size: 15px; letter-spacing: 0; color: var(--text);
+      }
+      .release-notes-item > summary strong {
+        color: var(--release-accent); font-size: 11px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase;
+        padding: 6px 10px; border-radius: 999px; background: var(--release-accent-soft);
+      }
+      .release-notes-item__body { padding: 0 16px 16px; }
+      .release-notes-item__description {
+        display: grid; gap: 8px; padding: 12px 14px; border-radius: 14px; background: #fff; border: 1px solid #edf2f7;
+      }
+      .release-notes-item__label {
+        width: fit-content; padding: 4px 8px; border-radius: 999px; background: var(--release-accent-soft); color: var(--release-accent);
+        font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+      }
+      .release-notes-item__description p { margin: 0; color: #334155; line-height: 1.58; }
+      .release-notes-item--current {
+        --release-accent: #334155;
+        --release-accent-soft: rgba(51, 65, 85, 0.10);
+        --release-accent-strong: rgba(51, 65, 85, 0.22);
+      }
+      .release-notes-item__current {
+        width: fit-content;
+        margin-right: auto;
+        padding: 5px 10px;
+        border-radius: 999px;
+        background: #eef2f7;
+        color: #475569;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
       {{TOPBAR_CSS}}
       @media (max-width: 720px) { .page { padding:16px; } }
     </style>
@@ -2189,7 +2687,7 @@ def _landing_html(user=None) -> str:
       function renderUploadComplete(summary, clientRejectedCount, reportUrl) {
         const actions = [
           safeReportUrl(reportUrl)
-            ? `<a class="message-action" href="${escapeHtml(safeReportUrl(reportUrl))}">Открыть отчёт</a>`
+            ? `<a class="message-action" href="${escapeHtml(safeReportUrl(reportUrl))}">Отчёт</a>`
             : '',
           '<a class="message-action message-action--secondary" href="/uploads">Перейти в загрузки</a>',
         ].filter(Boolean).join('');
@@ -2342,6 +2840,7 @@ def _landing_html(user=None) -> str:
 
 def _uploads_html(user=None) -> str:
     user = user or get_user("admin@example.com")
+    storage_policy = load_storage_policy()
     return """
 <!doctype html>
 <html lang="ru">
@@ -2369,13 +2868,83 @@ def _uploads_html(user=None) -> str:
       .icon-button:hover { background: #e5edf7; }
       .icon-button:disabled { opacity: 0.5; cursor: progress; }
       .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 14px; }
+      .release-notes {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: minmax(0, 1fr);
+      }
+      @media (min-width: 1180px) {
+        .release-notes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
+      .release-notes-intro {
+        display: grid; gap: 4px; padding: 14px 16px; border: 1px solid rgba(36, 87, 166, 0.16);
+        border-radius: 16px; background: linear-gradient(180deg, rgba(36, 87, 166, 0.08), rgba(255, 255, 255, 0.96));
+        grid-column: 1 / -1;
+      }
+      .release-notes-intro__title { font-size: 14px; font-weight: 800; color: var(--text); }
+      .release-notes-intro__text { color: var(--muted); font-size: 13px; }
+      .release-notes-item {
+        --release-accent: #2457a6;
+        --release-accent-soft: rgba(36, 87, 166, 0.09);
+        --release-accent-strong: rgba(36, 87, 166, 0.22);
+        border: 1px solid var(--release-accent-strong); border-radius: 16px; background: linear-gradient(180deg, #ffffff, #f7faff); overflow: hidden;
+        box-shadow: 0 8px 22px rgba(24, 33, 47, 0.04);
+        position: relative;
+      }
+      .release-notes-item[open] {
+        border-color: var(--release-accent-strong);
+        box-shadow: 0 12px 26px rgba(36, 87, 166, 0.08);
+      }
+      .release-notes-item > summary {
+        padding: 14px 16px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+        list-style: none; background: linear-gradient(90deg, var(--release-accent-soft), transparent 70%);
+        position: relative;
+      }
+      .release-notes-item > summary::-webkit-details-marker { display: none; }
+      .release-notes-item > summary span {
+        font-weight: 800; font-size: 16px; letter-spacing: 0.01em; color: var(--text);
+      }
+      .release-notes-item > summary strong {
+        color: var(--release-accent); font-size: 12px; font-weight: 800; letter-spacing: 0.03em; text-transform: uppercase;
+        padding: 6px 10px; border-radius: 999px; background: var(--release-accent-soft);
+      }
+      .release-notes-item__body { padding: 0 16px 16px; }
+      .release-notes-item__description {
+        display: grid; gap: 8px; padding: 12px 14px; border-radius: 14px; background: #fff; border: 1px solid #edf2f7;
+      }
+      .release-notes-item__label {
+        width: fit-content; padding: 4px 8px; border-radius: 999px; background: var(--release-accent-soft); color: var(--release-accent);
+        font-size: 11px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase;
+      }
+      .release-notes-item__description p { margin: 0; color: #273246; line-height: 1.55; }
+      .release-notes-item--fresh { --release-accent: #2457a6; --release-accent-soft: rgba(36, 87, 166, 0.10); --release-accent-strong: rgba(36, 87, 166, 0.26); }
+      .release-notes-item--recent { --release-accent: #0f766e; --release-accent-soft: rgba(15, 118, 110, 0.10); --release-accent-strong: rgba(15, 118, 110, 0.26); }
+      .release-notes-item--warm { --release-accent: #b45309; --release-accent-soft: rgba(180, 83, 9, 0.10); --release-accent-strong: rgba(180, 83, 9, 0.24); }
+      .release-notes-item--archive { --release-accent: #6b7280; --release-accent-soft: rgba(107, 114, 128, 0.08); --release-accent-strong: rgba(107, 114, 128, 0.18); }
       table { width: 100%; border-collapse: collapse; background: var(--panel); }
       th, td { padding: 12px 14px; border-bottom: 1px solid #e8edf2; text-align: left; vertical-align: top; }
       th { background: #f3f6fa; font-weight: 700; position: sticky; top: 0; z-index: 1; }
       tr:hover td { background: #f8fbff; }
+      .uploads-toolbar__bottom { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+      .uploads-pager { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; justify-content: flex-end; }
+      .uploads-pager__button, .uploads-pager__current {
+        min-width: 36px; height: 34px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--line);
+        background: #fff; color: var(--text); display: inline-flex; align-items: center; justify-content: center;
+        font: inherit; text-decoration: none;
+      }
+      .uploads-pager__button:hover { background: #f5f8fc; }
+      .uploads-pager__button:disabled { opacity: 0.45; cursor: not-allowed; }
+      .uploads-pager__current { background: #2457a6; border-color: #2457a6; color: #fff; font-weight: 700; }
       .table-controls { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 12px; }
       .row-checkbox { width: 18px; height: 18px; }
       .file-link, .report-link { color: var(--blue); text-decoration: none; font-weight: 600; }
+      .report-link-wrap { display: grid; gap: 4px; }
+      .report-note { display: block; color: var(--muted); font-size: 12px; }
+      .report-progress-wrap { display: grid; gap: 6px; }
+      .report-progress { position: relative; height: 8px; border-radius: 999px; background: #e2e8f0; overflow: hidden; }
+      .report-progress span { position: absolute; inset: 0; width: 40%; background: linear-gradient(90deg, #2457a6, #4f8be8); border-radius: inherit; animation: report-progress-move 1.1s ease-in-out infinite; }
+      @keyframes report-progress-move { 0% { transform: translateX(-120%); } 50% { transform: translateX(80%); } 100% { transform: translateX(220%); } }
+      .retention-note { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
       .report-empty { color: var(--muted); }
       .message { margin-top: 12px; padding: 14px; border: 1px dashed #c8d9f0; border-radius: 12px; background: #f8fbff; }
       .footer { color: var(--muted); font-size: 12px; margin-top: 8px; }
@@ -2424,6 +2993,10 @@ def _uploads_html(user=None) -> str:
             <tbody id="uploads_body"></tbody>
           </table>
         </div>
+        <div class="uploads-toolbar__bottom">
+          <div id="uploads_pagination_summary" class="muted"></div>
+          <div id="uploads_pager" class="uploads-pager"></div>
+        </div>
         <div id="uploads_message" class="message muted">Отчёт для каждой загрузки формируется сразу после приёма файла. Ниже можно собрать отдельный отчёт по выбранным строкам.</div>
         <div class="footer">Новые загрузки появляются без доступа к аналитике. Отчёты доступны отдельно.</div>
       </section>
@@ -2432,29 +3005,75 @@ def _uploads_html(user=None) -> str:
       const uploadsBody = document.getElementById('uploads_body');
       const uploadsCount = document.getElementById('uploads_count');
       const selectedCount = document.getElementById('selected_count');
+      const uploadsPaginationSummary = document.getElementById('uploads_pagination_summary');
+      const uploadsPager = document.getElementById('uploads_pager');
       const uploadsMessage = document.getElementById('uploads_message');
       const buildReportButton = document.getElementById('build_report');
       const refreshButton = document.getElementById('refresh');
       const selectedUploads = new Set();
+      const uploadRetentionDays = {{RETENTION_DAYS}};
+      const uploadsPageSize = 25;
+      let currentUploadsPage = 1;
+      let currentUploadsTotalPages = 1;
 
       function renderSelectedCount() {
         selectedCount.textContent = `Выбрано ${selectedUploads.size}`;
         buildReportButton.disabled = selectedUploads.size === 0;
       }
 
+      function renderUploadsPager(page, totalPages) {
+        if (!uploadsPager) {
+          return;
+        }
+        if (!totalPages || totalPages <= 1) {
+          uploadsPager.innerHTML = '';
+          uploadsPaginationSummary.textContent = '';
+          return;
+        }
+        const prevDisabled = page <= 1 ? 'disabled' : '';
+        const nextDisabled = page >= totalPages ? 'disabled' : '';
+        const startPage = Math.max(1, page - 2);
+        const endPage = Math.min(totalPages, page + 2);
+        const buttons = [];
+        buttons.push(`<button class="uploads-pager__button" type="button" data-page="${page - 1}" ${prevDisabled}>Назад</button>`);
+        if (startPage > 1) {
+          buttons.push('<span class="muted">…</span>');
+        }
+        for (let index = startPage; index <= endPage; index += 1) {
+          if (index === page) {
+            buttons.push(`<span class="uploads-pager__current">${index}</span>`);
+          } else {
+            buttons.push(`<button class="uploads-pager__button" type="button" data-page="${index}">${index}</button>`);
+          }
+        }
+        if (endPage < totalPages) {
+          buttons.push('<span class="muted">…</span>');
+        }
+        buttons.push(`<button class="uploads-pager__button" type="button" data-page="${page + 1}" ${nextDisabled}>Вперёд</button>`);
+        uploadsPager.innerHTML = buttons.join('');
+        uploadsPaginationSummary.textContent = `Страница ${page} из ${totalPages}.`;
+        uploadsPager.querySelectorAll('button[data-page]').forEach((button) => {
+          button.addEventListener('click', () => {
+            loadUploads(Number(button.dataset.page || 1));
+          });
+        });
+      }
+
       function rowHtml(item) {
         const status = (item.status || '').toLowerCase();
         const isProcessing = status === 'processing';
         const isSelected = selectedUploads.has(item.upload_id);
+        const reportLabel = item.report_has_ai ? 'Отчёт (+ai)' : 'Отчёт';
+        const reportDate = item.report_generated_at ? `<span class="report-note">Сформирован: ${formatMoscowDateTime(item.report_generated_at)}</span>` : '';
         const reportHtml = isProcessing
-          ? `<span class="report-empty">${item.status_message || 'Формируем отчёт'}</span>`
+          ? `<div class="report-progress-wrap"><div class="report-progress" aria-hidden="true"><span></span></div><span class="report-empty">${item.status_message || 'Формируем отчёт'}</span></div>`
           : item.report_url
-            ? `<a class="report-link" href="${item.report_url}">Открыть отчёт</a>`
+            ? `<div class="report-link-wrap"><a class="report-link" href="${item.report_url}">${reportLabel}</a>${reportDate}</div>`
             : status === 'error'
               ? `<span class="report-empty">${item.status_message || 'Ошибка формирования отчёта'}</span>`
               : `<span class="report-empty">${item.status_message || 'Ожидает обработки'}</span>`;
         const fileHtml = item.download_url
-          ? `<a class="file-link" href="${item.download_url}" target="_blank" rel="noreferrer">${item.original_name}</a>`
+          ? `<a class="file-link" href="${item.download_url}" target="_blank" rel="noreferrer">${item.original_name}</a>${item.retention_note ? `<span class="retention-note">${item.retention_note}</span>` : ''}`
           : `<span class="report-empty">${item.original_name} · ${item.status_message || 'Срок хранения истёк'}</span>`;
         const rebuildDisabled = isProcessing || !item.download_url ? 'disabled' : '';
         return `
@@ -2471,13 +3090,19 @@ def _uploads_html(user=None) -> str:
           </tr>`;
       }
 
-      async function loadUploads() {
-        const response = await fetch('/api/uploads?limit=200');
-        const items = await response.json();
-        uploadsCount.textContent = `Файлов: ${Array.isArray(items) ? items.length : 0}`;
+      async function loadUploads(page = currentUploadsPage) {
+        const response = await fetch(`/api/uploads?page=${encodeURIComponent(page)}&page_size=${encodeURIComponent(uploadsPageSize)}`);
+        const payload = await response.json();
+        const items = Array.isArray(payload) ? payload : payload.items;
+        const total = Array.isArray(payload) ? items.length : Number(payload.total || 0);
+        const totalPages = Array.isArray(payload) ? 1 : Number(payload.total_pages || 1);
+        const currentPage = Array.isArray(payload) ? 1 : Number(payload.page || page);
+        currentUploadsPage = currentPage;
+        currentUploadsTotalPages = totalPages;
+        uploadsCount.textContent = `Файлов: ${total}`;
         uploadsBody.innerHTML = Array.isArray(items) && items.length
-          ? items.map((item) => rowHtml(item)).join('')
-          : '<tr><td colspan="6" class="muted">Загрузок пока нет.</td></tr>';
+          ? items.map((item) => ({ ...item, retention_note: item.retention_note || formatRetentionNote(item.created_at, uploadRetentionDays) })).map((item) => rowHtml(item)).join('')
+          : '<tr><td colspan="7" class="muted">Загрузок пока нет.</td></tr>';
         uploadsBody.querySelectorAll('input[data-upload-id]').forEach((checkbox) => {
           checkbox.addEventListener('change', () => {
             if (checkbox.checked) {
@@ -2491,6 +3116,7 @@ def _uploads_html(user=None) -> str:
         uploadsBody.querySelectorAll('button[data-rebuild-upload-id]').forEach((button) => {
           button.addEventListener('click', () => rebuildUploadReport(button.dataset.rebuildUploadId, button));
         });
+        renderUploadsPager(currentPage, totalPages);
         renderSelectedCount();
       }
 
@@ -2520,6 +3146,40 @@ def _uploads_html(user=None) -> str:
         return `${(size / (1024 * 1024)).toFixed(2)} Mb`;
       }
 
+      function pluralRu(value, one, few, many) {
+        const abs = Math.abs(Number(value || 0));
+        if (abs % 10 === 1 && abs % 100 !== 11) return one;
+        if ([2, 3, 4].includes(abs % 10) && ![12, 13, 14].includes(abs % 100)) return few;
+        return many;
+      }
+
+      function formatRetentionNote(createdAt, retentionDays) {
+        const created = new Date(createdAt);
+        if (Number.isNaN(created.getTime())) {
+          return '';
+        }
+        const expiresAt = new Date(created.getTime() + Number(retentionDays || 0) * 24 * 60 * 60 * 1000);
+        const remainingMs = expiresAt.getTime() - Date.now();
+        if (remainingMs <= 0) {
+          return 'срок хранения истёк';
+        }
+        const totalMinutes = Math.floor(remainingMs / 60000);
+        const days = Math.floor(totalMinutes / (24 * 60));
+        const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+        const minutes = totalMinutes % 60;
+        const parts = [];
+        if (days) {
+          parts.push(`${days} ${pluralRu(days, 'день', 'дня', 'дней')}`);
+        }
+        if (hours) {
+          parts.push(`${hours} ${pluralRu(hours, 'час', 'часа', 'часов')}`);
+        }
+        if (minutes) {
+          parts.push(`${minutes} ${pluralRu(minutes, 'минута', 'минуты', 'минут')}`);
+        }
+        return parts.length ? `до удаления: ${parts.join(', ')}` : 'меньше минуты';
+      }
+
       async function rebuildUploadReport(uploadId, button) {
         if (!uploadId) {
           return;
@@ -2527,7 +3187,7 @@ def _uploads_html(user=None) -> str:
         button.disabled = true;
         const reportCell = uploadsBody.querySelector(`[data-report-cell="${uploadId}"]`);
         if (reportCell) {
-          reportCell.innerHTML = '<span class="report-empty">Формируем отчёт</span>';
+          reportCell.innerHTML = '<div class="report-progress-wrap"><div class="report-progress" aria-hidden="true"><span></span></div><span class="report-empty">Формируем отчёт</span></div>';
         }
         uploadsMessage.textContent = 'Формируем отчёт...';
         try {
@@ -2536,7 +3196,7 @@ def _uploads_html(user=None) -> str:
           if (!response.ok) {
             throw new Error(data?.detail || data?.message || 'Не удалось пересобрать отчёт.');
           }
-          uploadsMessage.innerHTML = `${data.message || 'Отчёт пересобран.'} <a class="report-link" href="${data.report_url}">Открыть отчёт</a>`;
+          uploadsMessage.innerHTML = `${data.message || 'Отчёт пересобран.'} <a class="report-link" href="${data.report_url}">Отчёт</a>`;
           await loadUploads();
         } catch (error) {
           uploadsMessage.textContent = error instanceof Error ? error.message : String(error);
@@ -2561,7 +3221,7 @@ def _uploads_html(user=None) -> str:
           if (!response.ok) {
             throw new Error(data?.detail || data?.message || 'Не удалось сформировать отчёт.');
           }
-          uploadsMessage.innerHTML = `${data.message || 'Отчёт сформирован.'} <a class="report-link" href="${data.report_url}">Открыть отчёт</a>`;
+          uploadsMessage.innerHTML = `${data.message || 'Отчёт сформирован.'} <a class="report-link" href="${data.report_url}">Отчёт</a>`;
           selectedUploads.clear();
           await loadUploads();
           if (data.report_url) {
@@ -2574,12 +3234,12 @@ def _uploads_html(user=None) -> str:
         }
       });
 
-      refreshButton.addEventListener('click', loadUploads);
+      refreshButton.addEventListener('click', () => loadUploads(currentUploadsPage));
       loadUploads();
     </script>
   </body>
 </html>
-""".replace("{{VERSION}}", _version_number()).replace("{{TOPBAR}}", _page_topbar(user)).replace("{{TOPBAR_CSS}}", _topbar_css()).strip()
+""".replace("{{VERSION}}", _version_number()).replace("{{RETENTION_DAYS}}", str(storage_policy.archive_retention_days)).replace("{{TOPBAR}}", _page_topbar(user)).replace("{{TOPBAR_CSS}}", _topbar_css()).strip()
 
 
 _index_html = _landing_html

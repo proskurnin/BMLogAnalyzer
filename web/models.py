@@ -120,6 +120,10 @@ class UploadItemModel:
     status_message: str = ""
     report_run_id: str = ""
     report_url: str = ""
+    report_has_ai: bool = False
+    report_generated_at: str = ""
+    retention_expires_at: str = ""
+    retention_note: str = ""
     download_url: str = ""
     owner_email: str = ""
     owner_name: str = ""
@@ -133,3 +137,21 @@ class UserModel:
     password_hash: str
     role: str = "user"
     created_at: str = ""
+
+
+@dataclass(frozen=True)
+class AuthPolicyModel:
+    session_idle_minutes: int = 120
+
+
+@dataclass(frozen=True)
+class AuthEventModel:
+    event_id: str
+    created_at: str
+    event_type: str
+    email: str = ""
+    user_name: str = ""
+    status: str = ""
+    ip_address: str = ""
+    user_agent: str = ""
+    details: str = ""

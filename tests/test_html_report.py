@@ -101,10 +101,13 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert "Сработало правил: 1 из 5" in html
     assert "Не сработали" in html
     assert "В разобранных событиях нет PaymentStart resp с Code:16." in html
+    assert "Сценарии из протокола взаимодействия" in html
+    assert "Разделы" in html
+    assert "Цитаты" in html
+    assert "Таймаут по умолчанию 3 секунды." in html
     assert "status-table--checks" in html
-    assert "Почему подозрительно" in html
-    assert "collapsible--suspicious" in html
-    assert "status-table--suspicious" in html
+    assert "status-table--bm" in html
+    assert '<colgroup><col style="width:68%"><col style="width:16%"><col style="width:16%"></colgroup>' in html
     assert "Группировка статусов" in html
     assert "BM сведения" in html
     assert "Версии БМ" in html
@@ -123,7 +126,7 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert "class=\"metric metric--button\"" in html
     assert "class=\"bm-meta-card bm-meta-card--button\"" in html
     assert "data-kind=\"meta\"" in html
-    assert "class=\"status-table\"" in html
+    assert "class=\"status-table status-table--bm\"" in html
     assert "class=\"status-table status-table--grouped\"" in html
     assert "class=\"status-table status-table--diagnostic\"" in html
     assert "status-row--success" in html
@@ -139,6 +142,9 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert "data-label=\"Прошивки ридеров\"" in html
     assert "data-label=\"Конфиги\"" in html
     assert "data-kind=\"metric\"" in html
+    assert "source_sections" in manifest
+    assert "source_quotes" in manifest
+    assert "validation_check_catalog" in manifest
     assert "data-format=\"records\"" in html
     assert "data-kind=\"status\"" in html
     assert "data-kind=\"group\"" in html
@@ -172,10 +178,12 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert '"validator_sections"' in manifest
     assert '"suspicious"' in manifest
     assert '"suspicious_lines"' in manifest
+    assert '"validation_check_catalog"' in manifest
     assert '"validation_checks"' in manifest
     ai_context = json.loads((tmp_path / "analysis_report.ai_context.json").read_text(encoding="utf-8"))
     assert ai_context["schema_version"] == "bm-log-analyzer.ai-context.v1"
     assert ai_context["summary"]["events"] == 6
+    assert "protocol_scenario_results" in ai_context
 
 
 def test_html_report_maps_mmv2_package_to_mcd2_carrier(tmp_path):
@@ -197,8 +205,10 @@ def test_html_report_maps_mmv2_package_to_mcd2_carrier(tmp_path):
     assert "МЦД-2" in html
     assert "1.1.7" in html
     assert "mmv2" in html
-    assert "modal-value-link" in html
+    assert "modal-item--clickable" in html
     assert "data-evidence-label" in html
+    assert "data-evidence-terms" in html
+    assert "modal-item-tip" in html
     assert "Строки лога, из которых получено значение" in html
     assert manifest["counts"]["events"] == 1
 
@@ -229,3 +239,32 @@ def test_html_report_hides_empty_sections(tmp_path):
     assert "suspicious" not in manifest["stable_sections"]
     assert "validation_checks" in manifest["stable_sections"]
     assert "unclassified_diagnostics" not in manifest["stable_sections"]
+
+
+def test_html_report_shows_non_emv_card_status_and_zero_row_toggle(tmp_path):
+    stats = PipelineStats(scanned_lines=1, malformed_payment_lines=0, extracted_files=0)
+    non_emv_event = replace(
+        make_event(6, 100, "4.4.12", message="NON_EMV_CARD"),
+        raw_line="2026-04-29 PaymentStart, resp: {Code:6 Message:NON_EMV_CARD}",
+    )
+    ok_event = replace(
+        make_event(0, 100, "4.4.12", message="OK", payment_type=2, auth_type=0),
+        raw_line="2026-04-29 PaymentStart, resp: {Code:0 Message:OK} error: no error",
+    )
+    result = analyze_events([non_emv_event, ok_event])
+
+    write_html_report([non_emv_event, ok_event], result, tmp_path / "analysis_report.html", stats=stats)
+
+    html = (tmp_path / "analysis_report.html").read_text(encoding="utf-8")
+    assert "Скрыть строки с нулём" in html
+    assert 'id="bm-status-hide-zero"' in html
+    assert "bm-status-zero-toggle__switch" in html
+    assert "bm-status-zero-toggle__thumb" in html
+    assert "localStorage" in html
+    assert 'data-count="${count}"' in html
+    assert html.count("bm-status-hide-zero") >= 2
+    assert html.count("Скрыть строки с нулём") >= 2
+    assert "NON_EMV_CARD" in html
+    assert html.index("<td>Отказ, ошибка ODA/CDA</td>") < html.index("<td>NON_EMV_CARD</td>")
+    assert 'data-count="0"' in html
+    assert "line-highlight" in html

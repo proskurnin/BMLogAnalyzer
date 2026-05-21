@@ -67,6 +67,14 @@ def test_writes_extended_csv_reports(tmp_path):
     assert (tmp_path / "summary_no_card_card_history.csv").exists()
     assert (tmp_path / "check_results.csv").exists()
     assert (tmp_path / "check_summary.csv").exists()
+    assert (tmp_path / "protocol_scenario_results.csv").exists()
+    assert (tmp_path / "protocol_scenario_summary.csv").exists()
+    protocol_header = (tmp_path / "protocol_scenario_results.csv").read_text(encoding="utf-8").splitlines()[0]
+    assert "source_document" in protocol_header
+    assert "source_section" in protocol_header
+    assert "source_sections" in protocol_header
+    assert "source_quote" in protocol_header
+    assert "source_quotes" in protocol_header
     assert (tmp_path / "errors_by_file.csv").exists()
     assert (tmp_path / "file_error_overview.csv").exists()
     assert (tmp_path / "bundle_manifest.csv").exists()
@@ -109,6 +117,7 @@ def test_writes_extended_csv_reports(tmp_path):
     assert "success" not in error_events
     assert (tmp_path / "technical_error_events.csv").read_text(encoding="utf-8").count("technical_error") == 1
     assert "payment_start_resp_parse_failed" in (tmp_path / "diagnostics.csv").read_text(encoding="utf-8")
+    assert "payment_start_followup_chain" in (tmp_path / "protocol_scenario_results.csv").read_text(encoding="utf-8")
 
 
 def test_skips_disabled_csv_reports(tmp_path):

@@ -8,12 +8,13 @@ import json
 import secrets
 from pathlib import Path
 
-from web.models import UserModel
+from web.models import AuthEventModel, AuthPolicyModel, UserModel
 from web.settings import auth_dir, load_settings
 
 DEFAULT_ADMIN_EMAIL = "admin@example.com"
 DEFAULT_ADMIN_PASSWORD = "admin"
 SESSION_COOKIE = "bm_auth_session"
+DEFAULT_SESSION_IDLE_MINUTES = 120
 VALID_ROLES = {"user", "admin"}
 
 
@@ -31,8 +32,110 @@ def _sessions_path(storage_dir: Path | None = None) -> Path:
     return _auth_root(storage_dir) / "sessions.json"
 
 
+def _auth_policy_path(storage_dir: Path | None = None) -> Path:
+    return _auth_root(storage_dir) / "auth_policy.json"
+
+
+def _auth_journal_path(storage_dir: Path | None = None) -> Path:
+    return _auth_root(storage_dir) / "auth_journal.jsonl"
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _session_idle_minutes(storage_dir: Path | None = None) -> int:
+    return load_auth_policy(storage_dir).session_idle_minutes
+
+
+def load_auth_policy(storage_dir: Path | None = None) -> AuthPolicyModel:
+    path = _auth_policy_path(storage_dir)
+    if not path.exists():
+        return AuthPolicyModel(session_idle_minutes=DEFAULT_SESSION_IDLE_MINUTES)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return AuthPolicyModel(session_idle_minutes=_normalize_idle_minutes(payload.get("session_idle_minutes", DEFAULT_SESSION_IDLE_MINUTES)))
+
+
+def save_auth_policy(policy: AuthPolicyModel, storage_dir: Path | None = None) -> None:
+    path = _auth_policy_path(storage_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(asdict(policy), ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def update_auth_policy(*, session_idle_minutes: int, storage_dir: Path | None = None) -> AuthPolicyModel:
+    policy = AuthPolicyModel(session_idle_minutes=_normalize_idle_minutes(session_idle_minutes))
+    save_auth_policy(policy, storage_dir)
+    return policy
+
+
+def record_auth_event(
+    event_type: str,
+    *,
+    email: str = "",
+    user_name: str = "",
+    status: str = "",
+    ip_address: str = "",
+    user_agent: str = "",
+    details: str = "",
+    storage_dir: Path | None = None,
+) -> AuthEventModel:
+    path = _auth_journal_path(storage_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    event = AuthEventModel(
+        event_id=secrets.token_hex(8),
+        created_at=_utc_now(),
+        event_type=event_type,
+        email=normalize_email(email),
+        user_name=user_name.strip(),
+        status=status.strip(),
+        ip_address=ip_address.strip(),
+        user_agent=user_agent.strip(),
+        details=details.strip(),
+    )
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(asdict(event), ensure_ascii=False) + "\n")
+    return event
+
+
+def list_auth_events(storage_dir: Path | None = None, *, limit: int = 50) -> list[AuthEventModel]:
+    return read_auth_events(storage_dir, limit=limit)
+
+
+def count_auth_events(storage_dir: Path | None = None) -> int:
+    path = _auth_journal_path(storage_dir)
+    if not path.exists():
+        return 0
+    total = 0
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                total += 1
+    return total
+
+
+def read_auth_events(
+    storage_dir: Path | None = None,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[AuthEventModel]:
+    path = _auth_journal_path(storage_dir)
+    if not path.exists():
+        return []
+    limit = max(0, limit)
+    offset = max(0, offset)
+    if limit == 0:
+        return []
+    events: list[AuthEventModel] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            events.append(AuthEventModel(**json.loads(line)))
+    if not events:
+        return []
+    newest_first = list(reversed(events))
+    return newest_first[offset : offset + limit]
 
 
 def ensure_default_admin(storage_dir: Path | None = None) -> None:
@@ -157,8 +260,14 @@ def authenticate_user(email: str, password: str, storage_dir: Path | None = None
 def create_session(email: str, storage_dir: Path | None = None) -> str:
     sessions = _load_sessions(storage_dir)
     token = secrets.token_urlsafe(32)
-    expires_at = datetime.now(timezone.utc) + timedelta(days=load_settings().session_days)
-    sessions[token] = {"email": normalize_email(email), "expires_at": expires_at.isoformat(timespec="seconds")}
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(minutes=_session_idle_minutes(storage_dir))
+    sessions[token] = {
+        "email": normalize_email(email),
+        "created_at": now.isoformat(timespec="seconds"),
+        "last_activity_at": now.isoformat(timespec="seconds"),
+        "expires_at": expires_at.isoformat(timespec="seconds"),
+    }
     _save_sessions(sessions, storage_dir)
     return token
 
@@ -176,8 +285,15 @@ def user_from_session(token: str | None, storage_dir: Path | None = None) -> Use
     session = sessions.get(token)
     if not session:
         return None
-    expires_at = datetime.fromisoformat(session["expires_at"])
+    expires_at = _parse_iso_datetime(session.get("expires_at"))
     if expires_at < datetime.now(timezone.utc):
+        record_auth_event(
+            "session_expired",
+            email=session.get("email", ""),
+            status="expired",
+            details="Session expired during request validation.",
+            storage_dir=storage_dir,
+        )
         sessions.pop(token, None)
         _save_sessions(sessions, storage_dir)
         return None
@@ -185,17 +301,43 @@ def user_from_session(token: str | None, storage_dir: Path | None = None) -> Use
     return get_user(email, storage_dir)
 
 
+def touch_session(token: str, storage_dir: Path | None = None) -> bool:
+    sessions = _load_sessions(storage_dir)
+    session = sessions.get(token)
+    if not session:
+        return False
+    now = datetime.now(timezone.utc)
+    session["last_activity_at"] = now.isoformat(timespec="seconds")
+    session["expires_at"] = (now + timedelta(minutes=_session_idle_minutes(storage_dir))).isoformat(timespec="seconds")
+    sessions[token] = session
+    _save_sessions(sessions, storage_dir)
+    return True
+
+
 def cleanup_expired_sessions(storage_dir: Path | None = None) -> int:
     sessions = _load_sessions(storage_dir)
     now = datetime.now(timezone.utc)
+    expired_sessions = [
+        (token, session)
+        for token, session in sessions.items()
+        if _parse_iso_datetime(session.get("expires_at")) < now
+    ]
     kept = {
         token: session
         for token, session in sessions.items()
-        if datetime.fromisoformat(session["expires_at"]) >= now
+        if _parse_iso_datetime(session.get("expires_at")) >= now
     }
     removed = len(sessions) - len(kept)
     if removed:
         _save_sessions(kept, storage_dir)
+        for _token, session in expired_sessions:
+            record_auth_event(
+                "session_expired",
+                email=session.get("email", ""),
+                status="expired",
+                details="Session expired during cleanup.",
+                storage_dir=storage_dir,
+            )
     return removed
 
 
@@ -234,3 +376,20 @@ def _load_sessions(storage_dir: Path | None = None) -> dict[str, dict[str, str]]
 
 def _save_sessions(sessions: dict[str, dict[str, str]], storage_dir: Path | None = None) -> None:
     _sessions_path(storage_dir).write_text(json.dumps(sessions, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _normalize_idle_minutes(value: int | str | None) -> int:
+    try:
+        minutes = int(value)
+    except (TypeError, ValueError):
+        minutes = DEFAULT_SESSION_IDLE_MINUTES
+    return max(1, minutes)
+
+
+def _parse_iso_datetime(value: str | None) -> datetime:
+    if not value:
+        return datetime.fromtimestamp(0, tz=timezone.utc)
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed

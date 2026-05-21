@@ -9,10 +9,10 @@ from pathlib import Path
 class WebSettings:
     app_env: str
     data_dir: Path
+    auth_dir: Path
     admin_email: str
     admin_password: str
     admin_name: str
-    session_days: int
     cookie_secure: bool
     max_upload_file_bytes: int
     max_upload_session_bytes: int
@@ -26,6 +26,7 @@ class WebSettings:
 def load_settings() -> WebSettings:
     app_env = os.getenv("BM_APP_ENV", "development").strip().lower() or "development"
     data_dir = Path(os.getenv("BM_DATA_DIR", "./_workdir"))
+    auth_dir = Path(os.getenv("BM_AUTH_DIR", data_dir / "auth"))
     admin_email = os.getenv("BM_ADMIN_EMAIL", "admin@example.com").strip()
     admin_password = os.getenv("BM_ADMIN_PASSWORD", "admin").strip()
     admin_name = os.getenv("BM_ADMIN_NAME", "Administrator").strip() or "Administrator"
@@ -33,10 +34,10 @@ def load_settings() -> WebSettings:
     return WebSettings(
         app_env=app_env,
         data_dir=data_dir,
+        auth_dir=auth_dir,
         admin_email=admin_email,
         admin_password=admin_password,
         admin_name=admin_name,
-        session_days=_env_int("BM_SESSION_DAYS", 14),
         cookie_secure=cookie_secure,
         max_upload_file_bytes=_env_int("BM_MAX_UPLOAD_FILE_MB", 512) * 1024 * 1024,
         max_upload_session_bytes=_env_int("BM_MAX_UPLOAD_SESSION_MB", 2048) * 1024 * 1024,
@@ -60,7 +61,7 @@ def require_production_bootstrap_settings(settings: WebSettings) -> None:
 
 
 def auth_dir() -> Path:
-    return load_settings().data_dir / "auth"
+    return load_settings().auth_dir
 
 
 def upload_store_dir() -> Path:

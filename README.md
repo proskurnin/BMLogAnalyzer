@@ -2,7 +2,7 @@
 
 CLI-first analyzer for BM PaymentStart response logs.
 
-Current analyzer version: `1.4.0`.
+Current analyzer version: `1.6.15`.
 
 Deployment notes are in [README_DEPLOY.md](README_DEPLOY.md). Release changes are tracked in [CHANGELOG.md](CHANGELOG.md).
 
@@ -81,17 +81,18 @@ The latest saved report is available at `/api/runs/latest/report`.
 The history list can be filtered by run mode (`analysis` or `summary`), searched by date/path/version, sorted by time, and each history entry exposes direct HTML and manifest URLs. Sessions can be deleted from the history view.
 The HTML report also includes a collapsed validator analytics section grouped by validator number, BM version, and date range.
 
-The root page `/` is upload-only. It does not expose analytics, reports, or history.
+The root page `/` is upload-only for authenticated users. It does not expose analytics, reports, or history.
+The login page is `/login`. Authentication uses local session storage, and access is split by role (`user` and `admin`).
 The admin upload registry is available at `/uploads`. It lists uploaded files, lets an admin download each file locally, shows the current report state, and can generate a report for multiple selected uploads.
 Upload storage is kept in `_workdir/upload_store`.
 The retention period for uploaded archives and extracted workspaces is configurable in the admin panel and defaults to 10 days. When it expires, the file data is removed from disk, but the registry records remain.
-Role-based access control is planned separately: the product flow already separates upload and admin views, but authentication is not implemented yet.
+Role-based access control is implemented in the web layer: unauthenticated requests are redirected to `/login`, and admin-only paths are blocked for non-admin users.
 
 Stable contracts exposed by the core/web layer:
 
 * snapshot schema: `bm-log-analyzer.snapshot.v1`
 * report manifest schema: `bm-log-analyzer.analysis-report.v1`
-* stable report sections are declared in the manifest `sections` list
+* stable report sections are declared in the manifest `stable_sections` list, and `sections` mirrors the rendered section order
 * validator analytics is exposed in the HTML report and manifest as `validator_analytics`
 
 Archives are extracted into `_workdir/extracted` before analysis. The scanner reads `.log`, `.gz`, `.zip`, `.tar.gz`, `.tgz`, and `.rar` sources. RAR extraction requires `bsdtar` (`libarchive-tools` in the Docker image).
@@ -282,6 +283,14 @@ Current BM status rows:
 * Which `Message` values appeared in logs?
 * How many times did each `Message` appear?
 * Which events belong to `success`, `decline`, `technical_error`, and `unknown` classifications?
+
+### Validation Checks
+
+The analyzer also produces evidence-backed validation checks on top of parsed facts.
+Built-in checks currently cover repeat-after-failure within 3 seconds, code-specific alerts, and unknown result codes.
+Custom check cases can be managed from the admin area and are stored with enable/disable state, severity, version, condition type, and condition value.
+The HTML report manifest includes the applied `validation_check_catalog` alongside `validation_checks`, so the report stays tied to the exact rule set used during generation.
+Each matched check result includes the source file, line number, raw log line, and a short evidence string.
 
 ### BM Versions And Readers
 

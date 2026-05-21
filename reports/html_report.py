@@ -12,6 +12,7 @@ from analytics.bm_statuses import UNCLASSIFIED_STATUS, bm_status_summary_rows, c
 from analytics.ai_context import build_ai_context
 from analytics.carrier_directory import carrier_markers_for_text, carrier_names_for_text, load_carrier_rules
 from analytics.check_cases import load_check_cases, run_builtin_checks
+from analytics.protocol_scenarios import load_protocol_scenarios, run_protocol_scenarios
 from analytics.suspicious import suspicious_line_payloads
 from core.contracts import REPORT_MANIFEST_SCHEMA_VERSION
 from core.models import AnalysisResult, ArchiveInventoryRow, CheckCase, CheckResult, PaymentEvent, PipelineStats
@@ -82,6 +83,8 @@ def render_html_report(
     suspicious_rows = suspicious_line_payloads(events)
     check_cases = [check for check in load_check_cases() if check.enabled]
     check_results = run_builtin_checks(events, checks=check_cases)
+    protocol_scenarios = [scenario for scenario in load_protocol_scenarios() if scenario.enabled]
+    protocol_results = run_protocol_scenarios(events, scenarios=protocol_scenarios)
     date_chart = _bm_date_chart(events)
     unclassified_diag = _unclassified_diagnostics(events)
     report_data = _report_data(
@@ -95,6 +98,7 @@ def render_html_report(
         reader_firmware_records=reader_firmware_records,
         bm_date_records=bm_date_records,
         validator_sections=validator_sections,
+        protocol_results=protocol_results,
     )
 
     bm_meta_cards = _bm_meta_cards(
@@ -183,6 +187,7 @@ def render_html_report(
             f'<script id="report-data" type="application/json">{_json_script(report_data)}</script>',
             _check_results_section(check_results, check_cases, events),
             _suspicious_section(suspicious_rows) if suspicious_rows else "",
+            _protocol_scenario_results_section(protocol_results, protocol_scenarios),
             _bm_status_section(events, bm_group_rows, bm_group_payloads, date_chart, unclassified_diag, archive_names),
             _validator_section(validator_sections),
             _modal(),
@@ -212,6 +217,8 @@ def render_html_report_manifest(
     suspicious_rows = suspicious_line_payloads(events)
     check_cases = [check for check in load_check_cases() if check.enabled]
     check_results = run_builtin_checks(events, checks=check_cases)
+    protocol_scenarios = [scenario for scenario in load_protocol_scenarios() if scenario.enabled]
+    protocol_results = run_protocol_scenarios(events, scenarios=protocol_scenarios)
     stable_sections = [
         "summary",
         "bm_meta",
@@ -230,6 +237,9 @@ def render_html_report_manifest(
     if check_cases:
         insert_at = stable_sections.index("bm_statuses")
         stable_sections.insert(insert_at, "validation_checks")
+    if protocol_scenarios:
+        insert_at = stable_sections.index("bm_statuses")
+        stable_sections.insert(insert_at, "protocol_scenarios")
     if unclassified_total := sum(int(row.get("count", 0)) for row in _unclassified_diagnostics(events)):
         stable_sections.insert(-1, "unclassified_diagnostics")
     return {
@@ -252,7 +262,10 @@ def render_html_report_manifest(
             "other_groups",
             "validator_sections",
             "suspicious_lines",
+            "validation_check_catalog",
             "validation_checks",
+            "protocol_scenarios",
+            "protocol_scenario_results",
         ],
         "stable_sections": stable_sections,
         "counts": {
@@ -268,8 +281,10 @@ def render_html_report_manifest(
             "technical_error": result.technical_error_count,
             "unknown": result.unknown_count,
             "suspicious": len(suspicious_rows),
+            "validation_check_catalog": len(check_cases),
             "validation_checks": len(check_results),
-        },
+        "protocol_scenarios": len(protocol_results),
+    },
         "sections": stable_sections,
         "status_groups": [str(row["status"]) for row in summary_rows],
         "grouped_statuses": [str(row["label"]) for row in grouped_rows],
@@ -277,7 +292,9 @@ def render_html_report_manifest(
         "other_groups": [str(group["label"]) for group in other_groups],
         "validator_sections": [str(item["validator"]) for item in validator_sections],
         "suspicious_lines": suspicious_rows,
+        "validation_check_catalog": [_check_case_payload(item) for item in check_cases],
         "validation_checks": [_check_result_payload(item) for item in check_results],
+        "protocol_scenario_results": [_protocol_scenario_result_payload(item) for item in protocol_results],
     }
 
 
@@ -540,14 +557,26 @@ def _check_results_section(results: list[CheckResult], checks: list[CheckCase], 
     matched_check_ids = {result.check_id for result in results}
     active_check_count = len(checks)
     unmatched_checks = [check for check in checks if check.check_id not in matched_check_ids]
+    severity_order = {"critical": 0, "warning": 1, "info": 2}
+
+    def sort_key(result: CheckResult) -> tuple[int, str, str, str]:
+        return (
+            severity_order.get(result.severity, 99),
+            result.source_file,
+            str(result.line_number or 0).zfill(8),
+            result.title,
+        )
+
+    sorted_results = sorted(results, key=sort_key)
     rows = []
-    for result in results:
+    for result in sorted_results:
         location = result.source_file
         if result.line_number is not None:
             location = f"{location}:{result.line_number}"
         timestamp = result.timestamp.isoformat(sep=" ") if result.timestamp else ""
+        severity_class = f"status-row--check-{result.severity}"
         rows.append(
-            '<tr class="status-row status-row--check">'
+            f'<tr class="status-row status-row--check {severity_class}">'
             f"<td><strong>{escape(location)}</strong><br><span class=\"muted\">{escape(timestamp)}</span></td>"
             f"<td>{escape(result.severity)}</td>"
             f"<td><strong>{escape(result.title)}</strong><br><span class=\"muted\">{escape(result.check_id)}</span></td>"
@@ -556,9 +585,10 @@ def _check_results_section(results: list[CheckResult], checks: list[CheckCase], 
             "</tr>"
         )
     severity_counts: dict[str, int] = defaultdict(int)
-    for result in results:
+    for result in sorted_results:
         severity_counts[result.severity] += 1
-    summary = ", ".join(f"{severity}: {count}" for severity, count in sorted(severity_counts.items()))
+    summary_order = ("critical", "warning", "info")
+    summary = ", ".join(f"{severity}: {severity_counts[severity]}" for severity in summary_order if severity_counts.get(severity))
     unmatched_rows = []
     for check in unmatched_checks:
         unmatched_rows.append(
@@ -585,6 +615,7 @@ def _check_results_section(results: list[CheckResult], checks: list[CheckCase], 
         [
             '<div class="table-wrap checks-table-wrap">',
             '<table class="status-table status-table--checks">',
+            '<colgroup><col style="width:18%"><col style="width:11%"><col style="width:19%"><col style="width:12%"><col style="width:40%"></colgroup>',
             '<thead class="status-table-head"><tr><th>Источник</th><th>Severity</th><th>Проверка</th><th>Evidence</th><th>Строка лога</th></tr></thead>',
             f"<tbody>{''.join(rows)}</tbody>",
             "</table>",
@@ -601,6 +632,96 @@ def _check_results_section(results: list[CheckResult], checks: list[CheckCase], 
             "<span>",
             "<strong>Проверки</strong>",
             f"<em>Сработало правил: {len(matched_check_ids)} из {active_check_count}. {summary_text}</em>",
+            "</span>",
+            "</summary>",
+            '<div class="collapsible-body">',
+            matched_block,
+            unmatched_block,
+            "</div>",
+            "</details>",
+        ]
+    )
+
+
+def _protocol_scenario_results_section(results, scenarios) -> str:
+    if not scenarios:
+        return ""
+    matched_ids = {result.scenario_id for result in results}
+    unmatched = [scenario for scenario in scenarios if scenario.scenario_id not in matched_ids]
+    rows = []
+    for result in sorted(results, key=lambda item: (item.source_file, item.line_number or 0, item.scenario_id)):
+        location = result.source_file
+        if result.line_number is not None:
+            location = f"{location}:{result.line_number}"
+        timestamp = result.timestamp.isoformat(sep=" ") if result.timestamp else ""
+        status_class = "status-row--check" if result.status == "matched" else "status-row--check-muted"
+        source_note = result.source_document or "нет источника"
+        source_sections_text = " / ".join(result.source_sections) if result.source_sections else result.source_section.replace("\n", " / ")
+        source_quote_text = " / ".join(result.source_quotes) if result.source_quotes else result.source_quote.replace("\n", " / ")
+        rows.append(
+            f'<tr class="status-row {status_class}">'
+            f"<td><strong>{escape(location)}</strong><br><span class=\"muted\">{escape(timestamp)}</span></td>"
+            f"<td>{escape(source_note)}</td>"
+            f"<td>{escape(source_sections_text or '—')}</td>"
+            f"<td>{escape(source_quote_text or '—')}</td>"
+            f"<td>{escape(result.status)}</td>"
+            f"<td><strong>{escape(result.title)}</strong><br><span class=\"muted\">{escape(result.scenario_id)}</span></td>"
+            f"<td>{escape(result.evidence)}</td>"
+            f"<td><code>{escape(result.raw_line)}</code></td>"
+            "</tr>"
+        )
+    matched_block = ""
+    if rows:
+        matched_block = "\n".join(
+            [
+                '<div class="table-wrap checks-table-wrap">',
+                '<table class="status-table status-table--checks">',
+                '<colgroup><col style="width:12%"><col style="width:16%"><col style="width:13%"><col style="width:13%"><col style="width:10%"><col style="width:16%"><col style="width:10%"><col style="width:10%"></colgroup>',
+                '<thead class="status-table-head"><tr><th>Источник лога</th><th>Источник</th><th>Разделы</th><th>Цитаты</th><th>Статус</th><th>Сценарий</th><th>Evidence</th><th>Строка лога</th></tr></thead>',
+                f"<tbody>{''.join(rows)}</tbody>",
+                "</table>",
+                "</div>",
+            ]
+        )
+    else:
+        matched_block = '<p class="muted checks-empty">Совпадений сценариев нет.</p>'
+
+    unmatched_rows = []
+    for scenario in unmatched:
+        source_note = scenario.source_document or "нет источника"
+        source_sections_text = " / ".join(scenario.source_sections) if scenario.source_sections else scenario.source_section.replace("\n", " / ")
+        source_quote_text = " / ".join(scenario.source_quotes) if scenario.source_quotes else scenario.source_quote.replace("\n", " / ")
+        unmatched_rows.append(
+            '<tr class="status-row status-row--check-muted">'
+            f"<td>{escape(scenario.title)}</td>"
+            f"<td>{escape(scenario.scenario_id)}</td>"
+            f"<td>{escape(source_note)}</td>"
+            f"<td>{escape(source_sections_text or '—')}</td>"
+            f"<td>{escape(source_quote_text or '—')}</td>"
+            f"<td>{escape(scenario.description or 'Нет описания')}</td>"
+            "</tr>"
+        )
+    unmatched_block = ""
+    if unmatched_rows:
+        unmatched_block = "\n".join(
+            [
+                '<h3 class="checks-subtitle">Не сработали</h3>',
+                '<div class="table-wrap checks-table-wrap">',
+                '<table class="status-table status-table--checks">',
+                '<colgroup><col style="width:18%"><col style="width:12%"><col style="width:16%"><col style="width:16%"><col style="width:18%"><col style="width:20%"></colgroup>',
+                '<thead class="status-table-head"><tr><th>Сценарий</th><th>ID</th><th>Источник</th><th>Разделы</th><th>Цитаты</th><th>Описание</th></tr></thead>',
+                f"<tbody>{''.join(unmatched_rows)}</tbody>",
+                "</table>",
+                "</div>",
+            ]
+        )
+    return "\n".join(
+        [
+            '<details class="collapsible collapsible--checks">',
+            "<summary>",
+            "<span>",
+            "<strong>Сценарии из протокола взаимодействия</strong>",
+            f"<em>Активных сценариев: {len(scenarios)}. Сработало: {len(matched_ids)}.</em>",
             "</span>",
             "</summary>",
             '<div class="collapsible-body">',
@@ -654,6 +775,39 @@ def _check_result_payload(result: CheckResult) -> dict[str, object]:
     }
 
 
+def _check_case_payload(check: CheckCase) -> dict[str, object]:
+    return {
+        "check_id": check.check_id,
+        "title": check.title,
+        "description": check.description,
+        "severity": check.severity,
+        "enabled": check.enabled,
+        "version": check.version,
+        "condition_type": check.condition_type,
+        "condition_value": check.condition_value,
+    }
+
+
+def _protocol_scenario_result_payload(result) -> dict[str, object]:
+    return {
+        "scenario_id": result.scenario_id,
+        "title": result.title,
+        "status": result.status,
+        "source_document": result.source_document,
+        "source_section": result.source_section,
+        "source_sections": result.source_sections,
+        "source_quote": result.source_quote,
+        "source_quotes": result.source_quotes,
+        "source_file": result.source_file,
+        "line_number": result.line_number,
+        "timestamp": result.timestamp.isoformat(sep=" ") if result.timestamp else "",
+        "evidence": result.evidence,
+        "raw_line": result.raw_line,
+        "matched_event_type": result.matched_event_type,
+        "matched_code": result.matched_code if result.matched_code is not None else "",
+    }
+
+
 def _archive_records(input_files: list[str]) -> list[dict[str, object]]:
     records = []
     for name in sorted({str(file_name) for file_name in input_files if file_name}):
@@ -681,6 +835,7 @@ def _report_data(
     reader_firmware_records: list[dict[str, object]],
     bm_date_records: list[dict[str, object]],
     validator_sections: list[dict[str, object]],
+    protocol_results: list[object],
 ) -> dict[str, object]:
     event_rows = []
     for event in events:
@@ -711,6 +866,7 @@ def _report_data(
             "dates": bm_date_records,
         },
         "validators": validator_sections,
+        "protocol_scenarios": [_protocol_scenario_result_payload(item) for item in protocol_results],
         "events": event_rows,
     }
 
@@ -792,7 +948,7 @@ def _bm_status_section(
                 f'data-payload="{escape(json.dumps(data, ensure_ascii=False))}" tabindex="0"'
             )
         rows.append(
-            f'<tr class="{" ".join(classes)}"{data_attrs}>'
+            f'<tr class="{" ".join(classes)}" data-count="{count}"{data_attrs}>'
             f"<td>{escape(status)}</td>"
             f"<td>{count}</td>"
             f"<td>{percent:.2f}%</td>"
@@ -806,8 +962,16 @@ def _bm_status_section(
         "</tr>"
     )
     table = (
+        '<div class="bm-status-controls">'
+        '<label class="bm-status-zero-toggle">'
+        '<input type="checkbox" id="bm-status-hide-zero">'
+        '<span class="bm-status-zero-toggle__switch" aria-hidden="true"><span class="bm-status-zero-toggle__thumb"></span></span>'
+        '<span class="bm-status-zero-toggle__text">Скрыть строки с нулём</span>'
+        '</label>'
+        '</div>'
         '<div class="table-wrap bm-table-wrap">'
-        '<table class="status-table">'
+        '<table class="status-table status-table--bm">'
+        '<colgroup><col style="width:68%"><col style="width:16%"><col style="width:16%"></colgroup>'
         '<thead class="status-table-head"><tr><th>Статус</th><th>Кол-во</th><th>%</th></tr></thead>'
         f"<tbody>{''.join(rows)}</tbody>"
         "</table>"
@@ -903,6 +1067,7 @@ def _bm_status_groups(events: list[PaymentEvent]) -> list[dict[str, object]]:
                 "Отказ, коллизия",
             ],
         ),
+        ("NON_EMV_CARD", ["NON_EMV_CARD"]),
         ("Отказ, истек таймаут", ["Отказ, истек таймаут"]),
         (
             "Отказы",
@@ -933,6 +1098,7 @@ def _bm_group_payloads(events: list[PaymentEvent], archive_names: set[str]) -> d
     summary = {
         "Успех": {"Успешный онлайн (БЕЗ МИР)", "Успешный онлайн МИР", "Успешный оффлайн"},
         "Ошибки": {"Отказ, ошибка чтения карты", "Отказ, нет карты в поле", "Отказ, ошибка ODA/CDA", "Отказ, коллизия"},
+        "NON_EMV_CARD": {"NON_EMV_CARD"},
         "Отказ, истек таймаут": {"Отказ, истек таймаут"},
         "Отказы": {"Проход зафейлен (онлайн - не получили конфирм и зарегали как фейл)", "Отказ, повторное предъявление", "Отказ, карта в стоп листе", "Отказ, QR-код недействителен", "Отказ, операция отклонена"},
         "Не классифицировано": {UNCLASSIFIED_STATUS},
@@ -1001,6 +1167,8 @@ def _bm_status_decision_terms(event: PaymentEvent) -> list[str]:
     elif code in {14, 255}:
         if "операция отклонена" in lowered:
             terms.append("Операция отклонена")
+    if "non_emv_card" in lowered:
+        terms.append("NON_EMV_CARD")
     if "oda" in lowered:
         terms.append("ODA")
     if "cda" in lowered:
@@ -1637,6 +1805,7 @@ def _script() -> str:
   const logFilesRoot = document.getElementById('log-files-root');
   const otherFilesRoot = document.getElementById('other-files-root');
   const bmStatusTableRoot = document.getElementById('bm-status-table-root');
+  const bmStatusZeroToggleKey = 'bm-status-hide-zero';
   const bmGroupedTableRoot = document.getElementById('bm-grouped-table-root');
   const bmDateChartRoot = document.getElementById('bm-date-chart-root');
   const bmUnclassifiedRoot = document.getElementById('bm-unclassified-root');
@@ -1653,6 +1822,7 @@ def _script() -> str:
     'Отказ, карта в стоп листе',
     'Отказ, коллизия',
     'Отказ, ошибка ODA/CDA',
+    'NON_EMV_CARD',
     'Отказ, QR-код недействителен',
     'Отказ, операция отклонена',
     'Отказ, истек таймаут',
@@ -1868,6 +2038,8 @@ def _script() -> str:
       const count = Number(item.count || 0);
       const evidence = item.evidence || [];
       const evidencePayload = escapeHtml(JSON.stringify(evidence));
+      const evidenceTerms = [String(titleValue), ...((item.markers || []).map((value) => String(value)))].filter(Boolean);
+      const evidenceTermsPayload = escapeHtml(JSON.stringify([...new Set(evidenceTerms)]));
       const archiveRows = (item.archives || []).map((archive) => {
         return `<li>${escapeHtml(String(archive.archive || ''))} · ${escapeHtml(String(archive.count || 0))}</li>`;
       }).join('');
@@ -1875,13 +2047,12 @@ def _script() -> str:
         ? `<ul class="modal-files">${item.markers.map((value) => `<li>${escapeHtml(String(value))}</li>`).join('')}</ul>`
         : '';
       return `
-        <div class="modal-item">
+        <div class="modal-item modal-item--clickable" role="button" tabindex="0" data-evidence-label="${escapeHtml(String(titleValue))}" data-evidence="${evidencePayload}" data-evidence-terms="${evidenceTermsPayload}">
           <div class="modal-item-head">
-            <button type="button" class="modal-value-link" data-evidence-label="${escapeHtml(String(titleValue))}" data-evidence="${evidencePayload}">
-              ${escapeHtml(String(titleValue))}
-            </button>
+            <strong class="modal-item-value">${escapeHtml(String(titleValue))}</strong>
             <span>${escapeHtml(String(count))} событий</span>
           </div>
+          <div class="modal-item-tip">Откройте, чтобы увидеть сниппеты логов и признак, по которому значение попало в карточку.</div>
           ${normalizedKind === 'carriers' && markerRows ? markerRows : ''}
           ${archiveRows ? `<ul class="modal-files">${archiveRows}</ul>` : '<p class="muted">Нет данных по архивам</p>'}
         </div>`;
@@ -1894,19 +2065,20 @@ def _script() -> str:
       ${rendered}`;
   }
 
-  function renderEvidenceDetails(label, evidence) {
+  function renderEvidenceDetails(label, evidence, terms = []) {
     if (!evidence || !evidence.length) {
       return `
         <button type="button" class="modal-back" data-action="back-to-meta">Назад</button>
         <p class="muted">Строки-источники для этого значения не сохранены.</p>`;
     }
+    const highlightTerms = [...new Set([String(label), ...(terms || []).map((term) => String(term || '').trim()).filter(Boolean)])];
     const rows = evidence.map((line) => `
       <li>
         <div class="modal-line-head">
           <span>${escapeHtml(String(line.source_file || line.archive || ''))}</span>
           <em>${escapeHtml(String(line.line_number || ''))}${line.timestamp ? ` · ${escapeHtml(String(line.timestamp))}` : ''}</em>
         </div>
-        <code>${highlightLine(String(line.raw_line || ''), [label])}</code>
+        <code>${highlightLine(String(line.raw_line || ''), highlightTerms)}</code>
       </li>`).join('');
     return `
       <button type="button" class="modal-back" data-action="back-to-meta">Назад</button>
@@ -2211,6 +2383,7 @@ def _script() -> str:
     if (bmUnclassifiedRoot) {
       bmUnclassifiedRoot.innerHTML = renderUnclassified(events);
     }
+    syncStatusZeroRows();
   }
 
   function renderStatusTable(events) {
@@ -2219,8 +2392,16 @@ def _script() -> str:
     const rows = statusOrder.map((status) => renderStatusRow(status, counts.get(status) || 0, total, events)).join('');
     const unclassified = counts.get('Не классифицировано') || 0;
     return `
+      <div class="bm-status-controls">
+        <label class="bm-status-zero-toggle">
+          <input type="checkbox" id="bm-status-hide-zero"${loadStatusZeroPreference() ? ' checked' : ''}>
+          <span class="bm-status-zero-toggle__switch" aria-hidden="true"><span class="bm-status-zero-toggle__thumb"></span></span>
+          <span class="bm-status-zero-toggle__text">Скрыть строки с нулём</span>
+        </label>
+      </div>
       <div class="table-wrap bm-table-wrap">
-        <table class="status-table">
+        <table class="status-table status-table--bm">
+          <colgroup><col style="width:68%"><col style="width:16%"><col style="width:16%"></colgroup>
           <thead class="status-table-head"><tr><th>Статус</th><th>Кол-во</th><th>%</th></tr></thead>
           <tbody>
             ${rows}
@@ -2242,7 +2423,7 @@ def _script() -> str:
     }
     const payload = JSON.stringify(events.filter((event) => event.status === status));
     return `
-      <tr class="${classes.join(' ')}"${count > 0 ? ` data-kind="status" data-status="${escapeHtml(status)}" data-payload="${escapeHtml(payload)}" tabindex="0"` : ''}>
+      <tr class="${classes.join(' ')}" data-count="${count}"${count > 0 ? ` data-kind="status" data-status="${escapeHtml(status)}" data-payload="${escapeHtml(payload)}" tabindex="0"` : ''}>
         <td>${escapeHtml(status)}</td>
         <td>${count}</td>
         <td>${percent.toFixed(2)}%</td>
@@ -2302,13 +2483,15 @@ def _script() -> str:
   }
 
   function groupByStatusGroup(events) {
-    const result = { success: 0, errors: 0, declines: 0, unclassified: 0 };
+    const result = { success: 0, errors: 0, non_emv: 0, declines: 0, unclassified: 0 };
     events.forEach((event) => {
       const group = groupLabel(event.status);
       if (group === 'Успех') {
         result.success += 1;
       } else if (group === 'Ошибки') {
         result.errors += 1;
+      } else if (group === 'NON_EMV_CARD') {
+        result.non_emv += 1;
       } else if (group === 'Отказы') {
         result.declines += 1;
       } else {
@@ -2324,6 +2507,9 @@ def _script() -> str:
     }
     if (status === 'Отказ, истек таймаут') {
       return 'Отказ, истек таймаут';
+    }
+    if (status === 'NON_EMV_CARD') {
+      return 'NON_EMV_CARD';
     }
     if (errorStatuses.has(status)) {
       return 'Ошибки';
@@ -2348,11 +2534,12 @@ def _script() -> str:
     const padBottom = 56;
     const plotWidth = width - padLeft - padRight;
     const plotHeight = height - padTop - padBottom;
-    const maxValue = Math.max(1, ...dates.map((date) => Math.max(byDate[date].success, byDate[date].errors, byDate[date].declines)));
+    const maxValue = Math.max(1, ...dates.map((date) => Math.max(byDate[date].success, byDate[date].errors, byDate[date].non_emv, byDate[date].declines)));
     const xStep = plotWidth / Math.max(dates.length - 1, 1);
     const seriesSpecs = [
       ['Успех', '#137752', 'success'],
       ['Ошибки', '#d14343', 'errors'],
+      ['NON_EMV_CARD', '#7c3aed', 'non_emv'],
       ['Отказы', '#a15c06', 'declines']
     ];
     const paths = [];
@@ -2398,6 +2585,7 @@ def _script() -> str:
         <div class="chart-legend">
           <span><i style="background:#137752"></i>Успех</span>
           <span><i style="background:#d14343"></i>Ошибки</span>
+          <span><i style="background:#7c3aed"></i>NON_EMV_CARD</span>
           <span><i style="background:#a15c06"></i>Отказы</span>
         </div>
       </div>`;
@@ -2414,18 +2602,61 @@ def _script() -> str:
       }
       const date = String(event.timestamp).slice(0, 10);
       if (!grouped[date]) {
-        grouped[date] = { success: 0, errors: 0, declines: 0 };
+        grouped[date] = { success: 0, errors: 0, non_emv: 0, declines: 0 };
       }
       const group = groupLabel(event.status);
       if (group === 'Успех') {
         grouped[date].success += 1;
       } else if (group === 'Ошибки') {
         grouped[date].errors += 1;
+      } else if (group === 'NON_EMV_CARD') {
+        grouped[date].non_emv += 1;
       } else if (group === 'Отказы') {
         grouped[date].declines += 1;
       }
     });
     return grouped;
+  }
+
+  function syncStatusZeroRows() {
+    if (!bmStatusTableRoot) {
+      return;
+    }
+    const checkbox = bmStatusTableRoot.querySelector('#bm-status-hide-zero');
+    const rows = bmStatusTableRoot.querySelectorAll('tbody tr[data-count]');
+    if (!checkbox) {
+      return;
+    }
+    const apply = () => {
+      const hideZero = checkbox.checked;
+      saveStatusZeroPreference(hideZero);
+      rows.forEach((row) => {
+        const count = Number(row.dataset.count || 0);
+        const isTotal = row.classList.contains('status-row--total');
+        row.hidden = hideZero && !isTotal && count === 0;
+      });
+    };
+    if (!checkbox.dataset.bound) {
+      checkbox.addEventListener('change', apply);
+      checkbox.dataset.bound = 'true';
+    }
+    apply();
+  }
+
+  function loadStatusZeroPreference() {
+    try {
+      return window.localStorage.getItem(bmStatusZeroToggleKey) === '1';
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function saveStatusZeroPreference(value) {
+    try {
+      window.localStorage.setItem(bmStatusZeroToggleKey, value ? '1' : '0');
+    } catch (error) {
+      return;
+    }
   }
 
   function renderUnclassified(events) {
@@ -2537,6 +2768,17 @@ def _script() -> str:
     if (event.key !== 'Enter' && event.key !== ' ') {
       return;
     }
+    const evidenceButton = event.target.closest('[data-evidence]');
+    if (evidenceButton) {
+      event.preventDefault();
+      const label = evidenceButton.dataset.evidenceLabel || 'Данные';
+      const evidence = JSON.parse(evidenceButton.dataset.evidence || '[]');
+      const terms = JSON.parse(evidenceButton.dataset.evidenceTerms || '[]');
+      title.textContent = label;
+      subtitle.textContent = 'Строки лога, из которых получено значение';
+      body.innerHTML = renderEvidenceDetails(label, evidence, terms);
+      return;
+    }
     const interactive = event.target.closest('[data-kind]');
     if (!interactive || interactive.closest('[data-filter-group]')) {
       return;
@@ -2551,9 +2793,10 @@ def _script() -> str:
       event.stopPropagation();
       const label = evidenceButton.dataset.evidenceLabel || 'Данные';
       const evidence = JSON.parse(evidenceButton.dataset.evidence || '[]');
+      const terms = JSON.parse(evidenceButton.dataset.evidenceTerms || '[]');
       title.textContent = label;
       subtitle.textContent = 'Строки лога, из которых получено значение';
-      body.innerHTML = renderEvidenceDetails(label, evidence);
+      body.innerHTML = renderEvidenceDetails(label, evidence, terms);
       return;
     }
     const backToMeta = event.target.closest('[data-action="back-to-meta"]');
@@ -2718,6 +2961,62 @@ h1, h2, p { margin: 0; }
 .bar-chart--empty { padding: 4px 0; }
 .section--bm .section-title { margin-bottom: 8px; }
 .section--bm .section-title h2 { font-size: 17px; line-height: 1.2; }
+.bm-status-controls { display: flex; justify-content: flex-end; margin: 6px 0 10px; }
+.bm-table-wrap .status-table--bm { table-layout: fixed; }
+.bm-table-wrap .status-table--bm th:nth-child(1),
+.bm-table-wrap .status-table--bm td:nth-child(1) { overflow-wrap: anywhere; }
+.bm-table-wrap .status-table--bm th:nth-child(2),
+.bm-table-wrap .status-table--bm td:nth-child(2),
+.bm-table-wrap .status-table--bm th:nth-child(3),
+.bm-table-wrap .status-table--bm td:nth-child(3) { white-space: nowrap; width: 1%; }
+.bm-status-zero-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  user-select: none;
+  cursor: pointer;
+}
+.bm-status-zero-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.bm-status-zero-toggle__switch {
+  position: relative;
+  width: 46px;
+  height: 28px;
+  border-radius: 999px;
+  background: #d7dde5;
+  border: 1px solid rgba(24, 33, 47, 0.12);
+  box-shadow: inset 0 1px 2px rgba(24, 33, 47, 0.08);
+  transition: background 160ms ease, border-color 160ms ease;
+  flex: 0 0 auto;
+}
+.bm-status-zero-toggle__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(24, 33, 47, 0.25);
+  transition: transform 160ms ease;
+}
+.bm-status-zero-toggle input:checked + .bm-status-zero-toggle__switch {
+  background: #2cc36b;
+  border-color: #2aa95d;
+}
+.bm-status-zero-toggle input:checked + .bm-status-zero-toggle__switch .bm-status-zero-toggle__thumb {
+  transform: translateX(18px);
+}
+.bm-status-zero-toggle input:focus-visible + .bm-status-zero-toggle__switch {
+  outline: 2px solid rgba(36, 87, 166, 0.35);
+  outline-offset: 2px;
+}
+.bm-status-zero-toggle__text { line-height: 1.3; }
 .status-table { width: 100%; border-collapse: collapse; background: var(--panel); }
 .status-table-head th { background: #e8f1e8; border-bottom: 1px solid #c9ddc9; font-weight: 700; color: #274027; }
 .status-row td, .status-table th { padding: 9px 10px; border-bottom: 1px solid #e8edf2; text-align: left; vertical-align: top; }
@@ -2729,6 +3028,13 @@ h1, h2, p { margin: 0; }
 .status-row--suspicious td { background: #fffaf0; }
 .suspicious-table-wrap { max-height: 560px; }
 .status-table--checks code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.status-table--checks { table-layout: fixed; }
+.status-table--checks th, .status-table--checks td { padding: 8px 9px; }
+.status-table--checks td:nth-child(5), .status-table--checks th:nth-child(5) { white-space: pre-wrap; overflow-wrap: anywhere; }
+.status-row--check-critical td { color: #b42318; }
+.status-row--check-warning td { color: #9a6700; }
+.status-row--check-info td { color: #111827; }
+.status-row--check td code { color: inherit; }
 .status-row--check td { background: #f8fbff; }
 .status-row--check-muted td { background: #fbfcfe; color: #4f5d6b; }
 .checks-subtitle { margin: 16px 0 8px; font-size: 14px; line-height: 1.3; }
@@ -2770,10 +3076,14 @@ h1, h2, p { margin: 0; }
 .modal-close { width: 34px; height: 34px; border: 0; background: var(--soft); color: var(--text); border-radius: 999px; cursor: pointer; font-size: 22px; line-height: 1; }
 .modal-body { padding: 16px 18px 18px; display: grid; gap: 12px; }
 .modal-item { border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: var(--soft); }
+.modal-item--clickable { cursor: pointer; transition: background-color .16s ease, border-color .16s ease, box-shadow .16s ease, transform .16s ease; outline: none; }
+.modal-item--clickable:hover { background: #f4f8fc; border-color: #cfd8e3; box-shadow: 0 8px 18px rgba(31, 41, 51, 0.06); transform: translateY(-1px); }
+.modal-item--clickable:active { background: #eaf2fb; border-color: #b9cbe0; box-shadow: 0 2px 8px rgba(31, 41, 51, 0.04); transform: translateY(0); }
+.modal-item--clickable:focus-visible { outline: 2px solid #9db9d6; outline-offset: 2px; }
 .modal-item-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
 .modal-item-head span { color: var(--muted); font-size: 12px; white-space: nowrap; }
-.modal-value-link { appearance: none; border: 0; background: transparent; padding: 0; color: var(--primary); font: inherit; font-weight: 700; cursor: pointer; text-align: left; }
-.modal-value-link:hover { text-decoration: underline; }
+.modal-item-value { color: var(--primary); font: inherit; font-weight: 700; }
+.modal-item-tip { margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.35; }
 .modal-back { appearance: none; border: 1px solid #cfd8e3; background: #fff; color: var(--primary); border-radius: 6px; padding: 7px 10px; font-weight: 700; cursor: pointer; margin-bottom: 12px; }
 .modal-back:hover { background: #f6f8fb; }
 .modal-files, .modal-lines { margin: 10px 0 0; padding-left: 18px; color: var(--text); max-height: 44vh; overflow: auto; }

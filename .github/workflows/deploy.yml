@@ -65,11 +65,14 @@ jobs:
             sudo cp nginx/staging.conf /etc/nginx/sites-available/bm-log-analyzer-stage
             sudo ln -sfn /etc/nginx/sites-available/bm-log-analyzer-stage /etc/nginx/sites-enabled/bm-log-analyzer-stage
             sudo nginx -t && sudo systemctl reload nginx
+            expected_version=$(python3 -c "from core.version import format_version; print(format_version())")
             for i in 1 2 3 4 5; do
-              if curl --fail --silent --show-error http://127.0.0.1:8010/health; then
+              health=$(curl --fail --silent --show-error http://127.0.0.1:8010/health)
+              if printf '%s' "$health" | grep -q "\"version\":\"$expected_version\""; then
                 break
               fi
               if [ "$i" = "5" ]; then
+                echo "Unexpected health payload: $health"
                 exit 1
               fi
               sleep 2
@@ -116,11 +119,14 @@ jobs:
             sudo cp nginx/prod.conf /etc/nginx/sites-available/bm-log-analyzer-prod
             sudo ln -sfn /etc/nginx/sites-available/bm-log-analyzer-prod /etc/nginx/sites-enabled/bm-log-analyzer-prod
             sudo nginx -t && sudo systemctl reload nginx
+            expected_version=$(python3 -c "from core.version import format_version; print(format_version())")
             for i in 1 2 3 4 5; do
-              if curl --fail --silent --show-error http://127.0.0.1:8011/health; then
+              health=$(curl --fail --silent --show-error http://127.0.0.1:8011/health)
+              if printf '%s' "$health" | grep -q "\"version\":\"$expected_version\""; then
                 break
               fi
               if [ "$i" = "5" ]; then
+                echo "Unexpected health payload: $health"
                 exit 1
               fi
               sleep 2
