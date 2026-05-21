@@ -222,11 +222,12 @@ def test_admin_user_management_and_profile_files(tmp_path, monkeypatch):
     assert 'data-section-id="release-notes"' in admin_page.text
     assert "release-notes-item--current" in admin_page.text
     assert "Сейчас" in admin_page.text
+    assert "Сводка" in admin_page.text
     assert "release-notes-item__list" in admin_page.text
-    assert "release-notes-item--fresh" not in admin_page.text
-    assert "release-notes-item--recent" not in admin_page.text
-    assert "release-notes-item--warm" not in admin_page.text
-    assert "release-notes-item--archive" not in admin_page.text
+    assert "release-notes-item__meta" in admin_page.text
+    assert "Тип:" in admin_page.text
+    assert "Stage:" in admin_page.text
+    assert "Prod:" in admin_page.text
     assert "Обновлена версия сервиса до `1.6.16`." in admin_page.text
     assert "Перевозчики" in admin_page.text
     assert "Признаки указываются через запятую" in admin_page.text
@@ -250,6 +251,8 @@ def test_admin_user_management_and_profile_files(tmp_path, monkeypatch):
     assert 'class="release-notes-item__date"' in admin_page.text
     assert 'class="release-notes-item__label"' in admin_page.text
     assert 'class="release-notes-item__list"' in admin_page.text
+    assert 'class="release-notes-item__summary"' in admin_page.text
+    assert 'class="release-notes-item__meta"' in admin_page.text
     assert 'grid-template-columns: repeat(2, minmax(0, 1fr));' in admin_page.text
     assert 'grid-template-columns: repeat(3, minmax(0, 1fr));' in admin_page.text
     assert 'class="release-notes-item__current"' in admin_page.text

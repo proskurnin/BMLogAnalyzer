@@ -1472,6 +1472,7 @@ def _release_notes_entries() -> list[dict[str, Any]]:
         return []
     entries: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
+    collecting_changes = False
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line:
@@ -1480,13 +1481,37 @@ def _release_notes_entries() -> list[dict[str, Any]]:
             match = re.match(r"^##\s+([0-9]+\.[0-9]+\.[0-9]+)\s+-\s+(.+)$", line)
             if not match:
                 continue
-            current = {"version": match.group(1), "date": match.group(2), "changes": []}
+            current = {
+                "version": match.group(1),
+                "date": match.group(2),
+                "summary": "",
+                "stage": "",
+                "prod": "",
+                "version_bump": "",
+                "changes": [],
+            }
             entries.append(current)
+            collecting_changes = False
             continue
         if current is None:
             continue
         if line.startswith("- "):
-            current.setdefault("changes", []).append(line[2:].strip())
+            entry = line[2:].strip()
+            key_match = re.match(r"^([a-z_]+):\s*(.*)$", entry, re.IGNORECASE)
+            if key_match:
+                key = key_match.group(1).lower()
+                value = key_match.group(2).strip()
+                if key in {"summary", "stage", "prod", "version_bump"}:
+                    current[key] = value
+                    collecting_changes = False
+                    continue
+                if key == "changes":
+                    collecting_changes = True
+                    continue
+            if collecting_changes:
+                current.setdefault("changes", []).append(entry)
+            else:
+                current.setdefault("changes", []).append(entry)
     return entries
 
 
@@ -1500,6 +1525,10 @@ def _release_notes_html() -> str:
         if not changes:
             fallback = RELEASE_NOTE_SUMMARIES.get(entry["version"], "Краткое описание изменений отсутствует.")
             changes = [fallback]
+        summary = entry.get("summary") or (changes[0] if changes else "Краткое описание изменений отсутствует.")
+        stage = entry.get("stage") or "не указано"
+        prod = entry.get("prod") or "не указано"
+        version_bump = entry.get("version_bump") or "не указано"
         item_class = "release-notes-item"
         if index == 0:
             item_class += " release-notes-item--current"
@@ -1513,6 +1542,13 @@ def _release_notes_html() -> str:
               </summary>
               <div class="release-notes-item__body">
                 <div class="release-notes-item__description">
+                  <span class="release-notes-item__label">Сводка</span>
+                  <p class="release-notes-item__summary">{escape(summary)}</p>
+                  <div class="release-notes-item__meta">
+                    <span class="release-notes-item__meta-item"><strong>Тип:</strong> {escape(version_bump)}</span>
+                    <span class="release-notes-item__meta-item"><strong>Stage:</strong> {escape(stage)}</span>
+                    <span class="release-notes-item__meta-item"><strong>Prod:</strong> {escape(prod)}</span>
+                  </div>
                   <span class="release-notes-item__label">Изменения</span>
                   <ul class="release-notes-item__list">
                     {''.join(f'<li>{escape(change)}</li>' for change in changes)}
@@ -2994,6 +3030,13 @@ def _uploads_html(user=None) -> str:
         width: fit-content; padding: 4px 8px; border-radius: 999px; background: var(--release-accent-soft); color: var(--release-accent);
         font-size: 11px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase;
       }
+      .release-notes-item__summary { margin: 0; color: #273246; line-height: 1.55; }
+      .release-notes-item__meta { display: flex; flex-wrap: wrap; gap: 8px; }
+      .release-notes-item__meta-item {
+        display: inline-flex; align-items: center; gap: 4px; padding: 5px 8px; border-radius: 999px; background: #f8fbff; border: 1px solid #e4ecf7;
+        color: #334155; font-size: 12px;
+      }
+      .release-notes-item__meta-item strong { color: var(--release-accent); }
       .release-notes-item__list { margin: 0; padding-left: 18px; color: #273246; line-height: 1.55; }
       .release-notes-item__list li + li { margin-top: 4px; }
       .release-notes-item--fresh { --release-accent: #2457a6; --release-accent-soft: rgba(36, 87, 166, 0.10); --release-accent-strong: rgba(36, 87, 166, 0.26); }
