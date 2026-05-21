@@ -48,6 +48,13 @@ python3 tools/bump_version.py minor
 python3 tools/bump_version.py major
 ```
 
+Use the release note helper to prepend a structured `CHANGELOG.md` entry for the next release:
+
+```bash
+python3 tools/release_notes.py patch
+python3 tools/release_notes.py minor --summary "..." --stage "..." --prod "..."
+```
+
 ## Web
 
 The project now has a web service layer in `web/` that reuses the same core analysis engine as the CLI.
