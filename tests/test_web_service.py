@@ -109,7 +109,7 @@ def test_login_page_contains_version_and_signature(tmp_path, monkeypatch):
     response = client.get("/login")
 
     assert response.status_code == 200
-    assert "версия сервиса 1.6.17" in response.text
+    assert "версия сервиса 1.6.18" in response.text
     assert 'class="brand"' in response.text
     assert "made with ♥ by Roman A. Proskurnin" in response.text
 
@@ -170,9 +170,14 @@ def test_admin_and_user_navigation_by_role(tmp_path, monkeypatch):
     user_home = client.get("/")
     assert user_home.status_code == 200
     assert "Загрузить логи в хранилище" in user_home.text
-    assert "История загрузок" not in user_home.text
+    assert "История загрузок" in user_home.text
     assert "Администрирование" not in user_home.text
     assert "Профиль (User)" in user_home.text
+
+    user_uploads = client.get("/uploads")
+    assert user_uploads.status_code == 200
+    assert "Загрузки" in user_uploads.text
+    assert "Администрирование" not in user_uploads.text
 
     forbidden = client.get("/admin")
     assert forbidden.status_code == 403
@@ -430,7 +435,7 @@ def test_web_index_contains_upload_landing():
     html = _index_html()
 
     assert "BM Log Analyzer" in html
-    assert "версия сервиса 1.6.17" in html
+    assert "версия сервиса 1.6.18" in html
     assert "picker_menu" not in html
     assert "Выбрать файлы</button>" not in html
     assert "Выбрать папку</button>" not in html
@@ -468,7 +473,7 @@ def test_uploads_page_contains_table_and_actions():
     assert response.status_code == 200
     html = response.text
     assert "Загрузки" in html
-    assert "<strong>BM Log Analyzer</strong><span>версия сервиса 1.6.17</span>" in html
+    assert "<strong>BM Log Analyzer</strong><span>версия сервиса 1.6.18</span>" in html
     assert "BM Log Analyzer ·" not in html
     assert "Сформировать отчёт по выбранным" in html
     assert "Дата загрузки (Мск)" in html
@@ -533,6 +538,71 @@ def test_uploads_api_is_paginated(tmp_path, monkeypatch):
     assert second_payload["total_pages"] == 2
     assert len(second_payload["items"]) == 1
     assert first_payload["items"][0]["upload_id"] != second_payload["items"][0]["upload_id"]
+
+
+def test_user_upload_history_is_owner_scoped(tmp_path, monkeypatch):
+    history_root = tmp_path / "history"
+    upload_root = tmp_path / "uploads"
+    auth_root = tmp_path / "auth"
+    monkeypatch.setattr("web.history._history_root", _mock_history_root(history_root))
+    monkeypatch.setattr("web.uploads._upload_root", _mock_upload_root(upload_root))
+    monkeypatch.setattr("web.auth._auth_root", _mock_auth_root(auth_root))
+
+    client = TestClient(create_app())
+    _login(client)
+    _create_user(client, name="Alice", email="alice@example.com", password="secret", role="user")
+    _create_user(client, name="Bob", email="bob@example.com", password="secret", role="user")
+
+    client.get("/logout")
+    _login_as(client, "alice@example.com", "secret")
+    alice_store = client.post(
+        "/api/uploads/store",
+        files=[(
+            "files",
+            (
+                "alice.log",
+                b"2026-04-29 20:50:41.343 PaymentStart, resp: {Code:0 Message:OK} duration=412 ms p: mgt_nbs-oti-4.4.12\n",
+                "text/plain",
+            ),
+        )],
+    )
+    assert alice_store.status_code == 200
+    alice_id = alice_store.json()["items"][0]["upload_id"]
+    alice_page = client.get("/uploads")
+    assert alice_page.status_code == 200
+    alice_uploads = client.get("/api/uploads?page=1&page_size=25").json()
+    assert alice_uploads["total"] == 1
+    assert alice_uploads["items"][0]["upload_id"] == alice_id
+    assert alice_uploads["items"][0]["owner_email"] == "alice@example.com"
+    assert alice_uploads["items"][0]["original_name"] == "alice.log"
+
+    client.get("/logout")
+    _login_as(client, "bob@example.com", "secret")
+    bob_store = client.post(
+        "/api/uploads/store",
+        files=[(
+            "files",
+            (
+                "bob.log",
+                b"2026-04-29 20:51:41.343 PaymentStart, resp: {Code:3 Message:Error} duration=512 ms p: mgt_nbs-tt-4.4.12\n",
+                "text/plain",
+            ),
+        )],
+    )
+    assert bob_store.status_code == 200
+    bob_id = bob_store.json()["items"][0]["upload_id"]
+    bob_uploads = client.get("/api/uploads?page=1&page_size=25").json()
+    assert bob_uploads["total"] == 1
+    assert bob_uploads["items"][0]["upload_id"] == bob_id
+    assert bob_uploads["items"][0]["owner_email"] == "bob@example.com"
+    assert bob_uploads["items"][0]["original_name"] == "bob.log"
+
+    client.get("/logout")
+    _login(client)
+    admin_uploads = client.get("/api/uploads?page=1&page_size=25").json()
+    assert admin_uploads["total"] == 2
+    assert {item["upload_id"] for item in admin_uploads["items"]} == {alice_id, bob_id}
+    assert {item["owner_email"] for item in admin_uploads["items"]} == {"alice@example.com", "bob@example.com"}
 
 
 def test_web_history_roundtrip(tmp_path):

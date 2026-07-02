@@ -1280,7 +1280,7 @@ def _client_ip(request: Any) -> str:
 
 
 def _is_admin_path(path: str) -> bool:
-    return path == "/uploads" or path.startswith("/admin") or path == "/api/uploads/report"
+    return path.startswith("/admin")
 
 
 def _profile_link(user) -> str:
@@ -1288,14 +1288,9 @@ def _profile_link(user) -> str:
 
 
 def _topbar_links(user) -> str:
-    items = [("/", "Загрузка файлов")]
+    items = [("/", "Загрузка файлов"), ("/uploads", "История загрузок")]
     if user.role == "admin":
-        items.extend(
-            [
-                ("/uploads", "История загрузок"),
-                ("/admin", "Администрирование"),
-            ]
-        )
+        items.append(("/admin", "Администрирование"))
     return _join_nav_items(
         [f'<a class="nav-link" href="{href}" data-path="{href}">{escape(label)}</a>' for href, label in items]
     )
