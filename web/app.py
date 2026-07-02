@@ -1611,7 +1611,7 @@ def _admin_html(
         created_at_label = _format_moscow_datetime(item.created_at)
         rows.append(
             f"""
-            <tr data-sort-name="{escape(item.name.lower())}" data-sort-email="{escape(item.email.lower())}" data-sort-created-at="{escape(item.created_at)}">
+            <tr data-sort-name="{escape(item.name.lower())}" data-sort-email="{escape(item.email.lower())}" data-sort-created-at="{escape(item.created_at)}" data-user-role="{escape(item.role)}">
               <td>
                 <form id="{update_form_id}" method="post" action="/admin/users/update"></form>
                 <input form="{update_form_id}" type="hidden" name="email" value="{escape(item.email)}">
@@ -1780,6 +1780,16 @@ def _admin_html(
               </form>
               <div class="muted">По умолчанию сессия истекает после {auth_policy.session_idle_minutes} минут без активности. Любой авторизованный запрос продлевает её.</div>
               <div class="table-wrap">
+                <div class="admin-table-tools">
+                  <label class="admin-table-filter">
+                    <span>Фильтр по роли</span>
+                    <select id="admin-users-role-filter" aria-label="Фильтр пользователей по роли">
+                      <option value="">Все роли</option>
+                      <option value="user">пользователь</option>
+                      <option value="admin">администратор</option>
+                    </select>
+                  </label>
+                </div>
                 <table id="admin-users-table">
                   <thead><tr><th><button type="button" class="sort-button" data-sort-key="name">Имя</button></th><th><button type="button" class="sort-button" data-sort-key="email">Email</button></th><th><button type="button" class="sort-button" data-sort-key="created_at">Дата добавления (Мск)</button></th><th>Пароль</th><th>Роль</th><th>Действия</th></tr></thead>
                   <tbody>{"".join(rows)}</tbody>
@@ -1903,6 +1913,7 @@ def _admin_html(
       (() => {{
         const sectionKey = 'bm.admin.openSections';
         const sortKey = 'bm.admin.usersSort';
+        const roleFilterKey = 'bm.admin.usersRoleFilter';
         const sections = Array.from(document.querySelectorAll('.admin-section[data-section-id]'));
 
         function readOpenSections() {{
@@ -1947,6 +1958,7 @@ def _admin_html(
         }}
         const tbody = usersTable.querySelector('tbody');
         const sortButtons = Array.from(usersTable.querySelectorAll('[data-sort-key]'));
+        const roleFilter = document.getElementById('admin-users-role-filter');
         let sortState;
         try {{
           sortState = JSON.parse(sessionStorage.getItem(sortKey) || '{{"key":"created_at","direction":"desc"}}');
@@ -1970,7 +1982,7 @@ def _admin_html(
 
         function renderSort() {{
           const direction = sortState.direction === 'asc' ? 1 : -1;
-          const rows = Array.from(tbody.querySelectorAll('tr'));
+          const rows = Array.from(tbody.querySelectorAll('tr[data-user-role]'));
           rows.sort((left, right) => {{
             const leftValue = rowValue(left, sortState.key);
             const rightValue = rowValue(right, sortState.key);
@@ -1985,6 +1997,23 @@ def _admin_html(
             button.setAttribute('aria-sort', active ? (sortState.direction === 'asc' ? 'ascending' : 'descending') : 'none');
           }});
           sessionStorage.setItem(sortKey, JSON.stringify(sortState));
+          applyRoleFilter();
+        }}
+
+        function applyRoleFilter() {{
+          const selectedRole = roleFilter ? roleFilter.value : '';
+          tbody.querySelectorAll('tr[data-user-role]').forEach((row) => {{
+            row.hidden = Boolean(selectedRole) && row.dataset.userRole !== selectedRole;
+          }});
+          if (roleFilter) {{
+            sessionStorage.setItem(roleFilterKey, selectedRole);
+            roleFilter.dataset.active = selectedRole ? 'true' : 'false';
+          }}
+        }}
+
+        if (roleFilter) {{
+          roleFilter.value = sessionStorage.getItem(roleFilterKey) || '';
+          roleFilter.addEventListener('change', applyRoleFilter);
         }}
 
         sortButtons.forEach((button) => {{
@@ -2097,6 +2126,10 @@ def _shared_page_css() -> str:
       .check-toggle { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
       button { border:0; border-radius:10px; padding:10px 14px; background:var(--blue); color:#fff; font:inherit; font-weight:700; cursor:pointer; }
       .danger { background:#b42318; }
+      .admin-table-tools { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:10px; margin-bottom:10px; }
+      .admin-table-filter { display:inline-flex; align-items:center; gap:8px; color:var(--muted); font-size:13px; }
+      .admin-table-filter select { min-width:180px; padding:8px 10px; }
+      .admin-table-filter select[data-active="true"] { border-color:var(--blue); color:var(--text); background:#f8fbff; }
       .table-wrap { overflow:auto; border:1px solid var(--line); border-radius:14px; }
       table { width:100%; border-collapse:collapse; background:#fff; }
       th, td { padding:8px 10px; border-bottom:1px solid #e8edf2; text-align:left; vertical-align:middle; }

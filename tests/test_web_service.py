@@ -307,6 +307,12 @@ def test_auth_journal_is_collapsed_and_paginated(tmp_path, monkeypatch):
     assert 'data-sort-key="created_at"' in admin_page.text
     assert "bm.admin.openSections" in admin_page.text
     assert "bm.admin.usersSort" in admin_page.text
+    assert "bm.admin.usersRoleFilter" in admin_page.text
+    assert 'id="admin-users-role-filter"' in admin_page.text
+    assert 'aria-label="Фильтр пользователей по роли"' in admin_page.text
+    assert 'value="user">пользователь' in admin_page.text
+    assert 'value="admin">администратор' in admin_page.text
+    assert 'data-user-role="admin"' in admin_page.text
     assert "section.querySelectorAll('form')" in admin_page.text
     assert "01.01.1970" not in admin_page.text
     create_protocol_scenario = client.post(
