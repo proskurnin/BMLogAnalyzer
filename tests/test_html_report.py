@@ -154,6 +154,11 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert "line-highlight" in html
     assert "class=\"filter-panel\"" in html
     assert "filter-option-grid" in html
+    assert "function selectedEvents()" in html
+    assert "function eventMatchesFilters(event, exceptGroup = '')" in html
+    assert "const events = selectedEvents();" in html
+    assert "--filter-hover: #fff1a8" in html
+    assert "--filter-active-border: #0b2f6b" in html
     assert "data-meta-kind=" in html
     assert "Успех" in html
     assert "Ошибки" in html
@@ -180,6 +185,12 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert '"suspicious_lines"' in manifest
     assert '"validation_check_catalog"' in manifest
     assert '"validation_checks"' in manifest
+    report_data = json.loads(html.split('<script id="report-data" type="application/json">', 1)[1].split("</script>", 1)[0])
+    first_event = report_data["events"][0]
+    assert first_event["date"] == "2026-04-11"
+    assert first_event["version"] == "4.4.12"
+    assert first_event["carriers"] == ["НБС"]
+    assert first_event["reader"] == "ОТИ"
     ai_context = json.loads((tmp_path / "analysis_report.ai_context.json").read_text(encoding="utf-8"))
     assert ai_context["schema_version"] == "bm-log-analyzer.ai-context.v1"
     assert ai_context["summary"]["events"] == 6

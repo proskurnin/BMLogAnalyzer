@@ -838,6 +838,8 @@ def _report_data(
     protocol_results: list[object],
 ) -> dict[str, object]:
     event_rows = []
+    carrier_rules = load_carrier_rules()
+    reader_labels = {"OTI": "ОТИ", "TT": "ТТ"}
     for event in events:
         status = classify_bm_status(event)
         event_rows.append(
@@ -846,6 +848,11 @@ def _report_data(
                 "source_file": event.source_file,
                 "line_number": event.line_number,
                 "timestamp": event.timestamp.isoformat(sep=" ") if event.timestamp else "",
+                "date": event.timestamp.date().isoformat() if event.timestamp else "",
+                "version": event.bm_version or "",
+                "carriers": carrier_names_for_text(_carrier_search_text(event), carrier_rules),
+                "reader": reader_labels.get(event.reader_type or "", event.reader_type or ""),
+                "reader_firmware": event.reader_firmware or "",
                 "status": status,
                 "group": _bm_group_label(status),
                 "code": event.code if event.code is not None else "",
@@ -2122,12 +2129,11 @@ def _script() -> str:
 
   function renderFilterGroup(group) {
     const items = Array.from((metaIndex[group.name] || new Map()).values());
-    const allowed = allowedArchivesForGroup(group.name);
+    const allowedKeys = allowedKeysForGroup(group.name);
     const selected = filterState[group.name];
     const visibleItems = items.filter((item) => {
       const key = String(item[groupKey(group.name)] || '');
-      const itemArchives = archivesForItem(item);
-      return selected.has(key) || allowed === null || intersects(itemArchives, allowed);
+      return selected.has(key) || allowedKeys === null || allowedKeys.has(key);
     });
     const options = visibleItems.map((item) => renderFilterOption(group.name, group.label, item)).join('');
     return `
@@ -2146,9 +2152,8 @@ def _script() -> str:
   function renderFilterOption(groupName, groupLabel, item) {
     const key = String(item[groupKey(groupName)] || '');
     const selected = filterState[groupName].has(key);
-    const allowed = allowedArchivesForGroup(groupName);
-    const itemArchives = archivesForItem(item);
-    const visible = selected || allowed === null || intersects(itemArchives, allowed);
+    const allowedKeys = allowedKeysForGroup(groupName);
+    const visible = selected || allowedKeys === null || allowedKeys.has(key);
     if (!visible) {
       return '';
     }
@@ -2221,86 +2226,66 @@ def _script() -> str:
     syncFilterButtonState();
   }
 
-  function selectedArchives() {
-    const activeGroups = Object.entries(filterState).filter(([, bucket]) => bucket.size > 0);
-    if (!activeGroups.length) {
-      return null;
+  function selectedEvents() {
+    if (!hasActiveFilters()) {
+      return REPORT.events || [];
     }
-    let current = null;
-    activeGroups.forEach(([group, bucket]) => {
-      const union = new Set();
-      bucket.forEach((key) => {
-        const record = metaIndex[group].get(key);
-        if (!record) {
-          return;
-        }
-        (record.archives || []).forEach((archive) => {
-          if (archive && archive.archive) {
-            union.add(String(archive.archive));
-          }
-        });
-      });
-      if (current === null) {
-        current = union;
-      } else {
-        current = intersect(current, union);
-      }
-    });
-    return current || new Set();
+    return (REPORT.events || []).filter((event) => eventMatchesFilters(event));
   }
 
-  function allowedArchivesForGroup(groupName) {
-    const activeGroups = Object.entries(filterState).filter(([name, bucket]) => name !== groupName && bucket.size > 0);
-    if (!activeGroups.length) {
-      return null;
-    }
-    let current = null;
-    activeGroups.forEach(([group, bucket]) => {
-      const union = new Set();
-      bucket.forEach((key) => {
-        const record = metaIndex[group].get(key);
-        if (!record) {
-          return;
-        }
-        (record.archives || []).forEach((archive) => {
-          if (archive && archive.archive) {
-            union.add(String(archive.archive));
-          }
-        });
-      });
-      if (current === null) {
-        current = union;
-      } else {
-        current = intersect(current, union);
-      }
-    });
-    return current || new Set();
+  function hasActiveFilters() {
+    return Object.values(filterState).some((bucket) => bucket.size > 0);
   }
 
-  function archivesForItem(item) {
-    return new Set((item.archives || []).map((archive) => String(archive.archive || '')).filter(Boolean));
-  }
-
-  function intersects(left, right) {
-    if (!left.size || !right.size) {
-      return false;
-    }
-    for (const value of left) {
-      if (right.has(value)) {
+  function eventMatchesFilters(event, exceptGroup = '') {
+    return Object.entries(filterState).every(([group, bucket]) => {
+      if (group === exceptGroup || bucket.size === 0) {
         return true;
       }
-    }
-    return false;
+      return eventFilterValues(event, group).some((value) => bucket.has(value));
+    });
   }
 
-  function intersect(left, right) {
-    const result = new Set();
-    left.forEach((value) => {
-      if (right.has(value)) {
-        result.add(value);
+  function eventFilterValues(event, group) {
+    if (group === 'versions') {
+      return [String(event.version || '')];
+    }
+    if (group === 'carriers') {
+      return (event.carriers || []).map((value) => String(value || ''));
+    }
+    if (group === 'readers') {
+      return [String(event.reader || '')];
+    }
+    if (group === 'dates') {
+      return [String(event.date || String(event.timestamp || '').slice(0, 10) || '')];
+    }
+    return [];
+  }
+
+  function allowedKeysForGroup(groupName) {
+    const hasOtherFilters = Object.entries(filterState).some(([name, bucket]) => name !== groupName && bucket.size > 0);
+    if (!hasOtherFilters) {
+      return null;
+    }
+    const allowed = new Set();
+    (REPORT.events || []).forEach((event) => {
+      if (!eventMatchesFilters(event, groupName)) {
+        return;
       }
+      eventFilterValues(event, groupName).forEach((value) => {
+        if (value) {
+          allowed.add(value);
+        }
+      });
     });
-    return result;
+    return allowed;
+  }
+
+  function selectedArchives() {
+    if (!hasActiveFilters()) {
+      return null;
+    }
+    return new Set(selectedEvents().map((event) => String(event.archive || '')).filter(Boolean));
   }
 
   function renderActiveFilters() {
@@ -2369,8 +2354,7 @@ def _script() -> str:
   }
 
   function renderStatusSection() {
-    const allowed = selectedArchives();
-    const events = (REPORT.events || []).filter((event) => allowed === null || allowed.has(String(event.archive || '')));
+    const events = selectedEvents();
     if (bmStatusTableRoot) {
       bmStatusTableRoot.innerHTML = renderStatusTable(events);
     }
@@ -2878,7 +2862,7 @@ def _script() -> str:
 
 def _css() -> str:
     return """
-:root { color-scheme: light; --bg: #eef2f6; --panel: #ffffff; --line: #d9e0e7; --text: #1f2933; --muted: #667085; --soft: #f6f8fb; --blue: #2764a3; }
+:root { color-scheme: light; --bg: #eef2f6; --panel: #ffffff; --line: #d9e0e7; --text: #1f2933; --muted: #667085; --soft: #f6f8fb; --blue: #2764a3; --filter-hover: #fff1a8; --filter-hover-border: #d49a00; --filter-active-border: #0b2f6b; }
 * { box-sizing: border-box; }
 body { margin: 0; background: linear-gradient(180deg, #f6f8fb 0%, #eef2f6 100%); color: var(--text); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 main { max-width: 1120px; margin: 0 auto; padding: 28px; }
@@ -2923,29 +2907,32 @@ h1, h2, p { margin: 0; }
 .filter-group__head h3 { font-size: 14px; line-height: 1.2; margin: 0; }
 .filter-group__head p { margin-top: 4px; color: var(--muted); font-size: 12px; }
 .filter-group__clear { appearance: none; border: 1px solid var(--line); background: var(--soft); color: inherit; font: inherit; border-radius: 999px; padding: 6px 10px; cursor: pointer; white-space: nowrap; }
-.filter-group__clear:hover { background: #f2f5f8; border-color: #dbe3ea; }
+.filter-group__clear:hover { background: var(--filter-hover); border-color: var(--filter-hover-border); }
 .filter-option-grid { display: flex; flex-wrap: wrap; gap: 8px; }
 .filter-option { appearance: none; border: 1px solid var(--line); background: var(--soft); color: inherit; font: inherit; border-radius: 999px; padding: 7px 10px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
 .filter-option span { font-size: 13px; }
 .filter-option strong { color: var(--muted); font-size: 12px; }
-.filter-option:hover { background: #f2f5f8; border-color: #dbe3ea; }
-.filter-option--active { background: #dbeafe; border-color: #7fb0de; }
+.filter-option:hover { background: var(--filter-hover); border-color: var(--filter-hover-border); }
+.filter-option--active { background: #dbeafe; border-color: var(--filter-active-border); }
+.filter-option--active:hover { background: var(--filter-hover); border-color: var(--filter-active-border); }
 .filter-option:focus-visible { outline: 2px solid #9db9d6; outline-offset: 2px; }
 .active-filters { margin-top: 12px; }
 .active-filters__row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .active-filters__empty { color: var(--muted); font-size: 13px; }
 .filter-chip, .filter-clear, .modal-select { appearance: none; border: 1px solid var(--line); background: var(--soft); color: inherit; font: inherit; }
 .filter-chip { display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; border-radius: 999px; cursor: pointer; }
-.filter-chip--active { background: #e6f1ff; border-color: #a9c6e4; }
+.filter-chip--active { background: #e6f1ff; border-color: var(--filter-active-border); }
 .filter-chip span { color: var(--muted); font-size: 12px; }
 .filter-chip strong { font-size: 13px; font-weight: 600; }
 .filter-chip i { font-style: normal; color: var(--muted); }
-.filter-chip:hover, .filter-clear:hover { background: #f2f5f8; border-color: #dbe3ea; }
+.filter-chip:hover, .filter-clear:hover { background: var(--filter-hover); border-color: var(--filter-hover-border); }
+.filter-chip--active:hover { background: var(--filter-hover); border-color: var(--filter-active-border); }
 .filter-chip:focus-visible, .filter-clear:focus-visible, .modal-select:focus-visible { outline: 2px solid #9db9d6; outline-offset: 2px; }
 .filter-clear { padding: 7px 12px; border-radius: 999px; cursor: pointer; }
 .modal-select { display: block; width: 100%; text-align: left; cursor: pointer; }
-.modal-select:hover { background: #f2f5f8; border-color: #dbe3ea; }
-.modal-select--active { background: #dbeafe; border-color: #7fb0de; box-shadow: 0 0 0 1px rgba(39, 100, 163, 0.10) inset; }
+.modal-select:hover { background: var(--filter-hover); border-color: var(--filter-hover-border); }
+.modal-select--active { background: #dbeafe; border-color: var(--filter-active-border); box-shadow: 0 0 0 1px rgba(39, 100, 163, 0.10) inset; }
+.modal-select--active:hover { background: var(--filter-hover); border-color: var(--filter-active-border); }
 .modal-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
 .modal-toolbar__clear { appearance: none; border: 1px solid var(--line); background: var(--soft); color: inherit; font: inherit; border-radius: 999px; padding: 6px 10px; cursor: pointer; }
 .modal-toolbar__clear:hover { background: #f2f5f8; border-color: #dbe3ea; }
