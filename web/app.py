@@ -2126,7 +2126,7 @@ def _shared_page_css() -> str:
       .check-toggle { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
       button { border:0; border-radius:10px; padding:10px 14px; background:var(--blue); color:#fff; font:inherit; font-weight:700; cursor:pointer; }
       .danger { background:#b42318; }
-      .admin-table-tools { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:10px; margin-bottom:10px; }
+      .admin-table-tools { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:10px; margin:5px 5px 10px 0; }
       .admin-table-filter { display:inline-flex; align-items:center; gap:8px; color:var(--muted); font-size:13px; }
       .admin-table-filter select { min-width:180px; padding:8px 10px; }
       .admin-table-filter select[data-active="true"] { border-color:var(--blue); color:var(--text); background:#f8fbff; }
