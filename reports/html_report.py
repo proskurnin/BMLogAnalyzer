@@ -39,6 +39,24 @@ LOG_GROUP_SPECS: list[tuple[str, set[str]]] = [
     ("Other log-like", {"Other log-like"}),
 ]
 LOG_CATEGORIES: set[str] = {category for _, categories in LOG_GROUP_SPECS for category in categories}
+LOG_TYPE_LABELS: dict[str, str] = {
+    "bm": "БМ",
+    "stopper": "ПО стоппера",
+    "reader": "ридера",
+    "oti_reader_library": "библиотеки ридера ОТИ",
+    "validator_app": "ПО валидатора",
+    "system": "операционной системы",
+    "other": "неопределённые",
+}
+LOG_TYPE_ORDER: dict[str, int] = {
+    "bm": 0,
+    "stopper": 1,
+    "reader": 2,
+    "oti_reader_library": 3,
+    "validator_app": 4,
+    "system": 5,
+    "other": 99,
+}
 
 
 def write_html_report(
@@ -76,6 +94,36 @@ def render_html_report(
     archive_inventory = stats.archive_inventory if stats else []
     log_groups, log_total = _build_log_groups(archive_inventory)
     other_groups, other_total = _build_other_groups(archive_inventory)
+    input_source_summaries = stats.input_source_summaries if stats else []
+    bm_summary_count = _recognized_log_type_count(input_source_summaries, {"bm"}) if input_source_summaries else bm_log_count(archive_inventory)
+    reader_summary_count = (
+        _recognized_log_type_count(input_source_summaries, {"reader", "oti_reader_library"})
+        if input_source_summaries
+        else explicit_reader_log_count(archive_inventory)
+    )
+    system_summary_count = (
+        _recognized_log_type_count(input_source_summaries, {"system"})
+        if input_source_summaries
+        else explicit_system_log_count(archive_inventory)
+    )
+    recognized_log_groups, recognized_log_total = _build_recognized_log_groups(input_source_summaries)
+    visible_log_groups = recognized_log_groups if recognized_log_total else log_groups
+    visible_log_total = recognized_log_total if recognized_log_total else log_total
+    bm_summary_groups = (
+        _recognized_log_type_groups(input_source_summaries, {"bm"})
+        if input_source_summaries
+        else _build_metric_groups(archive_inventory, {"BM rotate", "BM stdout"})
+    )
+    reader_summary_groups = (
+        _recognized_log_type_groups(input_source_summaries, {"reader", "oti_reader_library"})
+        if input_source_summaries
+        else _build_metric_groups(archive_inventory, {"Reader logs"})
+    )
+    system_summary_groups = (
+        _recognized_log_type_groups(input_source_summaries, {"system"})
+        if input_source_summaries
+        else _build_metric_groups(archive_inventory, {"System logs"})
+    )
     archive_count = len(stats.input_files) if stats else 0
     bm_versions = _bm_versions(events)
     archive_names = _archive_name_set(stats.input_files if stats else [])
@@ -93,7 +141,6 @@ def render_html_report(
     bm_group_payloads = _bm_group_payloads(events, archive_names)
     validator_sections = _validator_analytics(events, archive_names)
     device_boot_reports = stats.device_boot_reports if stats else []
-    input_source_summaries = stats.input_source_summaries if stats else []
     suspicious_rows = suspicious_line_payloads(events)
     check_cases = [check for check in load_check_cases() if check.enabled]
     check_results = run_builtin_checks(events, checks=check_cases)
@@ -134,15 +181,15 @@ def render_html_report(
         other_total=other_total,
         bm_version_count=_bm_version_count(events),
         bm_version_records=bm_version_records,
-        bm_log_count=bm_log_count(archive_inventory),
-        reader_log_count=explicit_reader_log_count(archive_inventory),
-        system_log_count=explicit_system_log_count(archive_inventory),
+        bm_log_count=bm_summary_count,
+        reader_log_count=reader_summary_count,
+        system_log_count=system_summary_count,
         archive_records=_archive_records(stats.input_files if stats else []),
         log_groups=log_groups,
         other_groups=other_groups,
-        bm_groups=_build_metric_groups(archive_inventory, {"BM rotate", "BM stdout"}),
-        reader_groups=_build_metric_groups(archive_inventory, {"Reader logs"}),
-        system_groups=_build_metric_groups(archive_inventory, {"System logs"}),
+        bm_groups=bm_summary_groups,
+        reader_groups=reader_summary_groups,
+        system_groups=system_summary_groups,
     )
     show_filters = _has_filter_combinations(
         bm_version_records,
@@ -169,8 +216,8 @@ def render_html_report(
         "</header>",
         _upload_composition_section(
             input_source_summaries,
-            log_groups,
-            log_total,
+            visible_log_groups,
+            visible_log_total,
             other_groups,
             other_total,
             section_sources,
@@ -237,12 +284,23 @@ def render_html_report_manifest(
     archive_inventory = stats.archive_inventory if stats else []
     log_groups, log_total = _build_log_groups(archive_inventory)
     other_groups, other_total = _build_other_groups(archive_inventory)
+    input_source_summaries = stats.input_source_summaries if stats else []
+    bm_summary_count = _recognized_log_type_count(input_source_summaries, {"bm"}) if input_source_summaries else bm_log_count(archive_inventory)
+    reader_summary_count = (
+        _recognized_log_type_count(input_source_summaries, {"reader", "oti_reader_library"})
+        if input_source_summaries
+        else explicit_reader_log_count(archive_inventory)
+    )
+    system_summary_count = (
+        _recognized_log_type_count(input_source_summaries, {"system"})
+        if input_source_summaries
+        else explicit_system_log_count(archive_inventory)
+    )
     summary_rows = bm_status_summary_rows(events)
     grouped_rows = _bm_status_groups(events)
     archive_names = _archive_name_set(stats.input_files if stats else [])
     validator_sections = _validator_analytics(events, archive_names)
     device_boot_reports = stats.device_boot_reports if stats else []
-    input_source_summaries = stats.input_source_summaries if stats else []
     suspicious_rows = suspicious_line_payloads(events)
     check_cases = [check for check in load_check_cases() if check.enabled]
     check_results = run_builtin_checks(events, checks=check_cases)
@@ -313,9 +371,9 @@ def render_html_report_manifest(
             "archives": len(stats.input_files) if stats else 0,
             "log_files": log_total,
             "other_files": other_total,
-            "bm_logs": bm_log_count(archive_inventory),
-            "reader_logs": explicit_reader_log_count(archive_inventory),
-            "system_logs": explicit_system_log_count(archive_inventory),
+            "bm_logs": bm_summary_count,
+            "reader_logs": reader_summary_count,
+            "system_logs": system_summary_count,
             "events": result.total,
             "success": result.success_count,
             "decline": result.decline_count,
@@ -419,9 +477,11 @@ def _upload_composition_section(
         return ""
     summary_text = _upload_composition_summary_text(input_items, log_total, other_total)
     input_rows = "".join(f"<li>{escape(_input_source_summary_text(item))}</li>" for item in input_items)
-    input_parts = ['<div class="upload-composition-summary">', f"<p>{escape(summary_text)}</p>"]
+    input_parts = ['<div class="upload-composition-summary">']
     if input_rows:
         input_parts.append(f"<ul>{input_rows}</ul>")
+    elif summary_text:
+        input_parts.append(f"<p>{escape(summary_text)}</p>")
     input_parts.append("</div>")
     input_block = "".join(input_parts)
     diagnostics_block = _upload_processing_diagnostics(input_items)
@@ -432,8 +492,8 @@ def _upload_composition_section(
         log_block = "\n".join(
             [
                 '<section class="upload-composition-part">',
-                "<h3>Log-файлы</h3>",
-                f"<p class=\"muted\">Кликабельная сводка по типам логов в архивах. {escape(log_source_note)}</p>",
+                "<h3>Он содержит логи следующих типов:</h3>",
+                f"<p class=\"muted\">Кликабельная сводка по распознанным типам логов. {escape(log_source_note)}</p>",
                 f'<div id="log-files-root">{_bar_chart(log_groups, log_total)}</div>',
                 "</section>",
             ]
@@ -460,10 +520,10 @@ def _upload_composition_section(
             "</summary>",
             '<div class="collapsible-body">',
             input_block,
+            log_block,
             diagnostics_block,
             log_type_detection_block,
             section_source_block,
-            log_block,
             other_block,
             "</div>",
             "</details>",
@@ -472,16 +532,13 @@ def _upload_composition_section(
 
 
 def _upload_composition_summary_text(items: list[InputSourceSummary], log_total: int, other_total: int) -> str:
-    labels = sorted({label for item in items for label in _known_log_type_labels(item)})
-    if labels:
-        base = f"Он содержит логи следующих типов: {', '.join(labels)}."
-    elif items:
-        base = "Распознанные типы логов не найдены."
+    if items:
+        base = f"Источников загрузки: {len(items)}."
     else:
         base = "Состав загрузки рассчитан по структуре архива."
     details = []
     if log_total:
-        details.append(f"Log-файлов: {log_total}.")
+        details.append(f"Распознанных log-файлов: {log_total}.")
     if other_total:
         details.append(f"Прочих файлов: {other_total}.")
     return " ".join([base, *details])
@@ -493,15 +550,19 @@ def _upload_processing_diagnostics(items: list[InputSourceSummary]) -> str:
     rows = []
     for item in items:
         reasons = _format_skipped_reasons(item.skipped_reasons)
+        status, status_class = _processing_status(item)
+        coverage = _format_processing_coverage(item)
         rows.append(
             "<tr>"
             f"<td>{escape(Path(item.source_file).name)}</td>"
             f"<td>{escape(_input_kind_label(item.input_kind))}</td>"
+            f'<td><span class="source-status source-status--{escape(status_class)}">{escape(status)}</span></td>'
             f"<td>{item.archive_file_count}</td>"
             f"<td>{item.log_file_count}</td>"
             f"<td>{item.other_file_count}</td>"
             f"<td>{item.extracted_file_count}</td>"
             f"<td>{item.analyzed_file_count}</td>"
+            f"<td>{escape(coverage)}</td>"
             f"<td>{item.skipped_file_count}</td>"
             f"<td>{escape(reasons)}</td>"
             "</tr>"
@@ -513,8 +574,8 @@ def _upload_processing_diagnostics(items: list[InputSourceSummary]) -> str:
             '<div class="table-wrap">',
             '<table class="status-table status-table--upload-diagnostics">',
             "<thead class=\"status-table-head\"><tr>"
-            "<th>Источник</th><th>Тип</th><th>Файлов в источнике</th><th>Log-файлов</th>"
-            "<th>Прочих</th><th>Извлечено</th><th>Проанализировано</th><th>Пропущено</th><th>Причины</th>"
+            "<th>Источник</th><th>Тип</th><th>Статус</th><th>Файлов в источнике</th><th>Log-файлов</th>"
+            "<th>Прочих</th><th>Извлечено</th><th>Проанализировано</th><th>Покрытие log-файлов</th><th>Пропущено</th><th>Причины</th>"
             "</tr></thead>",
             f"<tbody>{''.join(rows)}</tbody>",
             "</table>",
@@ -544,8 +605,14 @@ def _upload_log_type_detection(items: list[InputSourceSummary]) -> str:
         return ""
     return "\n".join(
         [
-            '<section class="upload-composition-part">',
-            "<h3>Распознанные типы логов</h3>",
+            '<details class="collapsible upload-composition-part upload-composition-details">',
+            "<summary>",
+            "<span>",
+            "<strong>Распознанные типы логов</strong>",
+            "<em>Evidence по правилам классификации файлов.</em>",
+            "</span>",
+            "</summary>",
+            '<div class="collapsible-body">',
             '<div class="table-wrap">',
             '<table class="status-table status-table--log-type-detection">',
             '<colgroup><col style="width:20%"><col style="width:18%"><col style="width:10%"><col style="width:52%"></colgroup>',
@@ -553,7 +620,8 @@ def _upload_log_type_detection(items: list[InputSourceSummary]) -> str:
             f"<tbody>{''.join(rows)}</tbody>",
             "</table>",
             "</div>",
-            "</section>",
+            "</div>",
+            "</details>",
         ]
     )
 
@@ -588,8 +656,14 @@ def _section_source_matrix(section_sources: dict[str, dict[str, object]]) -> str
         return ""
     return "\n".join(
         [
-            '<section class="upload-composition-part">',
-            "<h3>Разделы отчёта и источники</h3>",
+            '<details class="collapsible upload-composition-part upload-composition-details">',
+            "<summary>",
+            "<span>",
+            "<strong>Разделы отчёта и источники</strong>",
+            "<em>Какие типы логов нужны разделам отчёта.</em>",
+            "</span>",
+            "</summary>",
+            '<div class="collapsible-body">',
             '<div class="table-wrap">',
             '<table class="status-table status-table--section-sources">',
             "<thead class=\"status-table-head\"><tr>"
@@ -598,7 +672,8 @@ def _section_source_matrix(section_sources: dict[str, dict[str, object]]) -> str
             f"<tbody>{''.join(rows)}</tbody>",
             "</table>",
             "</div>",
-            "</section>",
+            "</div>",
+            "</details>",
         ]
     )
 
@@ -634,6 +709,23 @@ def _format_skipped_reasons(reasons: dict[str, int]) -> str:
     return "; ".join(f"{label}: {count}" for label, count in sorted(reasons.items()))
 
 
+def _processing_status(item: InputSourceSummary) -> tuple[str, str]:
+    if item.log_file_count == 0 and item.analyzed_file_count == 0:
+        return "нет log-файлов", "not_required"
+    if item.log_file_count and item.analyzed_file_count >= item.log_file_count:
+        return "полностью", "available"
+    if item.analyzed_file_count:
+        return "частично", "partial"
+    return "нет анализа", "missing"
+
+
+def _format_processing_coverage(item: InputSourceSummary) -> str:
+    if item.log_file_count <= 0:
+        return "не требуется"
+    percent = item.analyzed_file_count / item.log_file_count * 100
+    return f"{item.analyzed_file_count}/{item.log_file_count} ({percent:.2f}%)"
+
+
 def _input_kind_label(input_kind: str) -> str:
     if input_kind == "archive":
         return "архив"
@@ -647,13 +739,13 @@ def _input_source_summary_text(item: InputSourceSummary) -> str:
     labels = _known_log_type_labels(item)
     if item.input_kind == "archive":
         if labels:
-            return f"Загружен архив {name}. Он содержит логи следующих типов: {', '.join(labels)}."
+            return f"Загружен архив {name}. Распознано типов логов: {len(labels)}."
         return f"Загружен архив {name}. Распознанные типы логов не найдены."
 
     if labels:
         if len(labels) == 1:
             return f"Загружен лог {labels[0]} {name}."
-        return f"Загружен файл {name}. Он содержит логи следующих типов: {', '.join(labels)}."
+        return f"Загружен файл {name}. Распознано типов логов: {len(labels)}."
     return f"Загружен файл {name}. Тип лога не определён."
 
 
@@ -777,6 +869,65 @@ def _build_log_groups(archive_inventory: list[ArchiveInventoryRow]) -> tuple[lis
             rows.append({"label": label, "count": count, "size_bytes": size_bytes, "payload": payload})
             total += count
     return rows, total
+
+
+def _build_recognized_log_groups(items: list[InputSourceSummary]) -> tuple[list[dict[str, object]], int]:
+    log_types = sorted(
+        {log_type for item in items for log_type in item.log_type_counts if log_type != "other"},
+        key=lambda value: (LOG_TYPE_ORDER.get(value, 50), value),
+    )
+    rows = [_recognized_log_type_group(items, {log_type}, label=_log_type_display_label(log_type)) for log_type in log_types]
+    rows = [row for row in rows if int(row["count"]) > 0]
+    return rows, sum(int(row["count"]) for row in rows)
+
+
+def _recognized_log_type_groups(items: list[InputSourceSummary], log_types: set[str]) -> list[dict[str, object]]:
+    row = _recognized_log_type_group(items, log_types, label=_joined_log_type_label(log_types))
+    return [row] if int(row["count"]) > 0 else []
+
+
+def _recognized_log_type_group(items: list[InputSourceSummary], log_types: set[str], *, label: str) -> dict[str, object]:
+    archives = []
+    total = 0
+    for item in items:
+        count = sum(int(item.log_type_counts.get(log_type, 0)) for log_type in log_types)
+        if count <= 0:
+            continue
+        files = []
+        for log_type in log_types:
+            files.extend(_source_files_from_evidence(item.log_type_evidence.get(log_type, [])))
+        archives.append(
+            {
+                "archive": Path(item.source_file).name,
+                "count": count,
+                "size_bytes": 0,
+                "files": sorted(set(files)),
+            }
+        )
+        total += count
+    return {"label": label, "count": total, "size_bytes": 0, "payload": archives}
+
+
+def _recognized_log_type_count(items: list[InputSourceSummary], log_types: set[str]) -> int:
+    return sum(int(item.log_type_counts.get(log_type, 0)) for item in items for log_type in log_types)
+
+
+def _source_files_from_evidence(evidence_rows: list[str]) -> list[str]:
+    files = []
+    for row in evidence_rows:
+        source_file = row.split(": ", 1)[0].strip()
+        if source_file:
+            files.append(source_file)
+    return files
+
+
+def _log_type_display_label(log_type: str) -> str:
+    return LOG_TYPE_LABELS.get(log_type, log_type)
+
+
+def _joined_log_type_label(log_types: set[str]) -> str:
+    labels = [_log_type_display_label(log_type) for log_type in sorted(log_types, key=lambda value: (LOG_TYPE_ORDER.get(value, 50), value))]
+    return ", ".join(labels)
 
 
 def _build_other_groups(archive_inventory: list[ArchiveInventoryRow]) -> tuple[list[dict[str, object]], int]:
@@ -1120,7 +1271,9 @@ def _device_boot_speed_section(reports: list[DeviceBootReport], source_note: str
             "</span>",
             "</summary>",
             '<div class="collapsible-body">',
+            _device_boot_summary_cards(reports),
             _device_boot_overview_chart(reports),
+            _device_boot_slowest_segments(reports),
             "".join(rendered_reports),
             "</div>",
             "</details>",
@@ -1156,6 +1309,27 @@ def _device_boot_report_head(report: DeviceBootReport) -> str:
     )
 
 
+def _device_boot_summary_cards(reports: list[DeviceBootReport]) -> str:
+    durations = sorted(report.total_seconds for report in reports if report.total_seconds is not None)
+    if not durations:
+        return ""
+    avg = sum(durations) / len(durations)
+    facts = [
+        ("Запусков с временем", str(len(durations))),
+        ("Минимум", _format_duration(durations[0])),
+        ("Среднее", _format_duration(avg)),
+        ("Максимум", _format_duration(durations[-1])),
+    ]
+    cards = "".join(
+        '<div class="device-boot-fact">'
+        f"<span>{escape(label)}</span>"
+        f"<strong>{escape(value)}</strong>"
+        "</div>"
+        for label, value in facts
+    )
+    return f'<div class="device-boot-facts device-boot-facts--summary">{cards}</div>'
+
+
 def _device_boot_overview_chart(reports: list[DeviceBootReport]) -> str:
     durations = [report.total_seconds for report in reports if report.total_seconds is not None]
     if not durations:
@@ -1179,6 +1353,47 @@ def _device_boot_overview_chart(reports: list[DeviceBootReport]) -> str:
             '<section class="device-boot-chart">',
             "<h3>Время запусков</h3>",
             "".join(rows),
+            "</section>",
+        ]
+    )
+
+
+def _device_boot_slowest_segments(reports: list[DeviceBootReport], limit: int = 7) -> str:
+    rows_data = []
+    for report in reports:
+        for segment in report.segments:
+            if segment.duration_seconds is None:
+                continue
+            share = None
+            if report.total_seconds and report.total_seconds > 0:
+                share = segment.duration_seconds / report.total_seconds * 100
+            rows_data.append((segment.duration_seconds, report, segment, share))
+    if not rows_data:
+        return ""
+    rows = []
+    for duration, report, segment, share in sorted(rows_data, key=lambda item: item[0], reverse=True)[:limit]:
+        evidence = segment.evidence[0] if segment.evidence else None
+        evidence_html = escape(_evidence_short_line(evidence)) if evidence else "evidence не найден"
+        rows.append(
+            '<tr class="status-row">'
+            f"<td>{escape(_device_boot_short_title(report))}</td>"
+            f"<td><strong>{escape(segment.title)}</strong><br><span class=\"muted\">{escape(segment.description)}</span></td>"
+            f"<td>{escape(_format_duration(duration))}</td>"
+            f"<td>{escape(_format_percent_value(share))}</td>"
+            f"<td><code>{evidence_html}</code></td>"
+            "</tr>"
+        )
+    return "\n".join(
+        [
+            '<section class="device-boot-chart">',
+            "<h3>Самые долгие этапы</h3>",
+            '<div class="table-wrap">',
+            '<table class="status-table status-table--device-boot-slowest">',
+            '<colgroup><col style="width:18%"><col style="width:30%"><col style="width:12%"><col style="width:12%"><col style="width:28%"></colgroup>',
+            '<thead class="status-table-head"><tr><th>Запуск</th><th>Этап</th><th>Длительность</th><th>Доля запуска</th><th>Evidence</th></tr></thead>',
+            f"<tbody>{''.join(rows)}</tbody>",
+            "</table>",
+            "</div>",
             "</section>",
         ]
     )
@@ -1321,8 +1536,17 @@ def _device_boot_report_payload(report: DeviceBootReport) -> dict[str, object]:
         "total_seconds": report.total_seconds,
         "source_files": report.source_files,
         "summary": report.summary,
+        "slowest_segments": [_device_boot_segment_payload(item) for item in _slowest_report_segments(report)],
         "segments": [_device_boot_segment_payload(item) for item in report.segments],
     }
+
+
+def _slowest_report_segments(report: DeviceBootReport, limit: int = 3) -> list[DeviceBootSegment]:
+    return sorted(
+        [segment for segment in report.segments if segment.duration_seconds is not None],
+        key=lambda segment: segment.duration_seconds or 0,
+        reverse=True,
+    )[:limit]
 
 
 def _device_boot_segment_payload(segment: DeviceBootSegment) -> dict[str, object]:
@@ -1371,6 +1595,12 @@ def _format_duration(value: float | None) -> str:
     seconds = value - minutes * 60
     seconds_text = f"{seconds:06.3f}".replace(".", ",")
     return f"{minutes} мин {seconds_text} сек"
+
+
+def _format_percent_value(value: float | None) -> str:
+    if value is None:
+        return "не рассчитано"
+    return f"{value:.2f}%"
 
 
 def _evidence_short_line(evidence: DeviceBootEvidence) -> str:
@@ -2333,7 +2563,7 @@ def _bm_period(events: list[PaymentEvent]) -> str:
 def _carrier_search_text(event: PaymentEvent) -> str:
     return " ".join(
         value.lower()
-        for value in (event.carrier, event.package, event.raw_line)
+        for value in (event.carrier, event.package)
         if value
     )
 
@@ -3573,6 +3803,7 @@ h1, h2, p { margin: 0; }
 .source-status--available { color: #137752; background: #eef8ee; border-color: #c9ddc9; }
 .source-status--partial { color: #9a6700; background: #fff8e6; border-color: #ead7a0; }
 .source-status--missing { color: #b42318; background: #fff1f0; border-color: #f2c4c0; }
+.source-status--not_required { color: #4f5d6b; background: #f6f8fb; border-color: #d9e0e7; }
 .header-badge { min-width: 130px; background: var(--soft); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
 .header-badge span, .metric span, .bm-meta-card span { display: block; color: var(--muted); font-size: 12px; }
 .header-badge strong, .metric strong, .bm-meta-card strong { display: block; margin-top: 4px; font-size: 18px; line-height: 1.2; }
@@ -3744,6 +3975,8 @@ h1, h2, p { margin: 0; }
 .device-boot-timeline-segment:nth-child(4n) { background: #7c3aed; }
 .status-table--device-boot { table-layout: fixed; }
 .status-table--device-boot code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.status-table--device-boot-slowest { table-layout: fixed; }
+.status-table--device-boot-slowest code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .device-boot-text-details { margin-top: 14px; box-shadow: none; border-color: #d9e0e7; }
 .device-boot-text-details summary strong { font-size: 15px; }
 .device-boot-text { margin: 8px 0 0; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: #f8fafc; color: #1f2933; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }

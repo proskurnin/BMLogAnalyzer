@@ -14,7 +14,9 @@ READER_MODEL_RE = re.compile(
     re.IGNORECASE,
 )
 VALIDATOR_RE = re.compile(
-    r"\[VALIDATOR\] STARTED|choose_and_start_bm|START COMPLETED|START BM AND WAIT|/validator/",
+    r"\[VALIDATOR\] STARTED|choose_and_start_bm|START COMPLETED|START BM AND WAIT|"
+    r"LOAD DEVICE SETTINGS|Open reader SUCCESS|End start reader|Init QR|QR NOT FOUND|"
+    r"updateConfiguration|bmInfoRequest|current protocol:|/validator/",
     re.IGNORECASE,
 )
 OTI_READER_LIBRARY_RE = re.compile(
@@ -195,6 +197,14 @@ def _observe_validator(item: _InventoryBuilder, line: str, lowered: str) -> None
         and "choose_and_start_bm" not in lowered
         and "start completed" not in lowered
         and "start bm and wait" not in lowered
+        and "load device settings" not in lowered
+        and "open reader success" not in lowered
+        and "end start reader" not in lowered
+        and "init qr" not in lowered
+        and "qr not found" not in lowered
+        and "updateconfiguration" not in lowered
+        and "bminforequest" not in lowered
+        and "current protocol:" not in lowered
     ):
         return
     if not VALIDATOR_RE.search(line):
@@ -233,9 +243,28 @@ def _observe_reader(item: _InventoryBuilder, line: str, lowered: str) -> None:
 
 
 def _observe_system(item: _InventoryBuilder, lowered: str) -> None:
-    if "system" not in lowered and "kernel:" not in lowered and "service" not in lowered:
+    if (
+        "system" not in lowered
+        and "kernel:" not in lowered
+        and "service" not in lowered
+        and "systemd" not in lowered
+        and "journal" not in lowered
+        and "nginx" not in lowered
+        and "networkmanager" not in lowered
+        and "audit:" not in lowered
+        and "cron" not in lowered
+    ):
         return
-    if "systemd" in lowered or "kernel:" in lowered or "service" in lowered:
+    if (
+        "systemd" in lowered
+        or "kernel:" in lowered
+        or "service" in lowered
+        or "journal" in lowered
+        or "nginx" in lowered
+        or "networkmanager" in lowered
+        or "audit:" in lowered
+        or "cron" in lowered
+    ):
         item.content_hints.add("content:system")
 
 

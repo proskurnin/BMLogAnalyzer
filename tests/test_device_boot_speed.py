@@ -1,5 +1,7 @@
 import json
+from datetime import datetime
 
+from analytics.device_boot_speed import _duration_seconds
 from core.pipeline import run_analysis
 from reports.html_report import write_html_report
 
@@ -96,6 +98,9 @@ def test_pipeline_builds_device_boot_speed_report(tmp_path):
     assert "АСКП и БМ. Контрольный Info 0/0" in html
     assert "UpdateSuccess: true" in html
     assert "Время запусков" in html
+    assert "Самые долгие этапы" in html
+    assert "Запусков с временем" in html
+    assert "Доля запуска" in html
     assert "device-boot-chart-row" in html
     assert "device-boot-timeline-segment" in html
     assert "2 мин 35,273 сек" in html
@@ -106,3 +111,8 @@ def test_pipeline_builds_device_boot_speed_report(tmp_path):
     assert "copyTextBlock" in html
     assert "device_boot_speed" in manifest["stable_sections"]
     assert manifest["device_boot_speed"][0]["validator_serial"] == "59757"
+    assert manifest["device_boot_speed"][0]["slowest_segments"][0]["title"] == "АСКП/systemd. Запуск БМ"
+
+
+def test_negative_device_boot_duration_is_not_reported_as_fact():
+    assert _duration_seconds(datetime(2026, 7, 13, 12, 0, 0), datetime(2026, 7, 13, 11, 59, 59)) is None

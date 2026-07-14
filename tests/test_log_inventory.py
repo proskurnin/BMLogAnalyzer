@@ -89,3 +89,27 @@ def test_bm_token_in_file_name_creates_bm_path_hint():
     assert len(inventory) == 1
     assert inventory[0].log_type == "bm"
     assert "path:bm" in inventory[0].evidence
+
+
+def test_validator_markers_detect_validator_log_without_validator_path():
+    collector = LogInventoryCollector()
+    collector.observe_line("input/startup.log", "[14:18:32.346324] End LOAD DEVICE SETTINGS: OK")
+    collector.observe_line("input/startup.log", "[14:21:01.853140] [bmInfoRequest] Start")
+
+    inventory = collector.finalize()
+
+    assert len(inventory) == 1
+    assert inventory[0].log_type == "validator_app"
+    assert "content:validator_app" in inventory[0].evidence
+
+
+def test_system_markers_detect_system_log_without_system_path():
+    collector = LogInventoryCollector()
+    collector.observe_line("input/messages.log", "2026-07-13 systemd[1]: Started nginx.service")
+    collector.observe_line("input/messages.log", "2026-07-13 kernel: audit: apparmor denied")
+
+    inventory = collector.finalize()
+
+    assert len(inventory) == 1
+    assert inventory[0].log_type == "system"
+    assert "content:system" in inventory[0].evidence

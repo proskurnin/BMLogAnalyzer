@@ -28,7 +28,8 @@ def test_section_sources_mark_available_partial_and_static_sections():
     assert section_sources["device_boot_speed"]["status"] == "partial"
     assert section_sources["device_boot_speed"]["missing_log_type_labels"] == ["ПО валидатора"]
     assert section_sources["log_files"]["status"] == "not_required"
-    assert section_sources["log_files"]["note"] == "Источник данных: структура архива."
+    assert section_sources["log_files"]["title"] == "Состав загрузки / Log-файлы"
+    assert section_sources["log_files"]["note"] == "Источник данных: раздел Состав загрузки."
 
 
 def test_section_sources_use_upload_composition_when_inventory_is_empty():

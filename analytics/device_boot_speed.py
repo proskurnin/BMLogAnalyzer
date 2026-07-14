@@ -557,7 +557,10 @@ def _duration_between(session: _BootSession, start_key: str, end_key: str) -> fl
 def _duration_seconds(started_at: datetime | None, finished_at: datetime | None) -> float | None:
     if started_at is None or finished_at is None:
         return None
-    return round((finished_at - started_at).total_seconds(), 3)
+    duration = (finished_at - started_at).total_seconds()
+    if duration < 0:
+        return None
+    return round(duration, 3)
 
 
 def _validator_version(session: _BootSession) -> str | None:

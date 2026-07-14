@@ -100,7 +100,7 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     manifest = (tmp_path / "analysis_report.json").read_text(encoding="utf-8")
     assert "BM Log Analyzer" in html
     assert f"отчёт создан в версии сервиса {__version__}" in html
-    assert "Log-файлы" in html
+    assert "Он содержит логи следующих типов:" in html
     assert "Прочие файлы" in html
     assert "BM-статусы" in html
     assert "Подозрительно" in html
@@ -236,6 +236,26 @@ def test_html_report_maps_mmv2_package_to_mcd2_carrier(tmp_path):
     assert manifest["counts"]["events"] == 1
 
 
+def test_html_report_does_not_detect_carrier_from_message_text(tmp_path):
+    event = replace(
+        make_event(4, 250, "4.5.13", message="Карта в стоп листе. Оплатите долг в приложении «Метро Москвы»"),
+        package="mgt_askp_9-oti-4.5.13",
+        carrier="mgt_askp_9",
+        raw_line=(
+            "PaymentStart, resp: {Code:4 MessageRus:Карта в стоп листе. "
+            "MessageEng:Card in stop-list. Pay the debt in Moscow Metro app "
+            "BmSign:mgt_askp_9-oti-4.5.13.aes}"
+        ),
+    )
+    result = analyze_events([event])
+
+    write_html_report([event], result, tmp_path / "analysis_report.html")
+
+    html = (tmp_path / "analysis_report.html").read_text(encoding="utf-8")
+    report_data = json.loads(html.split('<script id="report-data" type="application/json">', 1)[1].split("</script>", 1)[0])
+    assert report_data["events"][0]["carriers"] == ["АСКП"]
+
+
 def test_html_report_hides_empty_sections(tmp_path):
     stats = PipelineStats(scanned_lines=1, malformed_payment_lines=0, extracted_files=0)
     event = replace(
@@ -311,17 +331,23 @@ def test_writes_upload_composition_in_report_header_and_manifest(tmp_path):
     html = (tmp_path / "analysis_report.html").read_text(encoding="utf-8")
     manifest = json.loads((tmp_path / "analysis_report.json").read_text(encoding="utf-8"))
     ai_context = json.loads((tmp_path / "analysis_report.ai_context.json").read_text(encoding="utf-8"))
-    expected_text = (
-        "Загружен архив 13-07-2026.zip. Он содержит логи следующих типов: "
-        "БМ, ПО стоппера, библиотеки ридера ОТИ, ПО валидатора."
-    )
+    expected_text = "Загружен архив 13-07-2026.zip. Распознано типов логов: 4."
     assert "Состав загрузки" in html
     assert expected_text in html
+    assert "Он содержит логи следующих типов:" in html
+    assert "БМ" in html
+    assert "ПО стоппера" in html
+    assert "библиотеки ридера ОТИ" in html
+    assert "ПО валидатора" in html
     assert "Полнота обработки" in html
     assert "Распознанные типы логов" in html
+    assert '<details class="collapsible upload-composition-part upload-composition-details">' in html
     assert "Разделы отчёта и источники" in html
     assert "Файлов в источнике" in html
     assert "Проанализировано" in html
+    assert "Покрытие log-файлов" in html
+    assert "полностью" in html
+    assert "2/2 (100.00%)" in html
     assert "прочие файлы в архиве: 1" in html
     assert "content:PaymentStart" in html
     assert "content:validator_app" in html
