@@ -16,6 +16,7 @@ def test_classifies_archive_members_by_real_path_category():
     assert classify_archive_member("bm/logs/stopper/stopper-rotate.log") == "Stopper rotate"
     assert classify_archive_member("bm/logs/stopper-std/stopper.current.log") == "Stopper stdout"
     assert classify_archive_member("17/vil.logs/20260505.log") == "VIL logs"
+    assert classify_archive_member("Workstation.ValidatorNT/2026-07-10-13-30-06-229.log.gz") == "Validator app logs"
     assert classify_archive_member("logs/reader/reader.log") == "Reader logs"
     assert classify_archive_member("reader-1.44.6518.bin.P.signed") == "Reader firmware binary"
     assert classify_archive_member("var/log/syslog") == "System logs"
@@ -27,8 +28,10 @@ def test_builds_archive_inventory_from_zip_members(tmp_path):
     with zipfile.ZipFile(archive_path, "w") as archive:
         archive.writestr("bm/logs/bm/bm-rotate-2026-04-29T08-54-59.736.log.gz", "x")
         archive.writestr("bm/logs/stopper/stopper-rotate.log", "x")
+        archive.writestr("Workstation.ValidatorNT/2026-07-10-13-30-06-229.log.gz", "x")
         archive.writestr("reader-1.44.6518.bin.P.signed", "x")
         archive.writestr("var/log/syslog", "x")
+        archive.writestr("unknown/app.log", "x")
         archive.writestr("db/transaction.db", "x")
 
     rows = build_archive_inventory([str(archive_path)])
@@ -36,8 +39,10 @@ def test_builds_archive_inventory_from_zip_members(tmp_path):
 
     assert totals["BM rotate"] == 1
     assert totals["Stopper rotate"] == 1
+    assert totals["Validator app logs"] == 1
     assert totals["Reader firmware binary"] == 1
     assert totals["System logs"] == 1
+    assert totals["Other log-like"] == 1
     assert totals["Other"] == 1
     assert explicit_reader_log_count(rows) == 0
     assert explicit_system_log_count(rows) == 1

@@ -34,9 +34,10 @@ LOG_GROUP_SPECS: list[tuple[str, set[str]]] = [
     ("BM logs", {"BM rotate", "BM stdout"}),
     ("Stopper logs", {"Stopper rotate", "Stopper stdout"}),
     ("VIL logs", {"VIL logs"}),
+    ("Validator app logs", {"Validator app logs"}),
     ("Reader logs", {"Reader logs"}),
     ("System logs", {"System logs"}),
-    ("Other log-like", {"Other log-like"}),
+    ("Unclassified log files", {"Other log-like"}),
 ]
 LOG_CATEGORIES: set[str] = {category for _, categories in LOG_GROUP_SPECS for category in categories}
 LOG_TYPE_LABELS: dict[str, str] = {

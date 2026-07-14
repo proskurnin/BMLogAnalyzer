@@ -14,6 +14,7 @@ CATEGORY_ORDER = [
     "Stopper rotate",
     "Stopper stdout",
     "VIL logs",
+    "Validator app logs",
     "Reader logs",
     "Reader firmware binary",
     "System logs",
@@ -107,6 +108,8 @@ def classify_archive_member(name: str) -> str:
 
     if "/vil.logs/" in path:
         return "VIL logs"
+    if _is_validator_app_log(path):
+        return "Validator app logs"
     if "/logs/bm/" in path or re.search(r"/bm-rotate(?:-|\.log|$)", path):
         return "BM rotate"
     if "/logs/bm-std/" in path:
@@ -171,6 +174,15 @@ def _is_system_log(path: str) -> bool:
         or "/var/log/" in path
         or re.search(r"/(?:messages|kern|kernel|system)\.log(?:\.gz)?$", path) is not None
     )
+
+
+def _is_validator_app_log(path: str) -> bool:
+    return (
+        "/workstation.validatornt/" in path
+        or "/validatornt/" in path
+        or "/validator/" in path
+        or "/logs/validator/" in path
+    ) and _is_other_log_like(path)
 
 
 def _is_other_log_like(path: str) -> bool:

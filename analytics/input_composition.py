@@ -164,6 +164,7 @@ def _is_log_inventory_category(category: str) -> bool:
         "Stopper rotate",
         "Stopper stdout",
         "VIL logs",
+        "Validator app logs",
         "Reader logs",
         "System logs",
         "Other log-like",
