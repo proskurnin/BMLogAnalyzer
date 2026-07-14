@@ -56,10 +56,11 @@ from web.uploads import (
 )
 
 try:  # pragma: no cover - optional dependency
-    from fastapi import FastAPI, File, Form, Request, UploadFile
+    from fastapi import BackgroundTasks, FastAPI, File, Form, Request, UploadFile
     from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 except ImportError:  # pragma: no cover - optional dependency
     FastAPI = None  # type: ignore[assignment]
+    BackgroundTasks = None  # type: ignore[assignment]
     File = None  # type: ignore[assignment]
     Form = None  # type: ignore[assignment]
     Request = None  # type: ignore[assignment]
@@ -696,25 +697,29 @@ def create_app() -> Any:
         }
 
     @app.post("/api/uploads/store")
-    async def store(request: Request, files: list[UploadFile] = File(...)) -> dict[str, Any]:
+    async def store(request: Request, background_tasks: BackgroundTasks, files: list[UploadFile] = File(...)) -> dict[str, Any]:
         user = _request_user(request)
         stored, rejected_files, limit_error = await _store_uploads_streaming(files, owner_email=user.email, owner_name=user.name)
         if limit_error:
             return JSONResponse({"detail": limit_error}, status_code=413)
         summary = summary_from_uploads(stored, rejected_count=len(rejected_files))
-        report_updates: list[dict[str, Any]] = []
         for item in stored:
             update_upload_status(item.upload_id, status="processing", status_message="Формируем отчёт", storage_dir=None)
-            report_updates.append(_build_upload_report(item, user))
-        session_report = _upload_session_report(stored, report_updates, user)
+        if stored:
+            background_tasks.add_task(
+                _build_upload_reports_background,
+                [item.upload_id for item in stored],
+                user.email,
+                user.name,
+            )
         refreshed_items = [asdict(load_upload(item.upload_id)) for item in stored]
         return {
             "status": "ok",
             "summary": summary,
             "items": refreshed_items,
-            "report_updates": report_updates,
-            "run_id": session_report.get("run_id", ""),
-            "report_url": session_report.get("report_url", ""),
+            "report_updates": [],
+            "run_id": "",
+            "report_url": "",
             "rejected_files": rejected_files,
             "message": summary["message"],
         }
@@ -910,6 +915,30 @@ def _build_upload_report(item, user) -> dict[str, Any]:
     )
     update_upload_reports([item.upload_id], report_run_id=run_id, report_url=f"/report/{run_id}")
     return {"upload_id": item.upload_id, "run_id": run_id, "report_url": f"/report/{run_id}"}
+
+
+def _build_upload_reports_background(upload_ids: list[str], owner_email: str, owner_name: str) -> None:
+    user = _BackgroundReportUser(email=owner_email, name=owner_name)
+    for upload_id in upload_ids:
+        try:
+            item = load_upload(upload_id)
+        except FileNotFoundError:
+            continue
+        try:
+            update_upload_status(upload_id, status="processing", status_message="Формируем отчёт")
+            _build_upload_report(item, user)
+        except Exception as exc:  # pragma: no cover - defensive production guard
+            update_upload_status(
+                upload_id,
+                status="failed",
+                status_message=f"Ошибка формирования отчёта: {exc}",
+            )
+
+
+class _BackgroundReportUser:
+    def __init__(self, *, email: str, name: str) -> None:
+        self.email = email
+        self.name = name
 
 
 def _upload_session_report(items, report_updates: list[dict[str, Any]], user) -> dict[str, Any]:
@@ -3148,7 +3177,7 @@ def _uploads_html(user=None) -> str:
           <div id="uploads_pagination_summary" class="muted"></div>
           <div id="uploads_pager" class="uploads-pager"></div>
         </div>
-        <div id="uploads_message" class="message muted">Отчёт для каждой загрузки формируется сразу после приёма файла. Ниже можно собрать отдельный отчёт по выбранным строкам.</div>
+        <div id="uploads_message" class="message muted">Отчёт для каждой загрузки формируется в фоне после приёма файла. Ниже можно собрать отдельный отчёт по выбранным строкам.</div>
         <div class="footer">Новые загрузки появляются без доступа к аналитике. Отчёты доступны отдельно.</div>
       </section>
     </main>

@@ -507,7 +507,7 @@ def test_uploads_page_contains_table_and_actions():
     assert "data-delete-upload-id" in html
     assert "data-report-cell" in html
     assert "item.download_url" in html
-    assert "Отчёт для каждой загрузки формируется сразу после приёма файла" in html
+    assert "Отчёт для каждой загрузки формируется в фоне после приёма файла" in html
 
 
 def test_uploads_api_is_paginated(tmp_path, monkeypatch):
@@ -661,11 +661,12 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
     store_data = store_response.json()
     assert store_data["status"] == "ok"
     assert store_data["summary"]["uploaded_count"] == 1
-    assert store_data["run_id"]
-    assert store_data["report_url"].startswith("/report/")
+    assert store_data["run_id"] == ""
+    assert store_data["report_url"] == ""
+    assert store_data["report_updates"] == []
     upload_id = store_data["items"][0]["upload_id"]
-    assert store_data["items"][0]["report_url"].startswith("/report/")
-    assert store_data["items"][0]["status"] == "ready"
+    assert store_data["items"][0]["report_url"] == ""
+    assert store_data["items"][0]["status"] == "processing"
 
     download_response = client.get(f"/uploads/download/{upload_id}")
     assert download_response.status_code == 200
@@ -831,11 +832,14 @@ def test_web_upload_session_report_combines_uploaded_files(tmp_path, monkeypatch
     assert store_response.status_code == 200
     data = store_response.json()
     assert data["summary"]["uploaded_count"] == 2
-    assert data["report_url"].startswith("/report/")
-    assert len(data["report_updates"]) == 2
-    assert data["report_url"] not in {item["report_url"] for item in data["report_updates"]}
+    assert data["report_url"] == ""
+    assert data["report_updates"] == []
 
-    report_response = client.get(data["report_url"])
+    report_data = client.post(
+        "/api/uploads/report",
+        json={"upload_ids": [item["upload_id"] for item in data["items"]]},
+    ).json()
+    report_response = client.get(report_data["report_url"])
     assert report_response.status_code == 200
     assert "SESSION_OK" in report_response.text
     assert "SESSION_ERROR" in report_response.text
