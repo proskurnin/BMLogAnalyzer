@@ -85,4 +85,4 @@ def test_pipeline_falls_back_on_invalid_gzip(tmp_path):
     assert len(events) == 1
     assert result.total == 1
     assert stats.scanned_lines == 1
-    assert stats.analyzed_files == [str(extracted_dir / "broken.zip" / "broken.log.gz")]
+    assert stats.analyzed_files == [str(extracted_dir / "broken.log.gz.log")]

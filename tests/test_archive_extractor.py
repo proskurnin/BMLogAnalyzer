@@ -34,17 +34,63 @@ def test_extracts_log_files_from_zip(tmp_path):
     assert (extracted / "logs.zip" / "nested" / "a.log").read_text(encoding="utf-8") == "log line\n"
 
 
-def test_skips_tar_gz_members_from_zip(tmp_path):
-    source = tmp_path / "logs.zip"
+def test_extracts_damaged_zip_with_bsdtar_fallback(tmp_path, monkeypatch):
+    source = tmp_path / "damaged.zip"
     extracted = tmp_path / "extracted"
+    source.write_bytes(b"damaged zip")
+    calls = []
+
+    class BrokenZip:
+        def __init__(self, path):
+            raise zipfile.BadZipFile("broken")
+
+    def fake_which(name):
+        return "/usr/bin/bsdtar" if name == "bsdtar" else None
+
+    def fake_run(args, check, capture_output, text):
+        calls.append(args)
+        if args[1] == "-tf":
+            return subprocess.CompletedProcess(args, 1, stdout="nested/a.log\nnested/skip.txt\n")
+        target_root = extracted / "damaged.zip"
+        (target_root / "nested").mkdir(parents=True, exist_ok=True)
+        (target_root / "nested" / "a.log").write_text("partial log\n", encoding="utf-8")
+        return subprocess.CompletedProcess(args, 1, stdout="")
+
+    monkeypatch.setattr("core.archive_extractor.zipfile.ZipFile", BrokenZip)
+    monkeypatch.setattr("core.archive_extractor.shutil.which", fake_which)
+    monkeypatch.setattr("core.archive_extractor.subprocess.run", fake_run)
+
+    result = extract_archives(source, extracted)
+
+    assert result.extracted_files == [str(extracted / "damaged.zip" / "nested" / "a.log")]
+    assert result.skipped_files == []
+    assert calls[1] == [
+        "/usr/bin/bsdtar",
+        "-xf",
+        str(source),
+        "-C",
+        str(extracted / "damaged.zip"),
+        "nested/a.log",
+    ]
+
+
+def test_extracts_nested_archives_from_zip(tmp_path):
+    source = tmp_path / "logs.zip"
+    nested_zip = tmp_path / "nested.zip"
+    extracted = tmp_path / "extracted"
+    with zipfile.ZipFile(nested_zip, "w") as archive:
+        archive.writestr("inner/a.log", "nested log\n")
     with zipfile.ZipFile(source, "w") as archive:
-        archive.writestr("bm.tar.gz", b"not a text log")
+        archive.write(nested_zip, arcname="nested.zip")
         archive.writestr("bm-rotate.log.gz", b"not-real-gzip-but-copied")
 
     result = extract_archives(source, extracted)
 
-    assert result.extracted_files == [str(extracted / "logs.zip" / "bm-rotate.log.gz")]
-    assert not (extracted / "logs.zip" / "bm.tar.gz").exists()
+    assert result.extracted_files == [
+        str(extracted / "bm-rotate.log.gz.log"),
+        str(extracted / "nested.zip" / "inner" / "a.log"),
+    ]
+    assert (extracted / "nested.zip" / "inner" / "a.log").read_text(encoding="utf-8") == "nested log\n"
 
 
 def test_skips_unsafe_archive_member_paths(tmp_path):
@@ -136,7 +182,7 @@ def test_extracts_log_files_from_rar_with_bsdtar(tmp_path, monkeypatch):
     assert result.source_archives == [str(source)]
     assert result.extracted_files == [
         str(extracted / "logs.rar" / "nested" / "a.log"),
-        str(extracted / "logs.rar" / "nested" / "b.log.gz"),
+        str(extracted / "b.log.gz.log"),
     ]
     assert result.skipped_files == []
     assert calls[1] == [

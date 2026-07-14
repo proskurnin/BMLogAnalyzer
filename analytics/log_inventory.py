@@ -18,6 +18,10 @@ ERROR_RE = re.compile(r"\b(error|exception|fail(?:ed|ure)?|timeout)\b|ошибк
 TIMEOUT_RE = re.compile(r"\btimeout\b|таймаут", re.IGNORECASE)
 EXCEPTION_RE = re.compile(r"\bexception\b", re.IGNORECASE)
 FAIL_RE = re.compile(r"\bfail(?:ed|ure)?\b", re.IGNORECASE)
+VALIDATOR_RE = re.compile(
+    r"\[VALIDATOR\] STARTED|choose_and_start_bm|START COMPLETED|START BM AND WAIT|/validator/",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -42,6 +46,7 @@ class LogInventoryCollector:
         _observe_path(item)
         _observe_date(item, line)
         _observe_bm(item, line)
+        _observe_validator(item, line)
         _observe_reader(item, line)
         _observe_system(item, line)
         _observe_error(item, line)
@@ -156,6 +161,13 @@ def _observe_bm(item: _InventoryBuilder, line: str) -> None:
         item.content_hints.add("content:PaymentStart")
 
 
+def _observe_validator(item: _InventoryBuilder, line: str) -> None:
+    if not VALIDATOR_RE.search(line):
+        return
+    item.content_hints.add("content:validator_app")
+    _add_evidence_sample(item, "validator_app", line)
+
+
 def _observe_reader(item: _InventoryBuilder, line: str) -> None:
     firmware = parse_reader_firmware(line)
     if firmware:
@@ -211,6 +223,8 @@ def _build_inventory(item: _InventoryBuilder) -> LogFileInventory:
 
 def _detect_log_type(item: _InventoryBuilder) -> str:
     hints = item.content_hints | item.path_hints
+    if "content:validator_app" in hints:
+        return "validator_app"
     if "content:bm_package" in hints or "content:mgt_nbs_package" in hints or "content:PaymentStart" in hints or "path:bm" in hints:
         return "bm"
     if "content:reader_firmware" in hints or "content:reader_model" in hints or "path:reader" in hints:

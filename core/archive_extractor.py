@@ -19,21 +19,37 @@ def extract_archives(input_path: Path | str, extracted_dir: Path | str) -> Extra
 
     extracted_files: list[str] = []
     skipped_files: list[str] = []
-    source_archives: list[str] = []
+    source_archives = [str(path) for path in _iter_archives(root)]
+    pending = [Path(path) for path in source_archives]
+    processed: set[str] = set()
 
-    for archive_path in _iter_archives(root):
-        source_archives.append(str(archive_path))
+    while pending:
+        archive_path = pending.pop(0)
+        archive_key = str(archive_path)
+        if archive_key in processed:
+            continue
+        processed.add(archive_key)
         try:
             if _is_tar_gz(archive_path):
-                extracted_files.extend(_extract_tar(archive_path, output_root))
+                extracted = _extract_tar(archive_path, output_root)
             elif archive_path.suffix.lower() == ".zip":
-                extracted_files.extend(_extract_zip(archive_path, output_root))
+                extracted = _extract_zip(archive_path, output_root)
             elif archive_path.suffix.lower() == ".rar":
-                extracted_files.extend(_extract_rar(archive_path, output_root))
+                extracted = _extract_rar(archive_path, output_root)
             elif archive_path.suffix.lower() == ".gz":
-                extracted_files.append(str(_extract_gz(archive_path, output_root)))
+                extracted = [str(_extract_gz(archive_path, output_root))]
+            else:
+                extracted = []
         except (OSError, gzip.BadGzipFile, zipfile.BadZipFile, tarfile.TarError, subprocess.SubprocessError):
             skipped_files.append(str(archive_path))
+            continue
+
+        for extracted_path in extracted:
+            path = Path(extracted_path)
+            if _is_archive_candidate(path):
+                pending.append(path)
+            else:
+                extracted_files.append(str(path))
 
     return ExtractionResult(
         input_path=str(root),
@@ -67,19 +83,61 @@ def _extract_zip(path: Path, output_root: Path) -> list[str]:
     target_root.mkdir(parents=True, exist_ok=True)
     extracted: list[str] = []
 
-    with zipfile.ZipFile(path) as archive:
-        for member in sorted(archive.infolist(), key=lambda item: item.filename):
-            if member.is_dir():
-                continue
-            member_path = Path(member.filename)
-            if not _is_supported_log_member(member_path):
-                continue
-            target_path = _safe_join(target_root, member_path)
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            with archive.open(member) as source, target_path.open("wb") as target:
-                shutil.copyfileobj(source, target)
-            extracted.append(str(target_path))
+    try:
+        with zipfile.ZipFile(path) as archive:
+            for member in sorted(archive.infolist(), key=lambda item: item.filename):
+                if member.is_dir():
+                    continue
+                member_path = Path(member.filename)
+                if not _is_supported_log_member(member_path):
+                    continue
+                target_path = _safe_join(target_root, member_path)
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member) as source, target_path.open("wb") as target:
+                    shutil.copyfileobj(source, target)
+                extracted.append(str(target_path))
+    except (OSError, RuntimeError, zipfile.BadZipFile):
+        return _extract_zip_with_bsdtar(path, output_root)
 
+    return extracted
+
+
+def _extract_zip_with_bsdtar(path: Path, output_root: Path) -> list[str]:
+    bsdtar = shutil.which("bsdtar")
+    if bsdtar is None:
+        raise zipfile.BadZipFile(f"cannot extract damaged zip without bsdtar: {path}")
+
+    target_root = output_root / _safe_stem(path)
+    target_root.mkdir(parents=True, exist_ok=True)
+
+    listed = subprocess.run(
+        [bsdtar, "-tf", str(path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    members = [
+        name
+        for name in listed.stdout.splitlines()
+        if name and _is_supported_log_member(Path(name))
+    ]
+    if not members:
+        raise zipfile.BadZipFile(f"no supported members listed in damaged zip: {path}")
+
+    subprocess.run(
+        [bsdtar, "-xf", str(path), "-C", str(target_root), *members],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    extracted = []
+    for member in sorted(members):
+        target_path = _safe_join(target_root, Path(member))
+        if target_path.is_file():
+            extracted.append(str(target_path))
+    if not extracted:
+        raise zipfile.BadZipFile(f"no supported members extracted from damaged zip: {path}")
     return extracted
 
 
@@ -141,18 +199,19 @@ def _extract_rar(path: Path, output_root: Path) -> list[str]:
 
 def _extract_gz(path: Path, output_root: Path) -> Path:
     target_path = output_root / f"{_safe_stem(path)}.log"
-    with gzip.open(path, "rb") as source, target_path.open("wb") as target:
-        shutil.copyfileobj(source, target)
+    try:
+        with gzip.open(path, "rb") as source, target_path.open("wb") as target:
+            shutil.copyfileobj(source, target)
+    except (OSError, EOFError, gzip.BadGzipFile):
+        with path.open("rb") as source, target_path.open("wb") as target:
+            shutil.copyfileobj(source, target)
     return target_path
 
 
 def _is_supported_log_member(path: Path) -> bool:
-    name = path.name.lower()
     if not _is_safe_member_path(path):
         return False
-    if _is_tar_gz(path):
-        return False
-    return path.suffix.lower() in {".log", ".gz"}
+    return path.suffix.lower() == ".log" or _is_archive_candidate(path)
 
 
 def _is_safe_member_path(path: Path) -> bool:

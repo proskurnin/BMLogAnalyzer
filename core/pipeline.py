@@ -8,6 +8,7 @@ from typing import Any
 
 from analytics.archive_inventory import build_archive_inventory
 from analytics.counters import analyze_events
+from analytics.device_boot_speed import DeviceBootSpeedCollector
 from analytics.log_inventory import LogInventoryCollector
 from core.archive_extractor import extract_archives
 from core.log_scanner import iter_log_sources, scan_logs
@@ -101,12 +102,13 @@ def run_analysis(
     input_direct_files = [str(path) for path in iter_log_sources(input_path, include_archives=False)]
     scan_roots: list[tuple[Path, bool]] = [(Path(input_path), False)]
     if extraction.extracted_files:
-        scan_roots.append((Path(extraction.extracted_dir), True))
+        scan_roots.append((Path(extraction.extracted_dir), False))
 
     events: list[PaymentEvent] = []
     diagnostics: list[DiagnosticLine] = []
     file_stats: dict[str, FileProcessingStats] = {}
     inventory_collector = LogInventoryCollector()
+    device_boot_collector = DeviceBootSpeedCollector()
     scanned_lines = 0
 
     with _Stage("scan_and_parse_logs", progress_callback) as stage:
@@ -114,6 +116,7 @@ def run_analysis(
             for log_line in scan_logs(scan_root, include_archives=include_archives):
                 scanned_lines += 1
                 inventory_collector.observe_line(log_line.source_file, log_line.text)
+                device_boot_collector.observe_line(log_line.source_file, log_line.line_number, log_line.text)
                 stats_for_file = file_stats.setdefault(
                     log_line.source_file,
                     FileProcessingStats(source_file=log_line.source_file),
@@ -182,6 +185,7 @@ def run_analysis(
         files=sorted(file_stats.values(), key=lambda item: item.source_file),
         log_inventory=inventory_collector.finalize(),
         archive_inventory=archive_inventory,
+        device_boot_reports=device_boot_collector.finalize(),
     )
     return events, result, stats
 

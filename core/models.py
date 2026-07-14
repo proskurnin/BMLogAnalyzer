@@ -105,6 +105,41 @@ class LogFileInventory:
 
 
 @dataclass(frozen=True)
+class DeviceBootEvidence:
+    source_file: str
+    line_number: int
+    timestamp: datetime | None
+    label: str
+    raw_line: str
+
+
+@dataclass(frozen=True)
+class DeviceBootSegment:
+    title: str
+    description: str
+    started_at: datetime | None
+    finished_at: datetime | None
+    duration_seconds: float | None
+    evidence: list[DeviceBootEvidence] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class DeviceBootReport:
+    title: str
+    validator_serial: str | None
+    route: str | None
+    validator_version: str | None
+    bm_version: str | None
+    reader_type: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    total_seconds: float | None
+    segments: list[DeviceBootSegment] = field(default_factory=list)
+    summary: list[str] = field(default_factory=list)
+    source_files: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class ArchiveInventoryRow:
     archive: str
     category: str
@@ -132,6 +167,7 @@ class PipelineStats:
     files: list[FileProcessingStats] = field(default_factory=list)
     log_inventory: list[LogFileInventory] = field(default_factory=list)
     archive_inventory: list[ArchiveInventoryRow] = field(default_factory=list)
+    device_boot_reports: list[DeviceBootReport] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

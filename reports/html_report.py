@@ -15,7 +15,17 @@ from analytics.check_cases import load_check_cases, run_builtin_checks
 from analytics.protocol_scenarios import load_protocol_scenarios, run_protocol_scenarios
 from analytics.suspicious import suspicious_line_payloads
 from core.contracts import REPORT_MANIFEST_SCHEMA_VERSION
-from core.models import AnalysisResult, ArchiveInventoryRow, CheckCase, CheckResult, PaymentEvent, PipelineStats
+from core.models import (
+    AnalysisResult,
+    ArchiveInventoryRow,
+    CheckCase,
+    CheckResult,
+    DeviceBootEvidence,
+    DeviceBootReport,
+    DeviceBootSegment,
+    PaymentEvent,
+    PipelineStats,
+)
 from core.version import __version__
 
 LOG_GROUP_SPECS: list[tuple[str, set[str]]] = [
@@ -80,6 +90,7 @@ def render_html_report(
     bm_group_rows = _bm_status_groups(events)
     bm_group_payloads = _bm_group_payloads(events, archive_names)
     validator_sections = _validator_analytics(events, archive_names)
+    device_boot_reports = stats.device_boot_reports if stats else []
     suspicious_rows = suspicious_line_payloads(events)
     check_cases = [check for check in load_check_cases() if check.enabled]
     check_results = run_builtin_checks(events, checks=check_cases)
@@ -188,6 +199,7 @@ def render_html_report(
             _check_results_section(check_results, check_cases, events),
             _suspicious_section(suspicious_rows) if suspicious_rows else "",
             _protocol_scenario_results_section(protocol_results, protocol_scenarios),
+            _device_boot_speed_section(device_boot_reports),
             _bm_status_section(events, bm_group_rows, bm_group_payloads, date_chart, unclassified_diag, archive_names),
             _validator_section(validator_sections),
             _modal(),
@@ -214,6 +226,7 @@ def render_html_report_manifest(
     grouped_rows = _bm_status_groups(events)
     archive_names = _archive_name_set(stats.input_files if stats else [])
     validator_sections = _validator_analytics(events, archive_names)
+    device_boot_reports = stats.device_boot_reports if stats else []
     suspicious_rows = suspicious_line_payloads(events)
     check_cases = [check for check in load_check_cases() if check.enabled]
     check_results = run_builtin_checks(events, checks=check_cases)
@@ -240,6 +253,9 @@ def render_html_report_manifest(
     if protocol_scenarios:
         insert_at = stable_sections.index("bm_statuses")
         stable_sections.insert(insert_at, "protocol_scenarios")
+    if device_boot_reports:
+        insert_at = stable_sections.index("bm_statuses")
+        stable_sections.insert(insert_at, "device_boot_speed")
     if unclassified_total := sum(int(row.get("count", 0)) for row in _unclassified_diagnostics(events)):
         stable_sections.insert(-1, "unclassified_diagnostics")
     return {
@@ -266,6 +282,7 @@ def render_html_report_manifest(
             "validation_checks",
             "protocol_scenarios",
             "protocol_scenario_results",
+            "device_boot_speed",
         ],
         "stable_sections": stable_sections,
         "counts": {
@@ -283,8 +300,9 @@ def render_html_report_manifest(
             "suspicious": len(suspicious_rows),
             "validation_check_catalog": len(check_cases),
             "validation_checks": len(check_results),
-        "protocol_scenarios": len(protocol_results),
-    },
+            "protocol_scenarios": len(protocol_results),
+            "device_boot_reports": len(device_boot_reports),
+        },
         "sections": stable_sections,
         "status_groups": [str(row["status"]) for row in summary_rows],
         "grouped_statuses": [str(row["label"]) for row in grouped_rows],
@@ -295,6 +313,7 @@ def render_html_report_manifest(
         "validation_check_catalog": [_check_case_payload(item) for item in check_cases],
         "validation_checks": [_check_result_payload(item) for item in check_results],
         "protocol_scenario_results": [_protocol_scenario_result_payload(item) for item in protocol_results],
+        "device_boot_speed": [_device_boot_report_payload(item) for item in device_boot_reports],
     }
 
 
@@ -731,6 +750,194 @@ def _protocol_scenario_results_section(results, scenarios) -> str:
             "</details>",
         ]
     )
+
+
+def _device_boot_speed_section(reports: list[DeviceBootReport]) -> str:
+    if not reports:
+        return ""
+    rendered_reports = []
+    for report in reports:
+        rendered_reports.append(
+            "\n".join(
+                [
+                    '<article class="device-boot-report">',
+                    _device_boot_report_head(report),
+                    _device_boot_segment_table(report.segments),
+                    '<h3 class="checks-subtitle">Текстовый отчёт</h3>',
+                    f'<pre class="device-boot-text">{escape(_device_boot_text_report(report))}</pre>',
+                    "</article>",
+                ]
+            )
+        )
+    summary = f"Найдено запусков: {len(reports)}."
+    return "\n".join(
+        [
+            '<details class="collapsible collapsible--device-boot">',
+            "<summary>",
+            "<span>",
+            "<strong>Скорость загрузки устройства</strong>",
+            f"<em>{escape(summary)} Факты рассчитаны по строкам ПО валидатора и BM.</em>",
+            "</span>",
+            "</summary>",
+            '<div class="collapsible-body">',
+            "".join(rendered_reports),
+            "</div>",
+            "</details>",
+        ]
+    )
+
+
+def _device_boot_report_head(report: DeviceBootReport) -> str:
+    facts = [
+        ("АСКП", report.validator_version or "не найдено"),
+        ("БМ", report.bm_version or "не найдено"),
+        ("Ридер", report.reader_type or "не найдено"),
+        ("Маршрут", report.route or "не найдено"),
+        ("Всего", _format_duration(report.total_seconds)),
+    ]
+    cards = "".join(
+        '<div class="device-boot-fact">'
+        f"<span>{escape(label)}</span>"
+        f"<strong>{escape(value)}</strong>"
+        "</div>"
+        for label, value in facts
+    )
+    sources = ", ".join(report.source_files)
+    return "\n".join(
+        [
+            '<div class="device-boot-head">',
+            f"<h3>{escape(report.title)}</h3>",
+            f'<p class="muted">Источник: {escape(sources or "не найден")}</p>',
+            f'<div class="device-boot-facts">{cards}</div>',
+            "</div>",
+        ]
+    )
+
+
+def _device_boot_segment_table(segments: list[DeviceBootSegment]) -> str:
+    rows = []
+    for index, segment in enumerate(segments, start=1):
+        evidence = "<br>".join(
+            f'<code>{escape(_evidence_short_line(item))}</code>'
+            for item in segment.evidence[:8]
+        )
+        if not evidence:
+            evidence = '<span class="muted">evidence не найден</span>'
+        rows.append(
+            '<tr class="status-row">'
+            f"<td><strong>{index}. {escape(segment.title)}</strong><br><span class=\"muted\">{escape(segment.description)}</span></td>"
+            f"<td>{escape(_format_time_range(segment.started_at, segment.finished_at))}</td>"
+            f"<td>{escape(_format_duration(segment.duration_seconds))}</td>"
+            f"<td>{evidence}</td>"
+            "</tr>"
+        )
+    return "\n".join(
+        [
+            '<div class="table-wrap checks-table-wrap">',
+            '<table class="status-table status-table--device-boot">',
+            '<colgroup><col style="width:26%"><col style="width:16%"><col style="width:12%"><col style="width:46%"></colgroup>',
+            '<thead class="status-table-head"><tr><th>Этап</th><th>Время</th><th>Длительность</th><th>Evidence</th></tr></thead>',
+            f"<tbody>{''.join(rows)}</tbody>",
+            "</table>",
+            "</div>",
+        ]
+    )
+
+
+def _device_boot_text_report(report: DeviceBootReport) -> str:
+    lines = [
+        report.title,
+        "",
+        f"АСКП — основной управляющий софт, версия {report.validator_version or 'не найдена'}.",
+        f"БМ — банковский модуль, версия {report.bm_version or 'не найдена'}.",
+        "",
+        f"Начало: {_format_timestamp(report.started_at)}.",
+        f"Конец: {_format_timestamp(report.finished_at)}.",
+        f"Всего: {_format_duration(report.total_seconds)}.",
+        "",
+    ]
+    for index, segment in enumerate(report.segments, start=1):
+        lines.extend(
+            [
+                f"{index}. {segment.title}",
+                "",
+                f"Время: {_format_duration(segment.duration_seconds)}, {_format_time_range(segment.started_at, segment.finished_at)}.",
+                f"На что ушло: {segment.description}",
+                "Лог:",
+            ]
+        )
+        if segment.evidence:
+            lines.extend(_evidence_short_line(item) for item in segment.evidence)
+        else:
+            lines.append("evidence не найден")
+        lines.append("")
+    lines.append("Итог")
+    lines.append("")
+    lines.extend(report.summary or ["Недостаточно фактов для итоговых расчётов."])
+    return "\n".join(lines).strip()
+
+
+def _device_boot_report_payload(report: DeviceBootReport) -> dict[str, object]:
+    return {
+        "title": report.title,
+        "validator_serial": report.validator_serial,
+        "route": report.route,
+        "validator_version": report.validator_version,
+        "bm_version": report.bm_version,
+        "reader_type": report.reader_type,
+        "started_at": report.started_at.isoformat(sep=" ") if report.started_at else None,
+        "finished_at": report.finished_at.isoformat(sep=" ") if report.finished_at else None,
+        "total_seconds": report.total_seconds,
+        "source_files": report.source_files,
+        "summary": report.summary,
+        "segments": [_device_boot_segment_payload(item) for item in report.segments],
+    }
+
+
+def _device_boot_segment_payload(segment: DeviceBootSegment) -> dict[str, object]:
+    return {
+        "title": segment.title,
+        "description": segment.description,
+        "started_at": segment.started_at.isoformat(sep=" ") if segment.started_at else None,
+        "finished_at": segment.finished_at.isoformat(sep=" ") if segment.finished_at else None,
+        "duration_seconds": segment.duration_seconds,
+        "evidence": [_device_boot_evidence_payload(item) for item in segment.evidence],
+    }
+
+
+def _device_boot_evidence_payload(evidence: DeviceBootEvidence) -> dict[str, object]:
+    return {
+        "source_file": evidence.source_file,
+        "line_number": evidence.line_number,
+        "timestamp": evidence.timestamp.isoformat(sep=" ") if evidence.timestamp else None,
+        "label": evidence.label,
+        "raw_line": evidence.raw_line,
+    }
+
+
+def _format_timestamp(value: datetime | None) -> str:
+    if value is None:
+        return "не найдено"
+    return value.strftime("%H:%M:%S.%f").rstrip("0").rstrip(".")
+
+
+def _format_time_range(started_at: datetime | None, finished_at: datetime | None) -> str:
+    if started_at is None or finished_at is None:
+        return "не рассчитано"
+    return f"{_format_timestamp(started_at)}-{_format_timestamp(finished_at)}"
+
+
+def _format_duration(value: float | None) -> str:
+    if value is None:
+        return "не рассчитано"
+    return f"{value:.3f}".replace(".", ",") + " секунды"
+
+
+def _evidence_short_line(evidence: DeviceBootEvidence) -> str:
+    prefix = _format_timestamp(evidence.timestamp)
+    if prefix == "не найдено":
+        return evidence.raw_line
+    return f"[{prefix}] {evidence.raw_line.split('] ', 1)[-1]}"
 
 
 def _unmatched_check_reason(check: CheckCase, events: list[PaymentEvent]) -> str:
@@ -3018,6 +3225,15 @@ h1, h2, p { margin: 0; }
 .status-table--checks { table-layout: fixed; }
 .status-table--checks th, .status-table--checks td { padding: 8px 9px; }
 .status-table--checks td:nth-child(5), .status-table--checks th:nth-child(5) { white-space: pre-wrap; overflow-wrap: anywhere; }
+.device-boot-report + .device-boot-report { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
+.device-boot-head h3 { margin: 0 0 4px; font-size: 16px; }
+.device-boot-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 12px 0; }
+.device-boot-fact { background: var(--soft); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+.device-boot-fact span { display: block; color: var(--muted); font-size: 12px; }
+.device-boot-fact strong { display: block; margin-top: 3px; font-size: 15px; line-height: 1.25; overflow-wrap: anywhere; }
+.status-table--device-boot { table-layout: fixed; }
+.status-table--device-boot code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.device-boot-text { margin: 8px 0 0; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: #f8fafc; color: #1f2933; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .status-row--check-critical td { color: #b42318; }
 .status-row--check-warning td { color: #9a6700; }
 .status-row--check-info td { color: #111827; }

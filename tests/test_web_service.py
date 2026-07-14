@@ -3,6 +3,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from core.version import __version__
 from web.app import _index_html, create_app
 from web.auth import DEFAULT_ADMIN_EMAIL, DEFAULT_ADMIN_PASSWORD, record_auth_event
 from web.history import list_history, load_history_run, record_history
@@ -109,7 +110,7 @@ def test_login_page_contains_version_and_signature(tmp_path, monkeypatch):
     response = client.get("/login")
 
     assert response.status_code == 200
-    assert "версия сервиса 1.6.20" in response.text
+    assert f"версия сервиса {__version__}" in response.text
     assert 'class="brand"' in response.text
     assert "made with ♥ by Roman A. Proskurnin" in response.text
 
@@ -441,7 +442,7 @@ def test_web_index_contains_upload_landing():
     html = _index_html()
 
     assert "BM Log Analyzer" in html
-    assert "версия сервиса 1.6.20" in html
+    assert f"версия сервиса {__version__}" in html
     assert "picker_menu" not in html
     assert "Выбрать файлы</button>" not in html
     assert "Выбрать папку</button>" not in html
@@ -479,7 +480,7 @@ def test_uploads_page_contains_table_and_actions():
     assert response.status_code == 200
     html = response.text
     assert "Загрузки" in html
-    assert "<strong>BM Log Analyzer</strong><span>версия сервиса 1.6.20</span>" in html
+    assert f"<strong>BM Log Analyzer</strong><span>версия сервиса {__version__}</span>" in html
     assert "BM Log Analyzer ·" not in html
     assert "Сформировать отчёт по выбранным" in html
     assert "Дата загрузки (Мск)" in html
@@ -750,6 +751,7 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
         "validation_checks",
         "protocol_scenarios",
         "protocol_scenario_results",
+        "device_boot_speed",
     ]
     stable_sections = report_manifest.json()["stable_sections"]
     assert "summary" in stable_sections
