@@ -461,14 +461,20 @@ def test_web_index_contains_upload_landing():
     assert "data-remove-file-key" in html
     assert "selection-remove" in html
     assert "renderUploadComplete" in html
+    assert "pollUploadReports" in html
+    assert "renderUploadReportStatus" in html
+    assert "Отчёт формируется" in html
+    assert "Открыть отчёт" in html
     assert "Отчёт" in html
     assert "Перейти в загрузки" in html
     assert "safeReportUrl" in html
     assert 'id="message_actions"' in html
     assert ".message-actions { display: none; grid-template-columns: repeat(2, minmax(0, 1fr));" in html
+    assert ".upload-status-list" in html
     assert "message.textContent = uploadMessage(summary, clientRejectedCount);" in html
     assert "messageActions.dataset.visible = actions ? 'true' : 'false';" in html
-    assert "message.innerHTML = `<div>${escapeHtml(uploadMessage" not in html
+    assert "message.innerHTML = `<div>${escapeHtml(uploadMessage" in html
+    assert "fetch('/api/uploads?limit=200')" in html
     assert "Последние сессии" not in html
 
 

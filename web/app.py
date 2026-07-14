@@ -2667,6 +2667,8 @@ def _landing_html(user=None) -> str:
       .message-actions[data-visible="true"] { display: grid; }
       .message-action { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; border-radius: 12px; padding: 10px 14px; background: #2f6fd1; color: #fff; font-weight: 700; box-shadow: 0 10px 22px rgba(47, 111, 209, .18); }
       .message-action--secondary { background: #ffffff; color: #2457a6; border: 1px solid #c8d9f0; box-shadow: 0 8px 18px rgba(36, 87, 166, .08); }
+      .upload-status-list { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 4px; }
+      .upload-status-list a { font-weight: 700; }
       @media (max-width: 520px) { .message-actions { grid-template-columns: 1fr; } }
       .signature { color: var(--muted); font-size: 12px; }
       .hint { color: var(--muted); font-size: 12px; text-align: left; }
@@ -2855,6 +2857,84 @@ def _landing_html(user=None) -> str:
         messageActions.dataset.visible = actions ? 'true' : 'false';
       }
 
+      function uploadReportStatusText(item) {
+        const status = String(item.status || '').toLowerCase();
+        if (safeReportUrl(item.report_url)) {
+          return 'отчёт готов';
+        }
+        if (status === 'failed' || status === 'error') {
+          return item.status_message || 'ошибка формирования отчёта';
+        }
+        return item.status_message || 'отчёт формируется';
+      }
+
+      function renderUploadReportStatus(summary, clientRejectedCount, items) {
+        const rows = items.map((item) => {
+          const name = escapeHtml(item.original_name || 'загрузка');
+          const reportUrl = safeReportUrl(item.report_url);
+          const statusText = escapeHtml(uploadReportStatusText(item));
+          const suffix = reportUrl
+            ? ` — <a href="${escapeHtml(reportUrl)}">открыть отчёт</a>`
+            : ` — ${statusText}`;
+          return `<li>${name}${suffix}</li>`;
+        }).join('');
+        message.innerHTML = `<div>${escapeHtml(uploadMessage(summary, clientRejectedCount))}</div><ul class="upload-status-list">${rows}</ul>`;
+      }
+
+      function renderUploadReportActions(items) {
+        const readyItems = items.filter((item) => safeReportUrl(item.report_url));
+        const firstReportUrl = readyItems.length === 1 ? safeReportUrl(readyItems[0].report_url) : '';
+        const actions = [
+          firstReportUrl ? `<a class="message-action" href="${escapeHtml(firstReportUrl)}">Открыть отчёт</a>` : '',
+          '<a class="message-action message-action--secondary" href="/uploads">Перейти в загрузки</a>',
+        ].filter(Boolean).join('');
+        messageActions.innerHTML = actions;
+        messageActions.dataset.visible = actions ? 'true' : 'false';
+      }
+
+      async function pollUploadReports(uploadIds, summary, clientRejectedCount, attempt = 0) {
+        if (!uploadIds.length) {
+          renderUploadComplete(summary, clientRejectedCount, '');
+          return;
+        }
+        const response = await fetch('/api/uploads?limit=200');
+        const payload = await readJsonResponse(response);
+        if (!response.ok) {
+          throw new Error(payload?.detail || payload?.message || 'Не удалось обновить статус отчёта.');
+        }
+        const allItems = Array.isArray(payload) ? payload : (payload.items || []);
+        const items = uploadIds
+          .map((uploadId) => allItems.find((item) => item.upload_id === uploadId))
+          .filter(Boolean);
+        if (!items.length) {
+          throw new Error('Загруженные файлы не найдены в истории.');
+        }
+        const readyItems = items.filter((item) => safeReportUrl(item.report_url));
+        const failedItems = items.filter((item) => ['failed', 'error'].includes(String(item.status || '').toLowerCase()));
+        renderUploadReportStatus(summary, clientRejectedCount, items);
+        renderUploadReportActions(items);
+        if (readyItems.length === items.length) {
+          setProgress(100, readyItems.length === 1 ? 'Отчёт готов.' : `Готово отчётов: ${readyItems.length} из ${items.length}.`);
+          return;
+        }
+        if (failedItems.length) {
+          setProgress(100, `Отчёты готовы не для всех загрузок: ${readyItems.length} из ${items.length}.`);
+          return;
+        }
+        if (attempt >= 120) {
+          setProgress(100, 'Отчёт ещё формируется. Проверьте готовность в истории загрузок.');
+          return;
+        }
+        const progress = Math.min(95, 75 + attempt);
+        setProgress(progress, `Отчёт формируется: готово ${readyItems.length} из ${items.length}.`);
+        window.setTimeout(() => {
+          pollUploadReports(uploadIds, summary, clientRejectedCount, attempt + 1).catch((error) => {
+            message.textContent = error instanceof Error ? error.message : String(error);
+            renderUploadReportActions(items);
+          });
+        }, 3000);
+      }
+
       function clearUploadActions() {
         messageActions.innerHTML = '';
         messageActions.dataset.visible = 'false';
@@ -2983,13 +3063,19 @@ def _landing_html(user=None) -> str:
           const responsePromise = fetch('/api/uploads/store', { method: 'POST', body: formData });
           setProgress(70, 'Загрузка завершена. Идёт обработка архива...');
           const response = await responsePromise;
-          setProgress(100, 'Сессия загрузки завершена.');
+          setProgress(80, 'Файлы приняты. Отчёт формируется...');
           const data = await readJsonResponse(response);
           if (!response.ok) {
             throw new Error(data?.detail || data?.message || 'Не удалось загрузить файлы.');
           }
           const summary = data.summary || {};
+          const uploadIds = (data.items || []).map((item) => item.upload_id).filter(Boolean);
           renderUploadComplete(summary, rejectedFiles.size, data.report_url);
+          pollUploadReports(uploadIds, summary, rejectedFiles.size).catch((error) => {
+            message.textContent = error instanceof Error ? error.message : String(error);
+            messageActions.innerHTML = '<a class="message-action message-action--secondary" href="/uploads">Перейти в загрузки</a>';
+            messageActions.dataset.visible = 'true';
+          });
           preparedFiles.clear();
           rejectedFiles.clear();
           updateSelectionSummary();
