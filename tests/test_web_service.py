@@ -761,6 +761,7 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
         "protocol_scenarios",
         "protocol_scenario_results",
         "device_boot_speed",
+        "section_sources",
     ]
     stable_sections = report_manifest.json()["stable_sections"]
     assert "summary" in stable_sections
@@ -771,6 +772,7 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
     assert "validator_analytics" in stable_sections
     assert "log_files" not in stable_sections
     assert "other_files" not in stable_sections
+    assert report_manifest.json()["section_sources"]["bm_statuses"]["status"] == "available"
 
     run_detail = client.get(f"/api/runs/{run_id}")
     assert run_detail.status_code == 200

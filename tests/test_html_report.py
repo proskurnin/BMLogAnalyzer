@@ -18,6 +18,13 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
         analyzed_files=["input/bm.log", "input/reader.log", "input/system.log", "input/other.log"],
         log_inventory=[
             LogFileInventory(
+                source_file="_workdir/extracted/2007201.zip/bm/logs/bm/a.log",
+                log_type="bm",
+                detection_method="content",
+                evidence="content:payment_start",
+                bm_versions=["4.4.12"],
+            ),
+            LogFileInventory(
                 source_file="_workdir/extracted/2007201.zip/logs/reader/reader.log",
                 log_type="reader",
                 detection_method="content",
@@ -146,6 +153,8 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert "source_quotes" in manifest
     assert "validation_check_catalog" in manifest
     assert "data-format=\"records\"" in html
+    assert "Источник данных: БМ." in html
+    assert '"section_sources": {' in manifest
     assert "data-kind=\"status\"" in html
     assert "data-kind=\"group\"" in html
     assert "data-meta-kind=\"versions\"" in html
@@ -250,6 +259,7 @@ def test_html_report_hides_empty_sections(tmp_path):
     assert "suspicious" not in manifest["stable_sections"]
     assert "validation_checks" in manifest["stable_sections"]
     assert "unclassified_diagnostics" not in manifest["stable_sections"]
+    assert manifest["section_sources"]["bm_statuses"]["status"] == "available"
 
 
 def test_writes_upload_composition_in_report_header_and_manifest(tmp_path):
@@ -294,6 +304,7 @@ def test_writes_upload_composition_in_report_header_and_manifest(tmp_path):
     assert "upload_composition" in manifest["stable_sections"]
     assert manifest["upload_composition"][0]["summary_text"] == expected_text
     assert manifest["upload_composition"][0]["log_types"] == ["bm", "stopper", "oti_reader_library", "validator_app"]
+    assert manifest["section_sources"]["upload_composition"]["data_source"] == "загруженные файлы"
 
 
 def test_html_report_shows_non_emv_card_status_and_zero_row_toggle(tmp_path):

@@ -28,6 +28,7 @@ from core.models import (
     PipelineStats,
 )
 from core.version import __version__
+from reports.section_registry import build_section_sources
 
 LOG_GROUP_SPECS: list[tuple[str, set[str]]] = [
     ("BM logs", {"BM rotate", "BM stdout"}),
@@ -100,6 +101,7 @@ def render_html_report(
     protocol_results = run_protocol_scenarios(events, scenarios=protocol_scenarios)
     date_chart = _bm_date_chart(events)
     unclassified_diag = _unclassified_diagnostics(events)
+    section_sources = build_section_sources(stats, events)
     report_data = _report_data(
         events,
         archive_names,
@@ -172,6 +174,7 @@ def render_html_report(
         '<section class="section section--bm-meta">',
         '<div class="section-title">',
         "<h2>BM сведения</h2>",
+        _section_source_note(section_sources, "bm_meta"),
         "</div>",
         _bm_meta_grid(bm_meta_cards),
     ]
@@ -189,7 +192,7 @@ def render_html_report(
                 '<section class="section section--chart">',
                 '<div class="section-title">',
                 "<h2>Log-файлы</h2>",
-                "<p>Кликабельная сводка по типам логов в архивах.</p>",
+                f"<p>Кликабельная сводка по типам логов в архивах. {escape(_section_source_text(section_sources, 'log_files'))}</p>",
                 "</div>",
                 f'<div id="log-files-root">{_bar_chart(log_groups, log_total)}</div>',
                 "</section>",
@@ -197,14 +200,26 @@ def render_html_report(
         )
     body_parts.extend(
         [
-            _collapsible_other_section(other_groups, other_total),
+            _collapsible_other_section(other_groups, other_total, _section_source_text(section_sources, "other_files")),
             f'<script id="report-data" type="application/json">{_json_script(report_data)}</script>',
-            _check_results_section(check_results, check_cases, events),
-            _suspicious_section(suspicious_rows) if suspicious_rows else "",
-            _protocol_scenario_results_section(protocol_results, protocol_scenarios),
-            _device_boot_speed_section(device_boot_reports),
-            _bm_status_section(events, bm_group_rows, bm_group_payloads, date_chart, unclassified_diag, archive_names),
-            _validator_section(validator_sections),
+            _check_results_section(check_results, check_cases, events, _section_source_text(section_sources, "validation_checks")),
+            _suspicious_section(suspicious_rows, _section_source_text(section_sources, "suspicious")) if suspicious_rows else "",
+            _protocol_scenario_results_section(
+                protocol_results,
+                protocol_scenarios,
+                _section_source_text(section_sources, "protocol_scenarios"),
+            ),
+            _device_boot_speed_section(device_boot_reports, _section_source_text(section_sources, "device_boot_speed")),
+            _bm_status_section(
+                events,
+                bm_group_rows,
+                bm_group_payloads,
+                date_chart,
+                unclassified_diag,
+                archive_names,
+                _section_source_text(section_sources, "bm_statuses"),
+            ),
+            _validator_section(validator_sections, _section_source_text(section_sources, "validator_analytics")),
             _modal(),
             _script(),
             "</main>",
@@ -265,6 +280,7 @@ def render_html_report_manifest(
         stable_sections.insert(insert_at, "device_boot_speed")
     if unclassified_total := sum(int(row.get("count", 0)) for row in _unclassified_diagnostics(events)):
         stable_sections.insert(-1, "unclassified_diagnostics")
+    section_sources = build_section_sources(stats, events, stable_sections)
     return {
         "schema_version": REPORT_MANIFEST_SCHEMA_VERSION,
         "report_type": "analysis_report",
@@ -291,6 +307,7 @@ def render_html_report_manifest(
             "protocol_scenarios",
             "protocol_scenario_results",
             "device_boot_speed",
+            "section_sources",
         ],
         "stable_sections": stable_sections,
         "counts": {
@@ -324,7 +341,20 @@ def render_html_report_manifest(
         "validation_checks": [_check_result_payload(item) for item in check_results],
         "protocol_scenario_results": [_protocol_scenario_result_payload(item) for item in protocol_results],
         "device_boot_speed": [_device_boot_report_payload(item) for item in device_boot_reports],
+        "section_sources": section_sources,
     }
+
+
+def _section_source_text(section_sources: dict[str, dict[str, object]], section_id: str) -> str:
+    payload = section_sources.get(section_id) or {}
+    return str(payload.get("note") or "")
+
+
+def _section_source_note(section_sources: dict[str, dict[str, object]], section_id: str) -> str:
+    note = _section_source_text(section_sources, section_id)
+    if not note:
+        return ""
+    return f'<p class="section-source">{escape(note)}</p>'
 
 
 def _metric_card(
@@ -563,7 +593,7 @@ def _summary_cards(
     return "".join(cards)
 
 
-def _collapsible_other_section(other_groups: list[dict[str, object]], other_total: int) -> str:
+def _collapsible_other_section(other_groups: list[dict[str, object]], other_total: int, source_note: str = "") -> str:
     if other_total == 0:
         return ""
     return "\n".join(
@@ -572,7 +602,7 @@ def _collapsible_other_section(other_groups: list[dict[str, object]], other_tota
             "<summary>",
             "<span>",
             "<strong>Прочие файлы</strong>",
-            "<em>Файлы, которые не относятся к логам.</em>",
+            f"<em>Файлы, которые не относятся к логам. {escape(source_note)}</em>",
             "</span>",
             f"<strong>{other_total}</strong>",
             "</summary>",
@@ -584,7 +614,7 @@ def _collapsible_other_section(other_groups: list[dict[str, object]], other_tota
     )
 
 
-def _suspicious_section(rows: list[dict[str, object]]) -> str:
+def _suspicious_section(rows: list[dict[str, object]], source_note: str = "") -> str:
     if not rows:
         return ""
     rendered_rows = []
@@ -618,7 +648,7 @@ def _suspicious_section(rows: list[dict[str, object]]) -> str:
             "<summary>",
             "<span>",
             "<strong>Подозрительно</strong>",
-            f"<em>Найдено строк: {len(rows)}. Baseline строится по успешным PaymentStart resp с Code:0.</em>",
+            f"<em>Найдено строк: {len(rows)}. Baseline строится по успешным PaymentStart resp с Code:0. {escape(source_note)}</em>",
             "</span>",
             "</summary>",
             '<div class="collapsible-body">',
@@ -629,7 +659,12 @@ def _suspicious_section(rows: list[dict[str, object]]) -> str:
     )
 
 
-def _check_results_section(results: list[CheckResult], checks: list[CheckCase], events: list[PaymentEvent]) -> str:
+def _check_results_section(
+    results: list[CheckResult],
+    checks: list[CheckCase],
+    events: list[PaymentEvent],
+    source_note: str = "",
+) -> str:
     if not checks:
         return ""
     matched_check_ids = {result.check_id for result in results}
@@ -709,7 +744,7 @@ def _check_results_section(results: list[CheckResult], checks: list[CheckCase], 
             "<summary>",
             "<span>",
             "<strong>Проверки</strong>",
-            f"<em>Сработало правил: {len(matched_check_ids)} из {active_check_count}. {summary_text}</em>",
+            f"<em>Сработало правил: {len(matched_check_ids)} из {active_check_count}. {summary_text}. {escape(source_note)}</em>",
             "</span>",
             "</summary>",
             '<div class="collapsible-body">',
@@ -721,7 +756,7 @@ def _check_results_section(results: list[CheckResult], checks: list[CheckCase], 
     )
 
 
-def _protocol_scenario_results_section(results, scenarios) -> str:
+def _protocol_scenario_results_section(results, scenarios, source_note: str = "") -> str:
     if not scenarios:
         return ""
     matched_ids = {result.scenario_id for result in results}
@@ -799,7 +834,7 @@ def _protocol_scenario_results_section(results, scenarios) -> str:
             "<summary>",
             "<span>",
             "<strong>Сценарии из протокола взаимодействия</strong>",
-            f"<em>Активных сценариев: {len(scenarios)}. Сработало: {len(matched_ids)}.</em>",
+            f"<em>Активных сценариев: {len(scenarios)}. Сработало: {len(matched_ids)}. {escape(source_note)}</em>",
             "</span>",
             "</summary>",
             '<div class="collapsible-body">',
@@ -811,7 +846,7 @@ def _protocol_scenario_results_section(results, scenarios) -> str:
     )
 
 
-def _device_boot_speed_section(reports: list[DeviceBootReport]) -> str:
+def _device_boot_speed_section(reports: list[DeviceBootReport], source_note: str = "") -> str:
     if not reports:
         return ""
     rendered_reports = []
@@ -835,7 +870,7 @@ def _device_boot_speed_section(reports: list[DeviceBootReport]) -> str:
             "<summary>",
             "<span>",
             "<strong>Скорость загрузки устройства</strong>",
-            f"<em>{escape(summary)} Факты рассчитаны по строкам ПО валидатора и BM.</em>",
+            f"<em>{escape(summary)} Факты рассчитаны по строкам ПО валидатора и BM. {escape(source_note)}</em>",
             "</span>",
             "</summary>",
             '<div class="collapsible-body">',
@@ -1199,6 +1234,7 @@ def _bm_status_section(
     date_chart: str,
     unclassified_diag: list[dict[str, object]],
     archive_names: set[str],
+    source_note: str = "",
 ) -> str:
     summary_rows = bm_status_summary_rows(events)
     payloads = _status_payloads(events, archive_names)
@@ -1255,7 +1291,7 @@ def _bm_status_section(
             '<section class="section section--bm">',
             '<div class="section-title">',
             "<h2>BM-статусы</h2>",
-            "<p>Строки таблицы можно открыть по клику.</p>",
+            f"<p>Строки таблицы можно открыть по клику. {escape(source_note)}</p>",
             "</div>",
             '<div id="bm-status-table-root">' + table + "</div>",
             '<div class="section-title section-title--compact">',
@@ -1803,7 +1839,7 @@ def _collapsible_unclassified_section(rows: list[dict[str, object]]) -> str:
     )
 
 
-def _validator_section(groups: list[dict[str, object]]) -> str:
+def _validator_section(groups: list[dict[str, object]], source_note: str = "") -> str:
     if not groups:
         content = '<p class="muted">Нет данных по валидаторам.</p>'
     else:
@@ -1861,7 +1897,7 @@ def _validator_section(groups: list[dict[str, object]]) -> str:
             "<summary>",
             "<span>",
             "<strong>Аналитика по валидаторам</strong>",
-            "<em>Версии BM, даты и два ключевых отказа по каждому архиву</em>",
+            f"<em>Версии BM, даты и два ключевых отказа по каждому архиву. {escape(source_note)}</em>",
             "</span>",
             "</summary>",
             '<div class="collapsible-body">',
@@ -3150,6 +3186,7 @@ h1, h2, p { margin: 0; }
 .section-title--compact { margin: 14px 0 10px; }
 .section-title--compact h3 { font-size: 15px; line-height: 1.2; color: var(--muted); }
 .section-title p, .muted { color: var(--muted); }
+.section-source { font-size: 12px; text-align: right; }
 .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
 .metric, .bm-meta-card { background: var(--soft); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
 .metric--button { width: 100%; color: inherit; text-align: left; cursor: pointer; appearance: none; font: inherit; }
