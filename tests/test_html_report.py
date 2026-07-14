@@ -3,7 +3,7 @@ from dataclasses import replace
 import json
 
 from analytics.counters import analyze_events
-from core.models import ArchiveInventoryRow, InputSourceSummary, LogFileInventory, PipelineStats
+from core.models import ArchiveInventoryRow, DeviceBootEvidence, DeviceBootReport, DeviceBootSegment, InputSourceSummary, LogFileInventory, PipelineStats
 from core.version import __version__
 from reports.html_report import write_html_report
 from tests.test_counters import make_event
@@ -254,6 +254,202 @@ def test_html_report_does_not_detect_carrier_from_message_text(tmp_path):
     html = (tmp_path / "analysis_report.html").read_text(encoding="utf-8")
     report_data = json.loads(html.split('<script id="report-data" type="application/json">', 1)[1].split("</script>", 1)[0])
     assert report_data["events"][0]["carriers"] == ["АСКП"]
+
+
+def test_html_report_uses_device_boot_facts_instead_of_bm_package_platform(tmp_path):
+    event = replace(
+        make_event(0, 250, "4.5.13"),
+        package="mgt_nbs-tt-4.5.13",
+        platform="tt",
+        bm_type="tt",
+        reader_type=None,
+        raw_line='time="2026-07-13 12:00:00.000" level=info msg="PaymentStart, resp: {Code:0 MessageRus:OK} p: mgt_nbs-tt-4.5.13"',
+    )
+    reader_evidence = DeviceBootEvidence(
+        source_file="_workdir/extracted/LOGS-20260713120204-59757.log.zip/validator.log",
+        line_number=42,
+        timestamp=datetime(2026, 7, 13, 12, 2, 13),
+        label="reader_open_success",
+        raw_line="[2026-Jul-13 12:02:13.057526] (info) [reader_poll::initReader()] [READER] [OTI] [initReader] Open reader SUCCESS",
+    )
+    stats = PipelineStats(
+        scanned_lines=1,
+        malformed_payment_lines=0,
+        extracted_files=1,
+        input_files=["input/13-07-2026.zip"],
+        device_boot_reports=[
+            DeviceBootReport(
+                title="АСКП_59757. Запуск 13.07.2026 в 12:02:04",
+                validator_serial="59757",
+                route="1469",
+                validator_version="1.13.53.0",
+                bm_version="4.5.13",
+                reader_type="OTI",
+                started_at=datetime(2026, 7, 13, 12, 2, 4),
+                finished_at=datetime(2026, 7, 13, 12, 4, 0),
+                total_seconds=116.0,
+                segments=[
+                    DeviceBootSegment(
+                        title="АСКП. Сеть и ридер OTI",
+                        description="Подключение socket и старт ридера.",
+                        started_at=datetime(2026, 7, 13, 12, 2, 10),
+                        finished_at=datetime(2026, 7, 13, 12, 2, 13),
+                        duration_seconds=3.0,
+                        evidence=[reader_evidence],
+                    )
+                ],
+                source_files=[reader_evidence.source_file],
+            )
+        ],
+    )
+
+    write_html_report([event], analyze_events([event]), tmp_path / "analysis_report.html", stats=stats)
+
+    html = (tmp_path / "analysis_report.html").read_text(encoding="utf-8")
+    ai_context = json.loads((tmp_path / "analysis_report.ai_context.json").read_text(encoding="utf-8"))
+    report_data = json.loads(html.split('<script id="report-data" type="application/json">', 1)[1].split("</script>", 1)[0])
+    assert report_data["events"][0]["reader"] == "ОТИ"
+    assert report_data["events"][0]["carriers"] == ["АСКП"]
+    assert report_data["meta"]["carriers"][0]["carrier"] == "АСКП"
+    assert report_data["meta"]["carriers"][0]["count"] == 1
+    assert "НБС" not in {item["carrier"] for item in report_data["meta"]["carriers"]}
+    assert report_data["meta"]["readers"][0]["reader"] == "ОТИ"
+    assert report_data["meta"]["readers"][0]["count"] == 1
+    assert report_data["meta"]["readers"][0]["evidence"][0]["raw_line"] == reader_evidence.raw_line
+    assert "ТТ" not in {item["reader"] for item in report_data["meta"]["readers"]}
+    assert ai_context["summary"]["physical_carriers"] == {"АСКП": 1}
+    assert ai_context["summary"]["physical_reader_types"] == {"OTI": 1}
+    assert ai_context["summary"]["package_reader_types"] == {"TT": 1}
+
+
+def test_html_report_uses_bm_package_reader_as_fallback_without_device_boot(tmp_path):
+    oti_event = replace(
+        make_event(0, 250, "4.4.7"),
+        source_file="_workdir/extracted/1000001_logs.zip/1000001_logs/bm.log",
+        package="mgt_nbs-oti-4.4.7",
+        platform="oti",
+        bm_type="oti",
+        reader_type=None,
+        raw_line='time="2026-05-25 07:12:19.589" level=info msg="PaymentStart, resp: {Code:0 MessageRus:OK} rid: 991000001, p: mgt_nbs-oti-4.4.7"',
+    )
+    tt_event = replace(
+        make_event(0, 250, "4.4.7"),
+        source_file="_workdir/extracted/1000002_logs.zip/1000002_logs/bm.log",
+        package="mgt_nbs-tt-4.4.7",
+        platform="tt",
+        bm_type="tt",
+        reader_type=None,
+        raw_line='time="2026-05-25 07:12:20.000" level=info msg="PaymentStart, resp: {Code:0 MessageRus:OK} rid: 991000002, p: mgt_nbs-tt-4.4.7"',
+    )
+
+    write_html_report([oti_event, tt_event], analyze_events([oti_event, tt_event]), tmp_path / "analysis_report.html")
+
+    html = (tmp_path / "analysis_report.html").read_text(encoding="utf-8")
+    ai_context = json.loads((tmp_path / "analysis_report.ai_context.json").read_text(encoding="utf-8"))
+    report_data = json.loads(html.split('<script id="report-data" type="application/json">', 1)[1].split("</script>", 1)[0])
+    assert [item["reader"] for item in report_data["meta"]["readers"]] == ["ОТИ", "ТТ"]
+    assert report_data["events"][0]["reader"] == "ОТИ"
+    assert report_data["events"][1]["reader"] == "ТТ"
+    assert ai_context["summary"]["physical_reader_types"] == {}
+    assert ai_context["summary"]["package_reader_types"] == {"OTI": 1, "TT": 1}
+
+
+def test_html_report_does_not_choose_reader_from_conflicting_packages_for_one_device(tmp_path):
+    oti_event = replace(
+        make_event(0, 250, "4.4.7"),
+        source_file="_workdir/extracted/1000001_logs.zip/1000001_logs/bm.log",
+        package="mgt_nbs-oti-4.4.7",
+        platform="oti",
+        bm_type="oti",
+        reader_type=None,
+        raw_line='time="2026-05-25 07:12:19.589" level=info msg="PaymentStart, resp: {Code:0 MessageRus:OK} rid: 991000001, p: mgt_nbs-oti-4.4.7"',
+    )
+    tt_event = replace(
+        make_event(0, 250, "4.4.7"),
+        source_file="_workdir/extracted/1000001_logs.zip/1000001_logs/bm.log",
+        package="mgt_nbs-tt-4.4.7",
+        platform="tt",
+        bm_type="tt",
+        reader_type=None,
+        raw_line='time="2026-05-25 07:12:20.000" level=info msg="PaymentStart, resp: {Code:0 MessageRus:OK} rid: 991000001, p: mgt_nbs-tt-4.4.7"',
+    )
+
+    write_html_report([oti_event, tt_event], analyze_events([oti_event, tt_event]), tmp_path / "analysis_report.html")
+
+    html = (tmp_path / "analysis_report.html").read_text(encoding="utf-8")
+    report_data = json.loads(html.split('<script id="report-data" type="application/json">', 1)[1].split("</script>", 1)[0])
+    assert report_data["meta"]["readers"] == []
+    assert report_data["events"][0]["reader"] == ""
+    assert report_data["events"][1]["reader"] == ""
+
+
+def test_html_report_allows_different_readers_for_different_devices_in_one_archive(tmp_path):
+    boot_event = replace(
+        make_event(0, 250, "4.5.13"),
+        package="mgt_nbs-tt-4.5.13",
+        platform="tt",
+        bm_type="tt",
+        reader_type=None,
+        raw_line='time="2026-07-13 12:00:00.000" level=info msg="PaymentStart, resp: {Code:0 MessageRus:OK} p: mgt_nbs-tt-4.5.13"',
+    )
+    other_device_event = replace(
+        make_event(0, 250, "4.5.13"),
+        package="mgt_nbs-tt-4.5.13",
+        platform="tt",
+        bm_type="tt",
+        reader_type=None,
+        raw_line='time="2026-07-13 11:15:28.117" level=trace msg="log_mgt_send req: {\\"serial_number\\":\\"1847384\\",\\"message\\":\\"PaymentStart, resp: {Code:0 MessageRus:OK} p: mgt_nbs-tt-4.5.13\\"}"',
+    )
+    reader_evidence = DeviceBootEvidence(
+        source_file="_workdir/extracted/LOGS-20260713120204-59757.log.zip/validator.log",
+        line_number=42,
+        timestamp=datetime(2026, 7, 13, 12, 2, 13),
+        label="reader_open_success",
+        raw_line="[2026-Jul-13 12:02:13.057526] (info) [reader_poll::initReader()] [READER] [OTI] [initReader] Open reader SUCCESS",
+    )
+    stats = PipelineStats(
+        scanned_lines=2,
+        malformed_payment_lines=0,
+        extracted_files=1,
+        input_files=["input/mixed.zip"],
+        device_boot_reports=[
+            DeviceBootReport(
+                title="АСКП_59757. Запуск 13.07.2026 в 12:02:04",
+                validator_serial="59757",
+                route="1469",
+                validator_version="1.13.53.0",
+                bm_version="4.5.13",
+                reader_type="OTI",
+                started_at=datetime(2026, 7, 13, 12, 2, 4),
+                finished_at=datetime(2026, 7, 13, 12, 4, 0),
+                total_seconds=116.0,
+                segments=[
+                    DeviceBootSegment(
+                        title="АСКП. Сеть и ридер OTI",
+                        description="Подключение socket и старт ридера.",
+                        started_at=datetime(2026, 7, 13, 12, 2, 10),
+                        finished_at=datetime(2026, 7, 13, 12, 2, 13),
+                        duration_seconds=3.0,
+                        evidence=[reader_evidence],
+                    )
+                ],
+                source_files=[reader_evidence.source_file],
+            )
+        ],
+    )
+
+    write_html_report(
+        [boot_event, other_device_event],
+        analyze_events([boot_event, other_device_event]),
+        tmp_path / "analysis_report.html",
+        stats=stats,
+    )
+
+    html = (tmp_path / "analysis_report.html").read_text(encoding="utf-8")
+    report_data = json.loads(html.split('<script id="report-data" type="application/json">', 1)[1].split("</script>", 1)[0])
+    assert [item["reader"] for item in report_data["meta"]["readers"]] == ["ОТИ", "ТТ"]
+    assert report_data["events"][0]["reader"] == "ОТИ"
+    assert report_data["events"][1]["reader"] == "ТТ"
 
 
 def test_html_report_hides_empty_sections(tmp_path):

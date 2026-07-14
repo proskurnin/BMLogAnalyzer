@@ -127,11 +127,15 @@ def render_html_report(
     archive_count = len(stats.input_files) if stats else 0
     bm_versions = _bm_versions(events)
     archive_names = _archive_name_set(stats.input_files if stats else [])
+    device_boot_reports = stats.device_boot_reports if stats else []
+    report_carriers = _report_carriers_from_device_boot(device_boot_reports)
+    reader_device_profiles = _reader_device_profiles(events, device_boot_reports)
+    event_reader_overrides = _event_reader_overrides(reader_device_profiles)
     bm_version_records = _bm_version_records(events, archive_names)
-    bm_carrier_records = _bm_carrier_records(events, archive_names)
-    bm_carriers = _bm_carriers(events)
-    bm_reader_records = _bm_reader_records(events, archive_names)
-    reader_types = _reader_types(events)
+    bm_carrier_records = _bm_carrier_records(events, archive_names, device_boot_reports)
+    bm_carriers = _bm_carriers(events, device_boot_reports)
+    bm_reader_records = _bm_reader_records(events, archive_names, device_boot_reports)
+    reader_types = _reader_types(events, device_boot_reports)
     log_inventory = stats.log_inventory if stats else []
     reader_firmware_records = _reader_firmware_records(events, archive_names, log_inventory)
     reader_firmwares = _reader_firmwares(events, log_inventory)
@@ -140,7 +144,6 @@ def render_html_report(
     bm_group_rows = _bm_status_groups(events)
     bm_group_payloads = _bm_group_payloads(events, archive_names)
     validator_sections = _validator_analytics(events, archive_names)
-    device_boot_reports = stats.device_boot_reports if stats else []
     suspicious_rows = suspicious_line_payloads(events)
     check_cases = [check for check in load_check_cases() if check.enabled]
     check_results = run_builtin_checks(events, checks=check_cases)
@@ -161,6 +164,8 @@ def render_html_report(
         bm_date_records=bm_date_records,
         validator_sections=validator_sections,
         protocol_results=protocol_results,
+        report_carriers=report_carriers,
+        event_reader_overrides=event_reader_overrides,
     )
 
     bm_meta_cards = _bm_meta_cards(
@@ -1737,12 +1742,17 @@ def _report_data(
     bm_date_records: list[dict[str, object]],
     validator_sections: list[dict[str, object]],
     protocol_results: list[object],
+    report_carriers: list[str] | None = None,
+    event_reader_overrides: dict[int, str] | None = None,
 ) -> dict[str, object]:
     event_rows = []
     carrier_rules = load_carrier_rules()
+    carrier_override = list(report_carriers or [])
+    reader_overrides = event_reader_overrides or {}
     reader_labels = {"OTI": "ОТИ", "TT": "ТТ"}
     for event in events:
         status = classify_bm_status(event)
+        reader_type = reader_overrides[id(event)] if id(event) in reader_overrides else _event_reader_type(event)
         event_rows.append(
             {
                 "archive": _archive_from_source(event.source_file, archive_names),
@@ -1751,8 +1761,8 @@ def _report_data(
                 "timestamp": event.timestamp.isoformat(sep=" ") if event.timestamp else "",
                 "date": event.timestamp.date().isoformat() if event.timestamp else "",
                 "version": event.bm_version or "",
-                "carriers": carrier_names_for_text(_carrier_search_text(event), carrier_rules),
-                "reader": reader_labels.get(event.reader_type or "", event.reader_type or ""),
+                "carriers": carrier_override or carrier_names_for_text(_carrier_search_text(event), carrier_rules),
+                "reader": reader_labels.get(reader_type, reader_type),
                 "reader_firmware": event.reader_firmware or "",
                 "status": status,
                 "group": _bm_group_label(status),
@@ -2164,7 +2174,18 @@ def _inventory_evidence_rows(item: object, key: str, archive_name: str) -> list[
     ]
 
 
-def _bm_carrier_records(events: list[PaymentEvent], archive_names: set[str]) -> list[dict[str, object]]:
+def _bm_carrier_records(
+    events: list[PaymentEvent],
+    archive_names: set[str],
+    device_boot_reports: list[DeviceBootReport] | None = None,
+) -> list[dict[str, object]]:
+    report_carriers = _report_carriers_from_device_boot(device_boot_reports)
+    if report_carriers:
+        return [
+            _report_carrier_record(carrier, events, archive_names, device_boot_reports or [])
+            for carrier in report_carriers
+        ]
+
     records: list[dict[str, object]] = []
     rules = load_carrier_rules()
     for rule in rules:
@@ -2174,15 +2195,157 @@ def _bm_carrier_records(events: list[PaymentEvent], archive_names: set[str]) -> 
     return records
 
 
-def _bm_reader_records(events: list[PaymentEvent], archive_names: set[str]) -> list[dict[str, object]]:
-    counts: dict[str, list[PaymentEvent]] = defaultdict(list)
+def _report_carrier_record(
+    carrier: str,
+    events: list[PaymentEvent],
+    archive_names: set[str],
+    device_boot_reports: list[DeviceBootReport],
+) -> dict[str, object]:
+    archives_by_name: dict[str, dict[str, object]] = defaultdict(lambda: {"archive": "", "count": 0})
     for event in events:
-        if event.reader_type:
-            counts[event.reader_type].append(event)
+        archive_name = _archive_from_source(event.source_file, archive_names)
+        item = archives_by_name[archive_name]
+        item["archive"] = archive_name
+        item["count"] = int(item["count"]) + 1
+
+    evidence_rows = _report_carrier_event_evidence(carrier, events, archive_names)
+    if not evidence_rows:
+        evidence_rows = _report_carrier_boot_evidence(carrier, device_boot_reports, archive_names)
+
+    return {
+        "carrier": carrier,
+        "count": len(events) if events else len(device_boot_reports),
+        "archives": [archives_by_name[archive] for archive in sorted(archives_by_name)],
+        "evidence": evidence_rows[:25],
+        "markers": _report_carrier_markers(carrier),
+    }
+
+
+def _report_carrier_event_evidence(
+    carrier: str,
+    events: list[PaymentEvent],
+    archive_names: set[str],
+) -> list[dict[str, object]]:
+    if carrier != "АСКП":
+        return []
+    evidence_rows = []
+    for event in events:
+        if "askp" not in _carrier_search_text(event):
+            continue
+        evidence_rows.append(_event_evidence_row(event, _archive_from_source(event.source_file, archive_names)))
+    return evidence_rows
+
+
+def _report_carrier_boot_evidence(
+    carrier: str,
+    device_boot_reports: list[DeviceBootReport],
+    archive_names: set[str],
+) -> list[dict[str, object]]:
+    evidence_rows = []
+    for report in device_boot_reports:
+        if carrier not in _report_carriers_from_device_boot([report]):
+            continue
+        for evidence in _all_device_boot_evidence(report):
+            evidence_rows.append(
+                {
+                    "archive": _archive_from_source(evidence.source_file, archive_names),
+                    "source_file": evidence.source_file,
+                    "line_number": evidence.line_number,
+                    "timestamp": evidence.timestamp.isoformat(sep=" ") if evidence.timestamp else "",
+                    "raw_line": evidence.raw_line,
+                }
+            )
+    return evidence_rows
+
+
+def _all_device_boot_evidence(report: DeviceBootReport) -> list[DeviceBootEvidence]:
+    return [evidence for segment in report.segments for evidence in segment.evidence]
+
+
+def _report_carrier_markers(carrier: str) -> list[str]:
+    if carrier == "АСКП":
+        return ["АСКП", "mgt_askp"]
+    return [carrier]
+
+
+def _bm_reader_records(
+    events: list[PaymentEvent],
+    archive_names: set[str],
+    device_boot_reports: list[DeviceBootReport] | None = None,
+) -> list[dict[str, object]]:
+    counts: dict[str, list[dict[str, object]]] = defaultdict(list)
+    for profile in _reader_device_profiles(events, device_boot_reports):
+        reader_type = str(profile.get("reader_type") or "")
+        if reader_type:
+            counts[reader_type].append(profile)
     return [
-        _bm_selectable_record("reader", {"OTI": "ОТИ", "TT": "ТТ"}.get(reader, reader), reader_events, archive_names)
-        for reader, reader_events in sorted(counts.items())
+        _device_reader_record({"OTI": "ОТИ", "TT": "ТТ"}.get(reader, reader), profiles, archive_names)
+        for reader, profiles in sorted(counts.items())
     ]
+
+
+def _device_reader_record(
+    reader: str,
+    profiles: list[dict[str, object]],
+    archive_names: set[str],
+) -> dict[str, object]:
+    archives_by_name: dict[str, dict[str, object]] = defaultdict(lambda: {"archive": "", "count": 0})
+    evidence_rows = []
+    count = 0
+    for profile in profiles:
+        profile_events = list(profile.get("events") or [])
+        profile_reports = list(profile.get("reports") or [])
+        count += len(profile_events) if profile_events else len(profile_reports)
+        if profile_events:
+            for event in profile_events:
+                archive_name = _archive_from_source(event.source_file, archive_names)
+                item = archives_by_name[archive_name]
+                item["archive"] = archive_name
+                item["count"] = int(item["count"]) + 1
+        else:
+            for report in profile_reports:
+                source_file = report.source_files[0] if report.source_files else report.title
+                archive_name = _archive_from_source(source_file, archive_names)
+                item = archives_by_name[archive_name]
+                item["archive"] = archive_name
+                item["count"] = int(item["count"]) + 1
+        evidence_rows.extend(_device_profile_reader_evidence(profile, archive_names))
+    return {
+        "reader": reader,
+        "count": count,
+        "archives": [archives_by_name[archive] for archive in sorted(archives_by_name)],
+        "evidence": evidence_rows[:25],
+    }
+
+
+def _device_profile_reader_evidence(profile: dict[str, object], archive_names: set[str]) -> list[dict[str, object]]:
+    rows = []
+    for report in profile.get("reports") or []:
+        for evidence in _reader_evidence_from_boot_report(report):
+            rows.append(
+                {
+                    "archive": _archive_from_source(evidence.source_file, archive_names),
+                    "source_file": evidence.source_file,
+                    "line_number": evidence.line_number,
+                    "timestamp": evidence.timestamp.isoformat(sep=" ") if evidence.timestamp else "",
+                    "raw_line": evidence.raw_line,
+                }
+            )
+    if rows:
+        return rows
+    for event in profile.get("events") or []:
+        rows.append(_event_evidence_row(event, _archive_from_source(event.source_file, archive_names)))
+    return rows
+
+
+def _reader_evidence_from_boot_report(report: DeviceBootReport) -> list[DeviceBootEvidence]:
+    rows = [
+        evidence
+        for segment in report.segments
+        for evidence in segment.evidence
+        if evidence.label in {"reader_open_success", "reader_start_end"} or "[READER]" in evidence.raw_line
+    ]
+    return rows[:3]
 
 
 def _reader_firmware_records(
@@ -2549,7 +2712,11 @@ def _bm_version_count(events: list[PaymentEvent]) -> int:
     return len({event.bm_version for event in events if event.bm_version})
 
 
-def _bm_carriers(events: list[PaymentEvent]) -> str:
+def _bm_carriers(events: list[PaymentEvent], device_boot_reports: list[DeviceBootReport] | None = None) -> str:
+    report_carriers = _report_carriers_from_device_boot(device_boot_reports)
+    if report_carriers:
+        return ", ".join(report_carriers)
+
     carriers: list[str] = []
     rules = load_carrier_rules()
     for event in events:
@@ -2557,8 +2724,12 @@ def _bm_carriers(events: list[PaymentEvent]) -> str:
     return ", ".join(dict.fromkeys(carriers)) if carriers else "missing"
 
 
-def _reader_types(events: list[PaymentEvent]) -> str:
-    types = [event.reader_type for event in events if event.reader_type]
+def _reader_types(events: list[PaymentEvent], device_boot_reports: list[DeviceBootReport] | None = None) -> str:
+    types = [
+        str(profile["reader_type"])
+        for profile in _reader_device_profiles(events, device_boot_reports)
+        if profile.get("reader_type")
+    ]
     mapping = {"OTI": "ОТИ", "TT": "ТТ"}
     return ", ".join(dict.fromkeys(mapping.get(reader_type, reader_type) for reader_type in types)) if types else "missing"
 
@@ -2590,6 +2761,129 @@ def _carrier_search_text(event: PaymentEvent) -> str:
         for value in (event.carrier, event.package)
         if value
     )
+
+
+def _reader_device_profiles(
+    events: list[PaymentEvent],
+    device_boot_reports: list[DeviceBootReport] | None,
+) -> list[dict[str, object]]:
+    boot_serials = {report.validator_serial for report in device_boot_reports or [] if report.validator_serial}
+    profiles: dict[str, dict[str, object]] = {}
+    for report in device_boot_reports or []:
+        device_id = report.validator_serial or _device_id_from_sources(report.source_files) or f"boot:{report.title}"
+        profile = profiles.setdefault(device_id, _empty_reader_profile(device_id))
+        profile["reports"].append(report)
+        if report.reader_type:
+            profile["boot_readers"].add(report.reader_type)
+    for event in events:
+        device_id = _event_device_id(event, boot_serials)
+        profile = profiles.setdefault(device_id, _empty_reader_profile(device_id))
+        profile["events"].append(event)
+        package_reader = _event_package_reader_type(event)
+        if package_reader:
+            profile["package_readers"].add(package_reader)
+    for profile in profiles.values():
+        boot_readers = profile["boot_readers"]
+        package_readers = profile["package_readers"]
+        if len(boot_readers) == 1:
+            profile["reader_type"] = next(iter(boot_readers))
+            profile["reader_source"] = "device_boot"
+        elif not boot_readers and len(package_readers) == 1:
+            profile["reader_type"] = next(iter(package_readers))
+            profile["reader_source"] = "bm_package"
+        else:
+            profile["reader_type"] = ""
+            profile["reader_source"] = "conflict" if boot_readers or len(package_readers) > 1 else "missing"
+    return list(profiles.values())
+
+
+def _empty_reader_profile(device_id: str) -> dict[str, object]:
+    return {
+        "device_id": device_id,
+        "events": [],
+        "reports": [],
+        "boot_readers": set(),
+        "package_readers": set(),
+        "reader_type": "",
+        "reader_source": "missing",
+    }
+
+
+def _event_reader_overrides(profiles: list[dict[str, object]]) -> dict[int, str]:
+    overrides: dict[int, str] = {}
+    for profile in profiles:
+        reader_type = str(profile.get("reader_type") or "")
+        for event in profile.get("events") or []:
+            overrides[id(event)] = reader_type
+    return overrides
+
+
+def _event_reader_type(event: PaymentEvent) -> str:
+    if event.reader_type:
+        return event.reader_type
+    return _event_package_reader_type(event)
+
+
+def _event_package_reader_type(event: PaymentEvent) -> str:
+    platform = (event.platform or "").lower()
+    if platform in {"oti", "tt"}:
+        return platform.upper()
+    package = event.package or ""
+    match = re.search(r"\b[A-Za-z0-9_]+-(oti|tt)-\d", package, re.IGNORECASE)
+    return match.group(1).upper() if match else ""
+
+
+def _event_device_id(event: PaymentEvent, boot_serials: set[str]) -> str:
+    raw = event.raw_line or ""
+    for pattern in (
+        r"\b(?:serial_number|serialNumber)\\?\"?\s*[:=]\s*\\?\"?(?P<value>\d{5,})",
+        r"\b(?:BmNumber|TmSerialNumber)\s*:\s*(?P<value>\d{5,})",
+        r"\breader_id\s*:\s*\\?\"(?P<value>\d{5,})\\?\"",
+    ):
+        match = re.search(pattern, raw)
+        if match:
+            return match.group("value")
+
+    source_device_id = _device_id_from_sources([event.source_file])
+    rid_match = re.search(r"\brid\s*:\s*(?P<value>\d{5,})", raw)
+    if rid_match:
+        rid = rid_match.group("value")
+        for serial in boot_serials:
+            if rid.endswith(serial):
+                return serial
+        if source_device_id and rid.endswith(source_device_id):
+            return source_device_id
+        return rid
+
+    trx_match = re.search(r"\b(?:BmTrxId|trxid)\s*:\s*(?P<value>\d{5,})", raw)
+    if trx_match:
+        trx_id = trx_match.group("value")
+        for serial in boot_serials:
+            if trx_id.startswith(serial):
+                return serial
+    if len(boot_serials) == 1:
+        return next(iter(boot_serials))
+    if source_device_id:
+        return source_device_id
+    return f"unknown:{event.source_file}"
+
+
+def _device_id_from_sources(source_files: list[str]) -> str:
+    for source_file in source_files:
+        for part in Path(source_file).parts:
+            match = re.fullmatch(r"(?P<value>\d{5,})_logs(?:\.zip)?", part)
+            if match:
+                return match.group("value")
+    return ""
+
+
+def _report_carriers_from_device_boot(device_boot_reports: list[DeviceBootReport] | None) -> list[str]:
+    carriers: list[str] = []
+    for report in device_boot_reports or []:
+        text = " ".join([report.title, *report.source_files]).casefold()
+        if "аскп" in text or "askp" in text:
+            carriers.append("АСКП")
+    return list(dict.fromkeys(carriers))
 
 
 def _carrier_markers(event: PaymentEvent) -> set[str]:

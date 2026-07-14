@@ -20,7 +20,7 @@ def test_parses_payment_start_resp_line():
     assert event.package == "mgt_nbs-oti-4.4.12"
     assert event.bm_type == "oti"
     assert event.bm_version == "4.4.12"
-    assert event.reader_type == "OTI"
+    assert event.reader_type is None
 
 
 def test_parses_payment_start_resp_without_comma_and_tt_package():
@@ -36,7 +36,8 @@ def test_parses_payment_start_resp_without_comma_and_tt_package():
     assert event.message == "OK"
     assert event.duration_ms == 250
     assert event.bm_version == "4.4.6"
-    assert event.reader_type == "TT"
+    assert event.bm_type == "tt"
+    assert event.reader_type is None
 
 
 def test_parses_askp_tt_package():
@@ -51,7 +52,7 @@ def test_parses_askp_tt_package():
     assert event.package == "mgt_askp-tt-4.2.5"
     assert event.bm_type == "tt"
     assert event.bm_version == "4.2.5"
-    assert event.reader_type == "TT"
+    assert event.reader_type is None
 
 
 def test_parses_mcd_astra_package():
@@ -114,7 +115,8 @@ def test_parses_structured_bm_log_format():
     assert event.message == "Ошибка чтения карты"
     assert event.duration_ms == 508.11597
     assert event.bm_version == "4.4.7"
-    assert event.reader_type == "OTI"
+    assert event.bm_type == "oti"
+    assert event.reader_type is None
     assert event.payment_type is None
     assert event.auth_type is None
 

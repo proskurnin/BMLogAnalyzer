@@ -26,12 +26,12 @@ def parse_package(line: str) -> PackageInfo | None:
 
     carrier = match.group("carrier").lower()
     platform = match.group("platform").lower()
-    reader_type = platform.upper() if platform in {"oti", "tt"} else None
+    bm_type = platform if platform in {"oti", "tt"} else None
     return PackageInfo(
         package=match.group(0),
         carrier=carrier,
         platform=platform,
         bm_version=match.group("version"),
-        reader_type=reader_type,
-        bm_type=platform if reader_type else None,
+        reader_type=None,
+        bm_type=bm_type,
     )

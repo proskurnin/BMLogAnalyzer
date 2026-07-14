@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import asdict
 from datetime import datetime, timezone
+import re
 
 from analytics.bm_statuses import bm_status_summary_rows
 from analytics.check_cases import run_builtin_checks
@@ -45,6 +47,9 @@ def build_ai_context(
             "by_message": result.by_message,
             "by_bm_version": result.by_bm_version,
             "by_reader_type": result.by_reader_type,
+            "physical_carriers": _physical_carriers(stats),
+            "physical_reader_types": _physical_reader_types(stats),
+            "package_reader_types": _package_reader_types(events),
             "duration_buckets": result.duration_buckets,
         },
         "bm_statuses": bm_status_summary_rows(events),
@@ -81,6 +86,37 @@ def _input_source_context(item) -> dict[str, object]:
         "skipped_file_count": item.skipped_file_count,
         "skipped_reasons": item.skipped_reasons,
     }
+
+
+def _physical_reader_types(stats: PipelineStats | None) -> dict[str, int]:
+    if not stats:
+        return {}
+    return dict(Counter(report.reader_type for report in stats.device_boot_reports if report.reader_type))
+
+
+def _physical_carriers(stats: PipelineStats | None) -> dict[str, int]:
+    if not stats:
+        return {}
+    return dict(Counter(_device_boot_carrier(report) for report in stats.device_boot_reports if _device_boot_carrier(report)))
+
+
+def _device_boot_carrier(report) -> str:
+    text = " ".join([report.title, *report.source_files]).casefold()
+    if "аскп" in text or "askp" in text:
+        return "АСКП"
+    return ""
+
+
+def _package_reader_types(events: list[PaymentEvent]) -> dict[str, int]:
+    return dict(Counter(reader for event in events if (reader := _event_package_reader_type(event))))
+
+
+def _event_package_reader_type(event: PaymentEvent) -> str:
+    platform = (event.platform or "").lower()
+    if platform in {"oti", "tt"}:
+        return platform.upper()
+    match = re.search(r"\b[A-Za-z0-9_]+-(oti|tt)-\d", event.package or "", re.IGNORECASE)
+    return match.group(1).upper() if match else ""
 
 
 def _json_ready(value):
