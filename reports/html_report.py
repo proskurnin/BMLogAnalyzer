@@ -23,6 +23,7 @@ from core.models import (
     DeviceBootEvidence,
     DeviceBootReport,
     DeviceBootSegment,
+    InputSourceSummary,
     PaymentEvent,
     PipelineStats,
 )
@@ -91,6 +92,7 @@ def render_html_report(
     bm_group_payloads = _bm_group_payloads(events, archive_names)
     validator_sections = _validator_analytics(events, archive_names)
     device_boot_reports = stats.device_boot_reports if stats else []
+    input_source_summaries = stats.input_source_summaries if stats else []
     suspicious_rows = suspicious_line_payloads(events)
     check_cases = [check for check in load_check_cases() if check.enabled]
     check_results = run_builtin_checks(events, checks=check_cases)
@@ -161,6 +163,7 @@ def render_html_report(
         "<div>",
         "<h1>BM Log Analyzer</h1>",
         f'<span class="version">отчёт создан в версии сервиса {escape(__version__)}</span>',
+        _input_composition_header(input_source_summaries),
         "</div>",
         "</header>",
         '<section class="section">',
@@ -227,6 +230,7 @@ def render_html_report_manifest(
     archive_names = _archive_name_set(stats.input_files if stats else [])
     validator_sections = _validator_analytics(events, archive_names)
     device_boot_reports = stats.device_boot_reports if stats else []
+    input_source_summaries = stats.input_source_summaries if stats else []
     suspicious_rows = suspicious_line_payloads(events)
     check_cases = [check for check in load_check_cases() if check.enabled]
     check_results = run_builtin_checks(events, checks=check_cases)
@@ -242,8 +246,11 @@ def render_html_report_manifest(
     ]
     if log_total:
         stable_sections.insert(2, "log_files")
+    if input_source_summaries:
+        stable_sections.insert(1, "upload_composition")
     if other_total:
-        stable_sections.insert(3 if log_total else 2, "other_files")
+        insert_at = stable_sections.index("log_files") + 1 if log_total else stable_sections.index("bm_meta") + 1
+        stable_sections.insert(insert_at, "other_files")
     if suspicious_rows:
         insert_at = stable_sections.index("bm_statuses")
         stable_sections.insert(insert_at, "suspicious")
@@ -276,6 +283,7 @@ def render_html_report_manifest(
             "grouped_statuses",
             "log_groups",
             "other_groups",
+            "upload_composition",
             "validator_sections",
             "suspicious_lines",
             "validation_check_catalog",
@@ -302,12 +310,14 @@ def render_html_report_manifest(
             "validation_checks": len(check_results),
             "protocol_scenarios": len(protocol_results),
             "device_boot_reports": len(device_boot_reports),
+            "input_sources": len(input_source_summaries),
         },
         "sections": stable_sections,
         "status_groups": [str(row["status"]) for row in summary_rows],
         "grouped_statuses": [str(row["label"]) for row in grouped_rows],
         "log_groups": [str(group["label"]) for group in log_groups],
         "other_groups": [str(group["label"]) for group in other_groups],
+        "upload_composition": [_input_source_summary_payload(item) for item in input_source_summaries],
         "validator_sections": [str(item["validator"]) for item in validator_sections],
         "suspicious_lines": suspicious_rows,
         "validation_check_catalog": [_check_case_payload(item) for item in check_cases],
@@ -337,6 +347,55 @@ def _metric_card(
 
 def _bm_meta_grid(cards_html: str) -> str:
     return f'<div class="bm-meta-grid">{cards_html}</div>'
+
+
+def _input_composition_header(items: list[InputSourceSummary]) -> str:
+    if not items:
+        return ""
+    rows = "".join(f"<li>{escape(_input_source_summary_text(item))}</li>" for item in items)
+    return (
+        '<div class="upload-composition">'
+        "<strong>Состав загрузки</strong>"
+        f"<ul>{rows}</ul>"
+        "</div>"
+    )
+
+
+def _input_source_summary_text(item: InputSourceSummary) -> str:
+    name = Path(item.source_file).name
+    labels = _known_log_type_labels(item)
+    if item.input_kind == "archive":
+        if labels:
+            return f"Загружен архив {name}. Он содержит логи следующих типов: {', '.join(labels)}."
+        return f"Загружен архив {name}. Распознанные типы логов не найдены."
+
+    if labels:
+        if len(labels) == 1:
+            return f"Загружен лог {labels[0]} {name}."
+        return f"Загружен файл {name}. Он содержит логи следующих типов: {', '.join(labels)}."
+    return f"Загружен файл {name}. Тип лога не определён."
+
+
+def _known_log_type_labels(item: InputSourceSummary) -> list[str]:
+    return [
+        label
+        for log_type, label in zip(item.log_types, item.log_type_labels, strict=False)
+        if log_type != "other"
+    ]
+
+
+def _input_source_summary_payload(item: InputSourceSummary) -> dict[str, object]:
+    return {
+        "source_file": item.source_file,
+        "source_name": Path(item.source_file).name,
+        "input_kind": item.input_kind,
+        "log_types": item.log_types,
+        "log_type_labels": item.log_type_labels,
+        "analyzed_files": item.analyzed_files,
+        "extracted_files": item.extracted_files,
+        "evidence": item.evidence,
+        "summary_text": _input_source_summary_text(item),
+    }
 
 
 def _bm_meta_cards(
@@ -3078,6 +3137,10 @@ h1, h2, p { margin: 0; }
 .header p { color: var(--muted); font-size: 13px; }
 .version { display: inline-block; margin-top: 6px; color: var(--muted); font-size: 13px; }
 .header h1 { font-size: 30px; line-height: 1.1; }
+.upload-composition { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--soft); max-width: 920px; }
+.upload-composition strong { display: block; font-size: 13px; line-height: 1.2; }
+.upload-composition ul { margin: 7px 0 0; padding-left: 18px; color: var(--text); }
+.upload-composition li + li { margin-top: 4px; }
 .header-badge { min-width: 130px; background: var(--soft); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
 .header-badge span, .metric span, .bm-meta-card span { display: block; color: var(--muted); font-size: 12px; }
 .header-badge strong, .metric strong, .bm-meta-card strong { display: block; margin-top: 4px; font-size: 18px; line-height: 1.2; }

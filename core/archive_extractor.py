@@ -18,13 +18,14 @@ def extract_archives(input_path: Path | str, extracted_dir: Path | str) -> Extra
     _prepare_extracted_dir(output_root)
 
     extracted_files: list[str] = []
+    extracted_file_origins: dict[str, str] = {}
     skipped_files: list[str] = []
     source_archives = [str(path) for path in _iter_archives(root)]
-    pending = [Path(path) for path in source_archives]
+    pending = [(Path(path), str(path)) for path in source_archives]
     processed: set[str] = set()
 
     while pending:
-        archive_path = pending.pop(0)
+        archive_path, origin_archive = pending.pop(0)
         archive_key = str(archive_path)
         if archive_key in processed:
             continue
@@ -47,15 +48,17 @@ def extract_archives(input_path: Path | str, extracted_dir: Path | str) -> Extra
         for extracted_path in extracted:
             path = Path(extracted_path)
             if _is_archive_candidate(path):
-                pending.append(path)
+                pending.append((path, origin_archive))
             else:
                 extracted_files.append(str(path))
+                extracted_file_origins[str(path)] = origin_archive
 
     return ExtractionResult(
         input_path=str(root),
         extracted_dir=str(output_root),
         source_archives=source_archives,
         extracted_files=extracted_files,
+        extracted_file_origins=extracted_file_origins,
         skipped_files=skipped_files,
     )
 

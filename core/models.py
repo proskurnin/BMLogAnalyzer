@@ -25,6 +25,7 @@ class ExtractionResult:
     extracted_dir: str
     source_archives: list[str] = field(default_factory=list)
     extracted_files: list[str] = field(default_factory=list)
+    extracted_file_origins: dict[str, str] = field(default_factory=dict)
     skipped_files: list[str] = field(default_factory=list)
 
 
@@ -105,6 +106,17 @@ class LogFileInventory:
 
 
 @dataclass(frozen=True)
+class InputSourceSummary:
+    source_file: str
+    input_kind: str
+    log_types: list[str] = field(default_factory=list)
+    log_type_labels: list[str] = field(default_factory=list)
+    analyzed_files: list[str] = field(default_factory=list)
+    extracted_files: list[str] = field(default_factory=list)
+    evidence: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class DeviceBootEvidence:
     source_file: str
     line_number: int
@@ -166,6 +178,7 @@ class PipelineStats:
     steps: list[PipelineStepResult] = field(default_factory=list)
     files: list[FileProcessingStats] = field(default_factory=list)
     log_inventory: list[LogFileInventory] = field(default_factory=list)
+    input_source_summaries: list[InputSourceSummary] = field(default_factory=list)
     archive_inventory: list[ArchiveInventoryRow] = field(default_factory=list)
     device_boot_reports: list[DeviceBootReport] = field(default_factory=list)
 

@@ -1,5 +1,7 @@
-from core.pipeline import run_analysis
+import io
 import zipfile
+
+from core.pipeline import run_analysis
 
 
 def test_pipeline_collects_diagnostics_for_malformed_payment_resp(tmp_path):
@@ -45,6 +47,13 @@ def test_pipeline_collects_diagnostics_for_malformed_payment_resp(tmp_path):
     assert len(stats.log_inventory) == 1
     assert stats.log_inventory[0].log_type == "bm"
     assert stats.log_inventory[0].bm_versions == ["4.4.12"]
+    assert len(stats.input_source_summaries) == 1
+    input_summary = stats.input_source_summaries[0]
+    assert input_summary.source_file == str(input_dir / "sample.log")
+    assert input_summary.input_kind == "log_file"
+    assert input_summary.log_types == ["bm"]
+    assert input_summary.log_type_labels == ["БМ"]
+    assert input_summary.analyzed_files == [str(input_dir / "sample.log")]
 
 
 def test_pipeline_does_not_analyze_zip_twice(tmp_path):
@@ -67,6 +76,45 @@ def test_pipeline_does_not_analyze_zip_twice(tmp_path):
     assert stats.log_inventory[0].log_type == "bm"
     assert stats.archive_inventory[0].archive == str(archive_path)
     assert stats.archive_inventory[0].category == "Other log-like"
+    assert len(stats.input_source_summaries) == 1
+    input_summary = stats.input_source_summaries[0]
+    assert input_summary.source_file == str(archive_path)
+    assert input_summary.input_kind == "archive"
+    assert input_summary.log_types == ["bm"]
+    assert input_summary.log_type_labels == ["БМ"]
+    assert input_summary.extracted_files == [str(extracted_dir / "logs.zip" / "nested" / "a.log")]
+    assert input_summary.analyzed_files == [str(extracted_dir / "logs.zip" / "nested" / "a.log")]
+
+
+def test_pipeline_maps_nested_archives_to_top_level_input_summary(tmp_path):
+    input_dir = tmp_path / "input"
+    extracted_dir = tmp_path / "extracted"
+    input_dir.mkdir()
+    archive_path = input_dir / "logs.zip"
+    bm_line = "2026-04-29 20:50:41.343 PaymentStart, resp: {Code:0 Message:OK} duration=412 ms p: mgt_nbs-oti-4.4.12"
+    validator_line = "[2026-Jul-13 14:18:26.636522] [VALIDATOR] STARTED"
+    nested_buffer = io.BytesIO()
+    with zipfile.ZipFile(nested_buffer, "w") as nested:
+        nested.writestr("bm/a.log", bm_line)
+        nested.writestr("validator/start.log", validator_line)
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("nested.zip", nested_buffer.getvalue())
+
+    events, result, stats = run_analysis(input_dir, extracted_dir=extracted_dir)
+
+    assert len(events) == 1
+    assert result.total == 1
+    assert stats.input_files == [str(archive_path)]
+    assert len(stats.input_source_summaries) == 1
+    input_summary = stats.input_source_summaries[0]
+    assert input_summary.source_file == str(archive_path)
+    assert input_summary.input_kind == "archive"
+    assert input_summary.log_types == ["bm", "validator_app"]
+    assert input_summary.log_type_labels == ["БМ", "ПО валидатора"]
+    assert input_summary.extracted_files == [
+        str(extracted_dir / "nested.zip" / "bm" / "a.log"),
+        str(extracted_dir / "nested.zip" / "validator" / "start.log"),
+    ]
 
 
 def test_pipeline_falls_back_on_invalid_gzip(tmp_path):

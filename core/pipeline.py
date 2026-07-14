@@ -9,6 +9,7 @@ from typing import Any
 from analytics.archive_inventory import build_archive_inventory
 from analytics.counters import analyze_events
 from analytics.device_boot_speed import DeviceBootSpeedCollector
+from analytics.input_composition import build_input_source_summaries
 from analytics.log_inventory import LogInventoryCollector
 from core.archive_extractor import extract_archives
 from core.log_scanner import iter_log_sources, scan_logs
@@ -171,6 +172,7 @@ def run_analysis(
             )
         )
 
+    log_inventory = inventory_collector.finalize()
     stats = PipelineStats(
         scanned_lines=scanned_lines,
         malformed_payment_lines=len(diagnostics),
@@ -183,7 +185,13 @@ def run_analysis(
         diagnostics=diagnostics,
         steps=steps,
         files=sorted(file_stats.values(), key=lambda item: item.source_file),
-        log_inventory=inventory_collector.finalize(),
+        log_inventory=log_inventory,
+        input_source_summaries=build_input_source_summaries(
+            direct_files=input_direct_files,
+            source_archives=extraction.source_archives,
+            extracted_file_origins=extraction.extracted_file_origins,
+            log_inventory=log_inventory,
+        ),
         archive_inventory=archive_inventory,
         device_boot_reports=device_boot_collector.finalize(),
     )

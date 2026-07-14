@@ -3,7 +3,7 @@ from dataclasses import replace
 import json
 
 from analytics.counters import analyze_events
-from core.models import ArchiveInventoryRow, LogFileInventory, PipelineStats
+from core.models import ArchiveInventoryRow, InputSourceSummary, LogFileInventory, PipelineStats
 from core.version import __version__
 from reports.html_report import write_html_report
 from tests.test_counters import make_event
@@ -250,6 +250,47 @@ def test_html_report_hides_empty_sections(tmp_path):
     assert "suspicious" not in manifest["stable_sections"]
     assert "validation_checks" in manifest["stable_sections"]
     assert "unclassified_diagnostics" not in manifest["stable_sections"]
+
+
+def test_writes_upload_composition_in_report_header_and_manifest(tmp_path):
+    stats = PipelineStats(
+        scanned_lines=2,
+        malformed_payment_lines=0,
+        extracted_files=2,
+        input_files=["input/13-07-2026.zip"],
+        analyzed_files=[
+            "_workdir/extracted/13-07-2026.zip/bm/a.log",
+            "_workdir/extracted/nested.zip/validator/start.log",
+        ],
+        input_source_summaries=[
+            InputSourceSummary(
+                source_file="input/13-07-2026.zip",
+                input_kind="archive",
+                log_types=["bm", "validator_app"],
+                log_type_labels=["БМ", "ПО валидатора"],
+                analyzed_files=[
+                    "_workdir/extracted/13-07-2026.zip/bm/a.log",
+                    "_workdir/extracted/nested.zip/validator/start.log",
+                ],
+                extracted_files=[
+                    "_workdir/extracted/13-07-2026.zip/bm/a.log",
+                    "_workdir/extracted/nested.zip/validator/start.log",
+                ],
+            )
+        ],
+    )
+    result = analyze_events([])
+
+    write_html_report([], result, tmp_path / "analysis_report.html", stats=stats)
+
+    html = (tmp_path / "analysis_report.html").read_text(encoding="utf-8")
+    manifest = json.loads((tmp_path / "analysis_report.json").read_text(encoding="utf-8"))
+    expected_text = "Загружен архив 13-07-2026.zip. Он содержит логи следующих типов: БМ, ПО валидатора."
+    assert "Состав загрузки" in html
+    assert expected_text in html
+    assert "upload_composition" in manifest["stable_sections"]
+    assert manifest["upload_composition"][0]["summary_text"] == expected_text
+    assert manifest["upload_composition"][0]["log_types"] == ["bm", "validator_app"]
 
 
 def test_html_report_shows_non_emv_card_status_and_zero_row_toggle(tmp_path):

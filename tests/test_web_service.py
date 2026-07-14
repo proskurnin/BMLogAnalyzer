@@ -714,6 +714,7 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
     assert report_response.headers["pragma"] == "no-cache"
     assert report_response.headers["expires"] == "0"
     assert "BM Log Analyzer" in report_response.text
+    assert "Загружен лог БМ sample.log." in report_response.text
     assert "Профиль (Administrator)" in report_response.text
     assert "bm-auth-topbar" in report_response.text
     assert "AI-аналитика" in report_response.text
@@ -746,6 +747,7 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
         "grouped_statuses",
         "log_groups",
         "other_groups",
+        "upload_composition",
         "validator_sections",
         "suspicious_lines",
         "validation_check_catalog",
@@ -756,6 +758,7 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
     ]
     stable_sections = report_manifest.json()["stable_sections"]
     assert "summary" in stable_sections
+    assert "upload_composition" in stable_sections
     assert "bm_meta" in stable_sections
     assert "suspicious" not in stable_sections
     assert "bm_statuses" in stable_sections
