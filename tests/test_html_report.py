@@ -266,8 +266,8 @@ def test_writes_upload_composition_in_report_header_and_manifest(tmp_path):
             InputSourceSummary(
                 source_file="input/13-07-2026.zip",
                 input_kind="archive",
-                log_types=["bm", "validator_app"],
-                log_type_labels=["БМ", "ПО валидатора"],
+                log_types=["bm", "stopper", "oti_reader_library", "validator_app"],
+                log_type_labels=["БМ", "ПО стоппера", "библиотеки ридера ОТИ", "ПО валидатора"],
                 analyzed_files=[
                     "_workdir/extracted/13-07-2026.zip/bm/a.log",
                     "_workdir/extracted/nested.zip/validator/start.log",
@@ -285,12 +285,15 @@ def test_writes_upload_composition_in_report_header_and_manifest(tmp_path):
 
     html = (tmp_path / "analysis_report.html").read_text(encoding="utf-8")
     manifest = json.loads((tmp_path / "analysis_report.json").read_text(encoding="utf-8"))
-    expected_text = "Загружен архив 13-07-2026.zip. Он содержит логи следующих типов: БМ, ПО валидатора."
+    expected_text = (
+        "Загружен архив 13-07-2026.zip. Он содержит логи следующих типов: "
+        "БМ, ПО стоппера, библиотеки ридера ОТИ, ПО валидатора."
+    )
     assert "Состав загрузки" in html
     assert expected_text in html
     assert "upload_composition" in manifest["stable_sections"]
     assert manifest["upload_composition"][0]["summary_text"] == expected_text
-    assert manifest["upload_composition"][0]["log_types"] == ["bm", "validator_app"]
+    assert manifest["upload_composition"][0]["log_types"] == ["bm", "stopper", "oti_reader_library", "validator_app"]
 
 
 def test_html_report_shows_non_emv_card_status_and_zero_row_toggle(tmp_path):

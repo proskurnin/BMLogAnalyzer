@@ -22,6 +22,10 @@ VALIDATOR_RE = re.compile(
     r"\[VALIDATOR\] STARTED|choose_and_start_bm|START COMPLETED|START BM AND WAIT|/validator/",
     re.IGNORECASE,
 )
+OTI_READER_LIBRARY_RE = re.compile(
+    r"\b(?:liboti|oti[_ -]?reader|oti[_ -]?reader[_ -]?library|reader[_ -]?oti)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -46,7 +50,9 @@ class LogInventoryCollector:
         _observe_path(item)
         _observe_date(item, line)
         _observe_bm(item, line)
+        _observe_stopper(item, line)
         _observe_validator(item, line)
+        _observe_oti_reader_library(item, line)
         _observe_reader(item, line)
         _observe_system(item, line)
         _observe_error(item, line)
@@ -133,8 +139,14 @@ def other_log_descriptions(inventory: list[LogFileInventory]) -> list[dict[str, 
 
 def _observe_path(item: _InventoryBuilder) -> None:
     path = item.source_file.lower()
+    path_parts = re.split(r"[/\\]+", path)
+    path_name = path_parts[-1] if path_parts else path
+    if any(part == "stopper" for part in path_parts) or path_name.startswith("stopper"):
+        item.path_hints.add("path:stopper")
     if "reader" in path or "ридер" in path:
         item.path_hints.add("path:reader")
+    if OTI_READER_LIBRARY_RE.search(path) or ("oti" in path and "lib" in path):
+        item.path_hints.add("path:oti_reader_library")
     if "system" in path or "syslog" in path or "journal" in path:
         item.path_hints.add("path:system")
     if "bm" in path or "mgt_nbs" in path or "mgt_askp" in path:
@@ -152,7 +164,7 @@ def _observe_date(item: _InventoryBuilder, line: str) -> None:
 
 def _observe_bm(item: _InventoryBuilder, line: str) -> None:
     package = parse_package(line)
-    if package:
+    if package and package.carrier.startswith(("mgt_", "mgt")):
         item.content_hints.add("content:bm_package")
         item.bm_versions.add(package.bm_version)
         _add_evidence_sample(item, f"bm_version:{package.bm_version}", line)
@@ -161,11 +173,29 @@ def _observe_bm(item: _InventoryBuilder, line: str) -> None:
         item.content_hints.add("content:PaymentStart")
 
 
+def _observe_stopper(item: _InventoryBuilder, line: str) -> None:
+    package = parse_package(line)
+    lowered = line.lower()
+    if package and package.carrier == "stopper":
+        item.content_hints.add("content:stopper_package")
+        _add_evidence_sample(item, f"stopper_version:{package.bm_version}", line)
+    if "platform:platform_stopper" in lowered or "p: stopper-" in lowered or "readerconfiguration:" in lowered:
+        item.content_hints.add("content:stopper")
+        _add_evidence_sample(item, "stopper", line)
+
+
 def _observe_validator(item: _InventoryBuilder, line: str) -> None:
     if not VALIDATOR_RE.search(line):
         return
     item.content_hints.add("content:validator_app")
     _add_evidence_sample(item, "validator_app", line)
+
+
+def _observe_oti_reader_library(item: _InventoryBuilder, line: str) -> None:
+    if not OTI_READER_LIBRARY_RE.search(line):
+        return
+    item.content_hints.add("content:oti_reader_library")
+    _add_evidence_sample(item, "oti_reader_library", line)
 
 
 def _observe_reader(item: _InventoryBuilder, line: str) -> None:
@@ -225,6 +255,10 @@ def _detect_log_type(item: _InventoryBuilder) -> str:
     hints = item.content_hints | item.path_hints
     if "content:validator_app" in hints:
         return "validator_app"
+    if "content:stopper_package" in hints or "content:stopper" in hints or "path:stopper" in hints:
+        return "stopper"
+    if "content:oti_reader_library" in hints or "path:oti_reader_library" in hints:
+        return "oti_reader_library"
     if "content:bm_package" in hints or "content:mgt_nbs_package" in hints or "content:PaymentStart" in hints or "path:bm" in hints:
         return "bm"
     if "content:reader_firmware" in hints or "content:reader_model" in hints or "path:reader" in hints:

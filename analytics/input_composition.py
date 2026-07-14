@@ -6,16 +6,20 @@ from core.models import InputSourceSummary, LogFileInventory
 
 LOG_TYPE_LABELS = {
     "bm": "БМ",
+    "stopper": "ПО стоппера",
     "reader": "ридера",
+    "oti_reader_library": "библиотеки ридера ОТИ",
     "validator_app": "ПО валидатора",
     "system": "операционной системы",
     "other": "неопределённые",
 }
 LOG_TYPE_ORDER = {
     "bm": 0,
-    "reader": 1,
-    "validator_app": 2,
-    "system": 3,
+    "stopper": 1,
+    "reader": 2,
+    "oti_reader_library": 3,
+    "validator_app": 4,
+    "system": 5,
     "other": 99,
 }
 
