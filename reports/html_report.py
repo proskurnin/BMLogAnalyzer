@@ -308,6 +308,8 @@ def render_html_report_manifest(
             "protocol_scenario_results",
             "device_boot_speed",
             "section_sources",
+            "pipeline_steps",
+            "extraction_archives",
         ],
         "stable_sections": stable_sections,
         "counts": {
@@ -342,6 +344,32 @@ def render_html_report_manifest(
         "protocol_scenario_results": [_protocol_scenario_result_payload(item) for item in protocol_results],
         "device_boot_speed": [_device_boot_report_payload(item) for item in device_boot_reports],
         "section_sources": section_sources,
+        "pipeline_steps": [_pipeline_step_payload(item) for item in (stats.steps if stats else [])],
+        "extraction_archives": [_extraction_archive_payload(item) for item in (stats.extraction_archive_stats if stats else [])],
+    }
+
+
+def _pipeline_step_payload(step) -> dict[str, object]:
+    return {
+        "name": step.name,
+        "status": step.status,
+        "duration_ms": round(float(step.duration_ms), 3),
+        "errors": step.errors,
+        "details": dict(step.details),
+    }
+
+
+def _extraction_archive_payload(item) -> dict[str, object]:
+    return {
+        "source_archive": item.source_archive,
+        "origin_archive": item.origin_archive,
+        "archive_type": item.archive_type,
+        "status": item.status,
+        "duration_ms": round(float(item.duration_ms), 3),
+        "extracted_files": item.extracted_files,
+        "skipped_files": item.skipped_files,
+        "size_bytes": item.size_bytes,
+        "cache_status": item.cache_status,
     }
 
 

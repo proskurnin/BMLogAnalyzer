@@ -71,20 +71,25 @@ def run_analysis(
     date_filter: str | None = None,
     reader_filter: str | None = None,
     bm_filter: str | None = None,
+    archive_cache_dir: Path | str | None = None,
     progress_callback: PipelineProgressCallback | None = None,
 ) -> tuple[list[PaymentEvent], AnalysisResult, PipelineStats]:
     steps: list[PipelineStepResult] = []
 
     with _Stage("extract_archives", progress_callback) as stage:
-        extraction = extract_archives(input_path, extracted_dir)
+        extraction = extract_archives(input_path, extracted_dir, cache_dir=archive_cache_dir)
         steps.append(
             stage.finish(
                 errors=len(extraction.skipped_files),
                 details={
                     "input_path": str(input_path),
+                    "archives": len(extraction.source_archives),
                     "extracted_files": len(extraction.extracted_files),
                     "skipped_archives": len(extraction.skipped_files),
+                    "cache_hits": extraction.cache_hits,
+                    "cache_misses": extraction.cache_misses,
                     "extracted_dir": str(extracted_dir),
+                    "archive_cache_dir": str(archive_cache_dir) if archive_cache_dir else None,
                 },
             )
         )
@@ -126,7 +131,9 @@ def run_analysis(
                 is_payment_resp = is_payment_start_response_line(log_line.text)
                 if is_payment_resp:
                     stats_for_file.payment_resp_lines += 1
-                event = parse_payment_start_response(log_line.text, log_line.source_file, log_line.line_number)
+                    event = parse_payment_start_response(log_line.text, log_line.source_file, log_line.line_number)
+                else:
+                    event = None
                 if event is None:
                     if is_payment_resp:
                         stats_for_file.malformed_payment_resp_lines += 1
@@ -172,7 +179,26 @@ def run_analysis(
             )
         )
 
-    log_inventory = inventory_collector.finalize()
+    with _Stage("finalize_pipeline_stats", progress_callback) as stage:
+        log_inventory = inventory_collector.finalize()
+        device_boot_reports = device_boot_collector.finalize()
+        input_source_summaries = build_input_source_summaries(
+            direct_files=input_direct_files,
+            source_archives=extraction.source_archives,
+            extracted_file_origins=extraction.extracted_file_origins,
+            log_inventory=log_inventory,
+        )
+        steps.append(
+            stage.finish(
+                details={
+                    "log_inventory": len(log_inventory),
+                    "input_sources": len(input_source_summaries),
+                    "device_boot_reports": len(device_boot_reports),
+                    "files": len(file_stats),
+                },
+            )
+        )
+
     stats = PipelineStats(
         scanned_lines=scanned_lines,
         malformed_payment_lines=len(diagnostics),
@@ -186,14 +212,10 @@ def run_analysis(
         steps=steps,
         files=sorted(file_stats.values(), key=lambda item: item.source_file),
         log_inventory=log_inventory,
-        input_source_summaries=build_input_source_summaries(
-            direct_files=input_direct_files,
-            source_archives=extraction.source_archives,
-            extracted_file_origins=extraction.extracted_file_origins,
-            log_inventory=log_inventory,
-        ),
+        input_source_summaries=input_source_summaries,
         archive_inventory=archive_inventory,
-        device_boot_reports=device_boot_collector.finalize(),
+        device_boot_reports=device_boot_reports,
+        extraction_archive_stats=extraction.archive_stats,
     )
     return events, result, stats
 

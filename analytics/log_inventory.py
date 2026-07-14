@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 
 from core.models import LogFileInventory
 from parsers.reader_parser import parse_reader_firmware
-from parsers.timestamp_parser import parse_timestamp
 from parsers.version_parser import parse_package
 
 DATE_RE = re.compile(r"\b(?P<date>20\d{2}-\d{2}-\d{2}|20\d{2}\.\d{2}\.\d{2}|20\d{2}/\d{2}/\d{2})\b")
@@ -14,10 +13,6 @@ READER_MODEL_RE = re.compile(
     r"\b(?:reader[_ -]?model|model|ридер|reader)\s*[:= ]+\s*(?P<model>[A-Za-z0-9_.-]{2,})",
     re.IGNORECASE,
 )
-ERROR_RE = re.compile(r"\b(error|exception|fail(?:ed|ure)?|timeout)\b|ошибк|таймаут", re.IGNORECASE)
-TIMEOUT_RE = re.compile(r"\btimeout\b|таймаут", re.IGNORECASE)
-EXCEPTION_RE = re.compile(r"\bexception\b", re.IGNORECASE)
-FAIL_RE = re.compile(r"\bfail(?:ed|ure)?\b", re.IGNORECASE)
 VALIDATOR_RE = re.compile(
     r"\[VALIDATOR\] STARTED|choose_and_start_bm|START COMPLETED|START BM AND WAIT|/validator/",
     re.IGNORECASE,
@@ -31,6 +26,7 @@ OTI_READER_LIBRARY_RE = re.compile(
 @dataclass
 class _InventoryBuilder:
     source_file: str
+    path_observed: bool = False
     path_hints: set[str] = field(default_factory=set)
     content_hints: set[str] = field(default_factory=set)
     dates: set[str] = field(default_factory=set)
@@ -47,15 +43,17 @@ class LogInventoryCollector:
 
     def observe_line(self, source_file: str, line: str) -> None:
         item = self._items.setdefault(source_file, _InventoryBuilder(source_file=source_file))
+        lowered = line.lower()
+        package = parse_package(line) if ("mgt" in lowered or "stopper-" in lowered) else None
         _observe_path(item)
         _observe_date(item, line)
-        _observe_bm(item, line)
-        _observe_stopper(item, line)
-        _observe_validator(item, line)
-        _observe_oti_reader_library(item, line)
-        _observe_reader(item, line)
-        _observe_system(item, line)
-        _observe_error(item, line)
+        _observe_bm(item, line, package)
+        _observe_stopper(item, line, lowered, package)
+        _observe_validator(item, line, lowered)
+        _observe_oti_reader_library(item, line, lowered)
+        _observe_reader(item, line, lowered)
+        _observe_system(item, lowered)
+        _observe_error(item, line, lowered)
 
     def finalize(self) -> list[LogFileInventory]:
         return [
@@ -138,6 +136,9 @@ def other_log_descriptions(inventory: list[LogFileInventory]) -> list[dict[str, 
 
 
 def _observe_path(item: _InventoryBuilder) -> None:
+    if item.path_observed:
+        return
+    item.path_observed = True
     path = item.source_file.lower()
     path_parts = re.split(r"[/\\]+", path)
     path_name = path_parts[-1] if path_parts else path
@@ -154,16 +155,16 @@ def _observe_path(item: _InventoryBuilder) -> None:
 
 
 def _observe_date(item: _InventoryBuilder, line: str) -> None:
+    if "20" not in line:
+        return
     match = DATE_RE.search(line)
     if not match:
         return
     raw = match.group("date").replace(".", "-").replace("/", "-")
-    timestamp = parse_timestamp(f"{raw} 00:00:00")
-    item.dates.add(timestamp.date().isoformat() if timestamp else raw)
+    item.dates.add(raw)
 
 
-def _observe_bm(item: _InventoryBuilder, line: str) -> None:
-    package = parse_package(line)
+def _observe_bm(item: _InventoryBuilder, line: str, package) -> None:
     if package and package.carrier.startswith(("mgt_", "mgt")):
         item.content_hints.add("content:bm_package")
         item.bm_versions.add(package.bm_version)
@@ -173,9 +174,7 @@ def _observe_bm(item: _InventoryBuilder, line: str) -> None:
         item.content_hints.add("content:PaymentStart")
 
 
-def _observe_stopper(item: _InventoryBuilder, line: str) -> None:
-    package = parse_package(line)
-    lowered = line.lower()
+def _observe_stopper(item: _InventoryBuilder, line: str, lowered: str, package) -> None:
     if package and package.carrier == "stopper":
         item.content_hints.add("content:stopper_package")
         _add_evidence_sample(item, f"stopper_version:{package.bm_version}", line)
@@ -184,27 +183,42 @@ def _observe_stopper(item: _InventoryBuilder, line: str) -> None:
         _add_evidence_sample(item, "stopper", line)
 
 
-def _observe_validator(item: _InventoryBuilder, line: str) -> None:
+def _observe_validator(item: _InventoryBuilder, line: str, lowered: str) -> None:
+    if (
+        "validator" not in lowered
+        and "choose_and_start_bm" not in lowered
+        and "start completed" not in lowered
+        and "start bm and wait" not in lowered
+    ):
+        return
     if not VALIDATOR_RE.search(line):
         return
     item.content_hints.add("content:validator_app")
     _add_evidence_sample(item, "validator_app", line)
 
 
-def _observe_oti_reader_library(item: _InventoryBuilder, line: str) -> None:
+def _observe_oti_reader_library(item: _InventoryBuilder, line: str, lowered: str) -> None:
+    if "oti" not in lowered:
+        return
     if not OTI_READER_LIBRARY_RE.search(line):
         return
     item.content_hints.add("content:oti_reader_library")
     _add_evidence_sample(item, "oti_reader_library", line)
 
 
-def _observe_reader(item: _InventoryBuilder, line: str) -> None:
-    firmware = parse_reader_firmware(line)
-    if firmware:
-        item.content_hints.add("content:reader_firmware")
-        item.reader_firmware_versions.add(firmware)
-        _add_evidence_sample(item, f"reader_firmware:{firmware}", line)
-    model_match = READER_MODEL_RE.search(line)
+def _observe_reader(item: _InventoryBuilder, line: str, lowered: str) -> None:
+    if "reader" not in lowered and "firmware" not in lowered and "fw" not in lowered and "model" not in lowered and "ридер" not in lowered:
+        return
+    if "firmware" in lowered or "fw" in lowered or "readerversion" in lowered or "reader_version" in lowered or "reader version" in lowered:
+        firmware = parse_reader_firmware(line)
+        if firmware:
+            item.content_hints.add("content:reader_firmware")
+            item.reader_firmware_versions.add(firmware)
+            _add_evidence_sample(item, f"reader_firmware:{firmware}", line)
+    if "model" in lowered or "ридер" in lowered or "reader model" in lowered:
+        model_match = READER_MODEL_RE.search(line)
+    else:
+        model_match = None
     if model_match:
         item.content_hints.add("content:reader_model")
         model = model_match.group("model")
@@ -212,24 +226,32 @@ def _observe_reader(item: _InventoryBuilder, line: str) -> None:
         _add_evidence_sample(item, f"reader_model:{model}", line)
 
 
-def _observe_system(item: _InventoryBuilder, line: str) -> None:
-    lowered = line.lower()
+def _observe_system(item: _InventoryBuilder, lowered: str) -> None:
+    if "system" not in lowered and "kernel:" not in lowered and "service" not in lowered:
+        return
     if "systemd" in lowered or "kernel:" in lowered or "service" in lowered:
         item.content_hints.add("content:system")
 
 
-def _observe_error(item: _InventoryBuilder, line: str) -> None:
-    if not ERROR_RE.search(line):
+def _observe_error(item: _InventoryBuilder, line: str, lowered: str) -> None:
+    if (
+        "error" not in lowered
+        and "exception" not in lowered
+        and "fail" not in lowered
+        and "timeout" not in lowered
+        and "ошибк" not in lowered
+        and "таймаут" not in lowered
+    ):
         return
-    item.error_status_counts[_error_status(line)] += 1
+    item.error_status_counts[_error_status(lowered)] += 1
 
 
-def _error_status(line: str) -> str:
-    if TIMEOUT_RE.search(line):
+def _error_status(lowered: str) -> str:
+    if "timeout" in lowered or "таймаут" in lowered:
         return "timeout"
-    if EXCEPTION_RE.search(line):
+    if "exception" in lowered:
         return "exception"
-    if FAIL_RE.search(line):
+    if "fail" in lowered:
         return "failure"
     return "error"
 

@@ -61,6 +61,7 @@ def execute_analysis(request: AnalysisRequest) -> AnalysisBundle:
         date_filter=request.date,
         reader_filter=request.reader,
         bm_filter=request.bm,
+        archive_cache_dir=reports_dir.parent / "_archive_cache",
     )
 
     written_reports: list[str] = []
@@ -144,6 +145,7 @@ def execute_analysis(request: AnalysisRequest) -> AnalysisBundle:
         stats={
             "archive_inventory": [asdict(row) for row in stats.archive_inventory],
             "log_inventory": [asdict(item) for item in stats.log_inventory],
+            "extraction_archives": [asdict(item) for item in stats.extraction_archive_stats],
         },
         schema_version=SNAPSHOT_SCHEMA_VERSION,
     )

@@ -389,6 +389,30 @@ def write_bundle_manifest_json(stats: PipelineStats | None, path: Path) -> None:
         "extracted_files": stats.extracted_file_paths if stats else [],
         "analyzed_files": stats.analyzed_files if stats else [],
         "skipped_archives": stats.skipped_archive_paths if stats else [],
+        "pipeline_steps": [
+            {
+                "name": step.name,
+                "status": step.status,
+                "duration_ms": round(float(step.duration_ms), 3),
+                "errors": step.errors,
+                "details": dict(step.details),
+            }
+            for step in (stats.steps if stats else [])
+        ],
+        "extraction_archives": [
+            {
+                "source_archive": item.source_archive,
+                "origin_archive": item.origin_archive,
+                "archive_type": item.archive_type,
+                "status": item.status,
+                "duration_ms": round(float(item.duration_ms), 3),
+                "extracted_files": item.extracted_files,
+                "skipped_files": item.skipped_files,
+                "size_bytes": item.size_bytes,
+                "cache_status": item.cache_status,
+            }
+            for item in (stats.extraction_archive_stats if stats else [])
+        ],
     }
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 

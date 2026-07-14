@@ -155,6 +155,8 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert "data-format=\"records\"" in html
     assert "Источник данных: БМ." in html
     assert '"section_sources": {' in manifest
+    assert '"pipeline_steps": [' in manifest
+    assert '"extraction_archives": [' in manifest
     assert "data-kind=\"status\"" in html
     assert "data-kind=\"group\"" in html
     assert "data-meta-kind=\"versions\"" in html

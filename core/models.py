@@ -20,6 +20,19 @@ class DiagnosticLine:
 
 
 @dataclass(frozen=True)
+class ExtractionArchiveStat:
+    source_archive: str
+    origin_archive: str
+    archive_type: str
+    status: str
+    duration_ms: float
+    extracted_files: int = 0
+    skipped_files: int = 0
+    size_bytes: int = 0
+    cache_status: str = "not_used"
+
+
+@dataclass(frozen=True)
 class ExtractionResult:
     input_path: str
     extracted_dir: str
@@ -27,6 +40,9 @@ class ExtractionResult:
     extracted_files: list[str] = field(default_factory=list)
     extracted_file_origins: dict[str, str] = field(default_factory=dict)
     skipped_files: list[str] = field(default_factory=list)
+    archive_stats: list[ExtractionArchiveStat] = field(default_factory=list)
+    cache_hits: int = 0
+    cache_misses: int = 0
 
 
 @dataclass(frozen=True)
@@ -181,6 +197,7 @@ class PipelineStats:
     input_source_summaries: list[InputSourceSummary] = field(default_factory=list)
     archive_inventory: list[ArchiveInventoryRow] = field(default_factory=list)
     device_boot_reports: list[DeviceBootReport] = field(default_factory=list)
+    extraction_archive_stats: list[ExtractionArchiveStat] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

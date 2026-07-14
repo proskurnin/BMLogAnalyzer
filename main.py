@@ -45,6 +45,7 @@ def main() -> int:
         date_filter=args.date,
         reader_filter=args.reader,
         bm_filter=args.bm,
+        archive_cache_dir=reports_dir.parent / "_archive_cache",
         progress_callback=pipeline_reporter.callback,
     )
     csv_started_at = perf_counter()

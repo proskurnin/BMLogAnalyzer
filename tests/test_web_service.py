@@ -762,6 +762,8 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
         "protocol_scenario_results",
         "device_boot_speed",
         "section_sources",
+        "pipeline_steps",
+        "extraction_archives",
     ]
     stable_sections = report_manifest.json()["stable_sections"]
     assert "summary" in stable_sections

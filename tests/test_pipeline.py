@@ -30,6 +30,7 @@ def test_pipeline_collects_diagnostics_for_malformed_payment_resp(tmp_path):
         "inventory_archives",
         "scan_and_parse_logs",
         "aggregate_statistics",
+        "finalize_pipeline_stats",
     ]
     assert stats.steps[2].status == "completed_with_errors"
     assert stats.steps[2].errors == 1
@@ -54,6 +55,7 @@ def test_pipeline_collects_diagnostics_for_malformed_payment_resp(tmp_path):
     assert input_summary.log_types == ["bm"]
     assert input_summary.log_type_labels == ["БМ"]
     assert input_summary.analyzed_files == [str(input_dir / "sample.log")]
+    assert stats.steps[4].details["log_inventory"] == 1
 
 
 def test_pipeline_does_not_analyze_zip_twice(tmp_path):
@@ -76,6 +78,8 @@ def test_pipeline_does_not_analyze_zip_twice(tmp_path):
     assert stats.log_inventory[0].log_type == "bm"
     assert stats.archive_inventory[0].archive == str(archive_path)
     assert stats.archive_inventory[0].category == "Other log-like"
+    assert stats.steps[0].details["cache_misses"] == 0
+    assert stats.extraction_archive_stats[0].cache_status == "not_used"
     assert len(stats.input_source_summaries) == 1
     input_summary = stats.input_source_summaries[0]
     assert input_summary.source_file == str(archive_path)
@@ -134,3 +138,23 @@ def test_pipeline_falls_back_on_invalid_gzip(tmp_path):
     assert result.total == 1
     assert stats.scanned_lines == 1
     assert stats.analyzed_files == [str(extracted_dir / "broken.log.gz.log")]
+
+
+def test_pipeline_reuses_archive_cache(tmp_path):
+    input_dir = tmp_path / "input"
+    extracted_dir = tmp_path / "extracted"
+    cache_dir = tmp_path / "cache"
+    input_dir.mkdir()
+    archive_path = input_dir / "logs.zip"
+    line = "2026-04-29 20:50:41.343 PaymentStart, resp: {Code:0 Message:OK} duration=412 ms p: mgt_nbs-oti-4.4.12"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("nested/a.log", line)
+
+    run_analysis(input_dir, extracted_dir=extracted_dir, archive_cache_dir=cache_dir)
+    events, result, stats = run_analysis(input_dir, extracted_dir=extracted_dir, archive_cache_dir=cache_dir)
+
+    assert len(events) == 1
+    assert result.total == 1
+    assert stats.steps[0].details["cache_hits"] == 1
+    assert stats.steps[0].details["cache_misses"] == 0
+    assert stats.extraction_archive_stats[0].cache_status == "hit"

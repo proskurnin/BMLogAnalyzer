@@ -19,6 +19,89 @@ READER_TYPE_RE = re.compile(r"\breader\s+type\D+(?P<value>OTI|TT)\b", re.IGNOREC
 BM_VERSION_RE = re.compile(r"\bBm version:\s*(?P<value>[\d.]+)|\bBM Version:\s*(?P<value2>[\d.]+)", re.IGNORECASE)
 BM_STATUS_RE = re.compile(r"\bBm status:?\s*(?P<validator>\d+)|\bBmStatus:(?P<bm>\d+)", re.IGNORECASE)
 READER_STATUS_RE = re.compile(r"\bReader status:?\s*(?P<validator>\d+)|\bReaderStatus:(?P<bm>\d+)", re.IGNORECASE)
+VALIDATOR_MARKERS = (
+    ("activate_references", "ACTIVATE REFERENCES", "ACTIVATE REFERENCES"),
+    ("settings_ok", "End LOAD DEVICE SETTINGS: OK", "End LOAD DEVICE SETTINGS: OK"),
+    ("socket_error", "Can't open and connect socket", "Can't open and connect socket"),
+    ("socket_connected", "connect: OK", "connect: OK"),
+    ("reader_open_success", "Open reader SUCCESS", "Open reader SUCCESS"),
+    ("reader_start_end", "End start reader", "End start reader"),
+    ("qr_init", "Init QR", "Init QR"),
+    ("qr_not_found", "QR NOT FOUND", "QR NOT FOUND"),
+    ("choose_bm", "[choose_and_start_bm]", "choose_and_start_bm"),
+    ("bm_found_for_route", "found for route:", "found for route"),
+    ("start_bm_wait", "START BM AND WAIT", "START BM AND WAIT"),
+    ("start_bm", "start BM:", "start BM"),
+    ("start_completed", "START COMPLETED", "START COMPLETED"),
+    ("send_error", "send error:", "send error"),
+    ("current_protocol", "current protocol:", "current protocol"),
+    ("stop_reader", "Stop reader", "Stop reader"),
+    ("end_stop_reader", "End stop reader", "End stop reader"),
+    ("update_started", "[updateConfiguration] Started", "updateConfiguration Started"),
+    ("update_send", "Send Commands::updateConfiguration", "Send updateConfiguration"),
+    ("update_result", "[updateConfiguration] result:", "updateConfiguration result"),
+    ("bm_info_request", "[bmInfoRequest] Start", "bmInfoRequest Start"),
+)
+BM_MARKERS = (
+    ("bm_tcp_listen", "listening TCP requests", "listening TCP requests"),
+    ("bm_update_stage1", "UpdateConfiguration: Stage1", "UpdateConfiguration Stage1"),
+    ("bm_update_success", "UpdateSuccess: true", "UpdateSuccess true"),
+    ("bm_update_failed", "UpdateSuccess: false", "UpdateSuccess false"),
+    ("bm_configuration_work", "ConfigurationStatusWork", "ConfigurationStatusWork"),
+)
+BOOT_RELEVANT_NEEDLES = tuple(
+    needle
+    for _, needle, _ in (*VALIDATOR_MARKERS, *BM_MARKERS)
+) + (
+    "[VALIDATOR] STARTED",
+    "Open QR failed",
+    "/bm.sh stop",
+    "Info response",
+    "Info, resp:",
+    "Bm version:",
+    "BM Version:",
+    "version_",
+    "serial",
+    "route",
+    "reader type",
+    "Reader status",
+    "ReaderStatus",
+    "Bm status",
+    "BmStatus",
+)
+BOOT_RELEVANT_LOWER_NEEDLES = (
+    "bm version:",
+    "version_",
+    "serial",
+    "route",
+    "reader type",
+    "reader status",
+    "readerstatus",
+    "bm status",
+    "bmstatus",
+)
+BOOT_PREFILTER_NEEDLES = (
+    "[",
+    "BM",
+    "Bm",
+    "bm",
+    "Reader",
+    "reader",
+    "Info",
+    "info",
+    "Update",
+    "Configuration",
+    "listen",
+    "route",
+    "serial",
+    "version_",
+    "QR",
+    "socket",
+    "connect",
+    "start",
+    "START",
+    "Stop",
+)
 
 
 @dataclass
@@ -46,6 +129,13 @@ class DeviceBootSpeedCollector:
         self._global_bm_versions: list[tuple[DeviceBootEvidence, str]] = []
 
     def observe_line(self, source_file: str, line_number: int, line: str) -> None:
+        if self._current is None and "[VALIDATOR] STARTED" not in line:
+            return
+        if self._current is not None and "stopper" in source_file.lower():
+            return
+        if self._current is not None and not _is_boot_relevant_line(line):
+            return
+
         timestamp = _parse_timestamp(line, self._current.base_date if self._current else None)
         if "[VALIDATOR] STARTED" in line:
             session = _BootSession(source_file=source_file, base_date=timestamp.date() if timestamp else None)
@@ -95,30 +185,7 @@ class DeviceBootSpeedCollector:
         return reports
 
     def _observe_validator_marker(self, source_file: str, line_number: int, timestamp: datetime | None, line: str) -> None:
-        markers = (
-            ("activate_references", "ACTIVATE REFERENCES", "ACTIVATE REFERENCES"),
-            ("settings_ok", "End LOAD DEVICE SETTINGS: OK", "End LOAD DEVICE SETTINGS: OK"),
-            ("socket_error", "Can't open and connect socket", "Can't open and connect socket"),
-            ("socket_connected", "connect: OK", "connect: OK"),
-            ("reader_open_success", "Open reader SUCCESS", "Open reader SUCCESS"),
-            ("reader_start_end", "End start reader", "End start reader"),
-            ("qr_init", "Init QR", "Init QR"),
-            ("qr_not_found", "QR NOT FOUND", "QR NOT FOUND"),
-            ("choose_bm", "[choose_and_start_bm]", "choose_and_start_bm"),
-            ("bm_found_for_route", "found for route:", "found for route"),
-            ("start_bm_wait", "START BM AND WAIT", "START BM AND WAIT"),
-            ("start_bm", "start BM:", "start BM"),
-            ("start_completed", "START COMPLETED", "START COMPLETED"),
-            ("send_error", "send error:", "send error"),
-            ("current_protocol", "current protocol:", "current protocol"),
-            ("stop_reader", "Stop reader", "Stop reader"),
-            ("end_stop_reader", "End stop reader", "End stop reader"),
-            ("update_started", "[updateConfiguration] Started", "updateConfiguration Started"),
-            ("update_send", "Send Commands::updateConfiguration", "Send updateConfiguration"),
-            ("update_result", "[updateConfiguration] result:", "updateConfiguration result"),
-            ("bm_info_request", "[bmInfoRequest] Start", "bmInfoRequest Start"),
-        )
-        for key, needle, label in markers:
+        for key, needle, label in VALIDATOR_MARKERS:
             if needle in line:
                 repeated = key in {"bm_stop", "qr_failed", "update_send"}
                 self._record(key, source_file, line_number, timestamp, line, label, repeated=repeated)
@@ -133,14 +200,7 @@ class DeviceBootSpeedCollector:
             self._current.pending_bm_status = None
 
     def _observe_bm_marker(self, source_file: str, line_number: int, timestamp: datetime | None, line: str) -> None:
-        markers = (
-            ("bm_tcp_listen", "listening TCP requests", "listening TCP requests"),
-            ("bm_update_stage1", "UpdateConfiguration: Stage1", "UpdateConfiguration Stage1"),
-            ("bm_update_success", "UpdateSuccess: true", "UpdateSuccess true"),
-            ("bm_update_failed", "UpdateSuccess: false", "UpdateSuccess false"),
-            ("bm_configuration_work", "ConfigurationStatusWork", "ConfigurationStatusWork"),
-        )
-        for key, needle, label in markers:
+        for key, needle, label in BM_MARKERS:
             if needle in line:
                 self._record_global(key, source_file, line_number, timestamp, line, label)
         if "Info, resp:" in line:
@@ -223,6 +283,15 @@ def _observe_metadata(session: _BootSession, line: str) -> None:
         session.route = session.route or match.group("value")
     if match := READER_TYPE_RE.search(line):
         session.reader_type = match.group("value").upper()
+
+
+def _is_boot_relevant_line(line: str) -> bool:
+    if not any(needle in line for needle in BOOT_PREFILTER_NEEDLES):
+        return False
+    if any(needle in line for needle in BOOT_RELEVANT_NEEDLES):
+        return True
+    lowered = line.lower()
+    return any(needle in lowered for needle in BOOT_RELEVANT_LOWER_NEEDLES)
 
 
 def _attach_first_global(

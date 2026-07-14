@@ -121,6 +121,26 @@ def test_cleans_extracted_dir_before_extracting(tmp_path):
     assert result.extracted_files == [str(extracted / "logs.zip" / "fresh.log")]
 
 
+def test_reuses_cached_extraction_for_same_archive(tmp_path):
+    source = tmp_path / "logs.zip"
+    extracted = tmp_path / "extracted"
+    cache_dir = tmp_path / "cache"
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr("nested/a.log", "first\n")
+
+    first = extract_archives(source, extracted, cache_dir=cache_dir)
+    (extracted / "logs.zip" / "nested" / "a.log").unlink()
+    second = extract_archives(source, extracted, cache_dir=cache_dir)
+
+    assert first.cache_hits == 0
+    assert first.cache_misses == 1
+    assert second.cache_hits == 1
+    assert second.cache_misses == 0
+    assert second.archive_stats[0].cache_status == "hit"
+    assert second.extracted_files == [str(extracted / "logs.zip" / "nested" / "a.log")]
+    assert (extracted / "logs.zip" / "nested" / "a.log").read_text(encoding="utf-8") == "first\n"
+
+
 def test_extracts_log_files_from_tar_gz(tmp_path):
     source = tmp_path / "bm.tar.gz"
     extracted = tmp_path / "extracted"

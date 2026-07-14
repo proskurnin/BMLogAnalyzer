@@ -1,3 +1,5 @@
+import json
+
 from core.models import ArchiveInventoryRow, DiagnosticLine, PipelineStats
 from core.config import ReportConfig
 from core.version import __version__
@@ -93,6 +95,9 @@ def test_writes_extended_csv_reports(tmp_path):
     assert (tmp_path / "system_error_summary.csv").exists()
     assert (tmp_path / "other_logs.csv").exists()
     assert "input/sample.log" in (tmp_path / "bundle_manifest.csv").read_text(encoding="utf-8")
+    bundle_manifest = json.loads((tmp_path / "bundle_manifest.json").read_text(encoding="utf-8"))
+    assert "pipeline_steps" in bundle_manifest
+    assert "extraction_archives" in bundle_manifest
     assert f"app_version,{__version__}" in (tmp_path / "report_metadata.csv").read_text(encoding="utf-8")
     assert "BM rotate" in (tmp_path / "archive_inventory.csv").read_text(encoding="utf-8")
     assert (tmp_path / "summary_by_archive_category.csv").read_text(encoding="utf-8").splitlines() == [
