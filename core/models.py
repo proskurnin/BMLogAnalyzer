@@ -127,9 +127,18 @@ class InputSourceSummary:
     input_kind: str
     log_types: list[str] = field(default_factory=list)
     log_type_labels: list[str] = field(default_factory=list)
+    log_type_counts: dict[str, int] = field(default_factory=dict)
+    log_type_evidence: dict[str, list[str]] = field(default_factory=dict)
     analyzed_files: list[str] = field(default_factory=list)
     extracted_files: list[str] = field(default_factory=list)
     evidence: list[str] = field(default_factory=list)
+    archive_file_count: int = 0
+    log_file_count: int = 0
+    other_file_count: int = 0
+    extracted_file_count: int = 0
+    analyzed_file_count: int = 0
+    skipped_file_count: int = 0
+    skipped_reasons: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

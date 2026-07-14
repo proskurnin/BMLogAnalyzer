@@ -165,9 +165,19 @@ def render_html_report(
         "<div>",
         "<h1>BM Log Analyzer</h1>",
         f'<span class="version">отчёт создан в версии сервиса {escape(__version__)}</span>',
-        _input_composition_header(input_source_summaries),
         "</div>",
         "</header>",
+        _upload_composition_section(
+            input_source_summaries,
+            log_groups,
+            log_total,
+            other_groups,
+            other_total,
+            section_sources,
+            _section_source_text(section_sources, "upload_composition"),
+            _section_source_text(section_sources, "log_files"),
+            _section_source_text(section_sources, "other_files"),
+        ),
         '<section class="section">',
         f'<div class="summary-grid">{summary_cards}</div>',
         "</section>",
@@ -186,21 +196,8 @@ def render_html_report(
             ]
         )
     body_parts.append("</section>")
-    if log_total:
-        body_parts.extend(
-            [
-                '<section class="section section--chart">',
-                '<div class="section-title">',
-                "<h2>Log-файлы</h2>",
-                f"<p>Кликабельная сводка по типам логов в архивах. {escape(_section_source_text(section_sources, 'log_files'))}</p>",
-                "</div>",
-                f'<div id="log-files-root">{_bar_chart(log_groups, log_total)}</div>',
-                "</section>",
-            ]
-        )
     body_parts.extend(
         [
-            _collapsible_other_section(other_groups, other_total, _section_source_text(section_sources, "other_files")),
             f'<script id="report-data" type="application/json">{_json_script(report_data)}</script>',
             _check_results_section(check_results, check_cases, events, _section_source_text(section_sources, "validation_checks")),
             _suspicious_section(suspicious_rows, _section_source_text(section_sources, "suspicious")) if suspicious_rows else "",
@@ -407,16 +404,242 @@ def _bm_meta_grid(cards_html: str) -> str:
     return f'<div class="bm-meta-grid">{cards_html}</div>'
 
 
-def _input_composition_header(items: list[InputSourceSummary]) -> str:
+def _upload_composition_section(
+    input_items: list[InputSourceSummary],
+    log_groups: list[dict[str, object]],
+    log_total: int,
+    other_groups: list[dict[str, object]],
+    other_total: int,
+    section_sources: dict[str, dict[str, object]],
+    upload_source_note: str = "",
+    log_source_note: str = "",
+    other_source_note: str = "",
+) -> str:
+    if not input_items and log_total == 0 and other_total == 0:
+        return ""
+    summary_text = _upload_composition_summary_text(input_items, log_total, other_total)
+    input_rows = "".join(f"<li>{escape(_input_source_summary_text(item))}</li>" for item in input_items)
+    input_parts = ['<div class="upload-composition-summary">', f"<p>{escape(summary_text)}</p>"]
+    if input_rows:
+        input_parts.append(f"<ul>{input_rows}</ul>")
+    input_parts.append("</div>")
+    input_block = "".join(input_parts)
+    diagnostics_block = _upload_processing_diagnostics(input_items)
+    log_type_detection_block = _upload_log_type_detection(input_items)
+    section_source_block = _section_source_matrix(section_sources)
+    log_block = ""
+    if log_total:
+        log_block = "\n".join(
+            [
+                '<section class="upload-composition-part">',
+                "<h3>Log-файлы</h3>",
+                f"<p class=\"muted\">Кликабельная сводка по типам логов в архивах. {escape(log_source_note)}</p>",
+                f'<div id="log-files-root">{_bar_chart(log_groups, log_total)}</div>',
+                "</section>",
+            ]
+        )
+    other_block = ""
+    if other_total:
+        other_block = "\n".join(
+            [
+                '<section class="upload-composition-part">',
+                "<h3>Прочие файлы</h3>",
+                f"<p class=\"muted\">Файлы, которые не относятся к логам. {escape(other_source_note)}</p>",
+                f'<div id="other-files-root">{_bar_chart(other_groups, other_total)}</div>',
+                "</section>",
+            ]
+        )
+    return "\n".join(
+        [
+            '<details class="collapsible collapsible--upload-composition" open>',
+            "<summary>",
+            "<span>",
+            "<strong>Состав загрузки</strong>",
+            f"<em>{escape(summary_text)} {escape(upload_source_note)}</em>",
+            "</span>",
+            "</summary>",
+            '<div class="collapsible-body">',
+            input_block,
+            diagnostics_block,
+            log_type_detection_block,
+            section_source_block,
+            log_block,
+            other_block,
+            "</div>",
+            "</details>",
+        ]
+    )
+
+
+def _upload_composition_summary_text(items: list[InputSourceSummary], log_total: int, other_total: int) -> str:
+    labels = sorted({label for item in items for label in _known_log_type_labels(item)})
+    if labels:
+        base = f"Он содержит логи следующих типов: {', '.join(labels)}."
+    elif items:
+        base = "Распознанные типы логов не найдены."
+    else:
+        base = "Состав загрузки рассчитан по структуре архива."
+    details = []
+    if log_total:
+        details.append(f"Log-файлов: {log_total}.")
+    if other_total:
+        details.append(f"Прочих файлов: {other_total}.")
+    return " ".join([base, *details])
+
+
+def _upload_processing_diagnostics(items: list[InputSourceSummary]) -> str:
     if not items:
         return ""
-    rows = "".join(f"<li>{escape(_input_source_summary_text(item))}</li>" for item in items)
-    return (
-        '<div class="upload-composition">'
-        "<strong>Состав загрузки</strong>"
-        f"<ul>{rows}</ul>"
-        "</div>"
+    rows = []
+    for item in items:
+        reasons = _format_skipped_reasons(item.skipped_reasons)
+        rows.append(
+            "<tr>"
+            f"<td>{escape(Path(item.source_file).name)}</td>"
+            f"<td>{escape(_input_kind_label(item.input_kind))}</td>"
+            f"<td>{item.archive_file_count}</td>"
+            f"<td>{item.log_file_count}</td>"
+            f"<td>{item.other_file_count}</td>"
+            f"<td>{item.extracted_file_count}</td>"
+            f"<td>{item.analyzed_file_count}</td>"
+            f"<td>{item.skipped_file_count}</td>"
+            f"<td>{escape(reasons)}</td>"
+            "</tr>"
+        )
+    return "\n".join(
+        [
+            '<section class="upload-composition-part">',
+            "<h3>Полнота обработки</h3>",
+            '<div class="table-wrap">',
+            '<table class="status-table status-table--upload-diagnostics">',
+            "<thead class=\"status-table-head\"><tr>"
+            "<th>Источник</th><th>Тип</th><th>Файлов в источнике</th><th>Log-файлов</th>"
+            "<th>Прочих</th><th>Извлечено</th><th>Проанализировано</th><th>Пропущено</th><th>Причины</th>"
+            "</tr></thead>",
+            f"<tbody>{''.join(rows)}</tbody>",
+            "</table>",
+            "</div>",
+            "</section>",
+        ]
     )
+
+
+def _upload_log_type_detection(items: list[InputSourceSummary]) -> str:
+    rows = []
+    for item in items:
+        for log_type in item.log_types:
+            evidence = item.log_type_evidence.get(log_type, [])
+            evidence_html = "<br>".join(f"<code>{escape(line)}</code>" for line in evidence[:3])
+            if not evidence_html:
+                evidence_html = '<span class="muted">evidence не найден</span>'
+            rows.append(
+                "<tr>"
+                f"<td>{escape(Path(item.source_file).name)}</td>"
+                f"<td>{escape(_log_type_label(item, log_type))}</td>"
+                f"<td>{item.log_type_counts.get(log_type, 0)}</td>"
+                f"<td>{evidence_html}</td>"
+                "</tr>"
+            )
+    if not rows:
+        return ""
+    return "\n".join(
+        [
+            '<section class="upload-composition-part">',
+            "<h3>Распознанные типы логов</h3>",
+            '<div class="table-wrap">',
+            '<table class="status-table status-table--log-type-detection">',
+            '<colgroup><col style="width:20%"><col style="width:18%"><col style="width:10%"><col style="width:52%"></colgroup>',
+            '<thead class="status-table-head"><tr><th>Источник</th><th>Тип лога</th><th>Файлов</th><th>Evidence</th></tr></thead>',
+            f"<tbody>{''.join(rows)}</tbody>",
+            "</table>",
+            "</div>",
+            "</section>",
+        ]
+    )
+
+
+def _log_type_label(item: InputSourceSummary, log_type: str) -> str:
+    labels_by_type = dict(zip(item.log_types, item.log_type_labels, strict=False))
+    return labels_by_type.get(log_type, log_type)
+
+
+def _section_source_matrix(section_sources: dict[str, dict[str, object]]) -> str:
+    rows = []
+    for section_id in _section_source_matrix_order():
+        source = section_sources.get(section_id)
+        if not source:
+            continue
+        required = [str(item) for item in source.get("required_log_type_labels", [])]
+        if not required:
+            continue
+        matched = [str(item) for item in source.get("matched_log_type_labels", [])]
+        missing = [str(item) for item in source.get("missing_log_type_labels", [])]
+        status = str(source.get("status", ""))
+        rows.append(
+            '<tr class="status-row">'
+            f"<td>{escape(str(source.get('title') or section_id))}</td>"
+            f"<td>{escape(', '.join(required) or 'не требуется')}</td>"
+            f"<td>{escape(', '.join(matched) or 'нет')}</td>"
+            f"<td>{escape(', '.join(missing) or 'нет')}</td>"
+            f'<td><span class="source-status source-status--{escape(status)}">{escape(_section_source_status_label(status))}</span></td>'
+            "</tr>"
+        )
+    if not rows:
+        return ""
+    return "\n".join(
+        [
+            '<section class="upload-composition-part">',
+            "<h3>Разделы отчёта и источники</h3>",
+            '<div class="table-wrap">',
+            '<table class="status-table status-table--section-sources">',
+            "<thead class=\"status-table-head\"><tr>"
+            "<th>Раздел</th><th>Нужны логи</th><th>Найдены</th><th>Не найдены</th><th>Статус</th>"
+            "</tr></thead>",
+            f"<tbody>{''.join(rows)}</tbody>",
+            "</table>",
+            "</div>",
+            "</section>",
+        ]
+    )
+
+
+def _section_source_matrix_order() -> list[str]:
+    return [
+        "bm_meta",
+        "validation_checks",
+        "suspicious",
+        "protocol_scenarios",
+        "device_boot_speed",
+        "bm_statuses",
+        "grouped_statuses",
+        "date_dynamics",
+        "unclassified_diagnostics",
+        "validator_analytics",
+    ]
+
+
+def _section_source_status_label(status: str) -> str:
+    if status == "available":
+        return "доступен"
+    if status == "partial":
+        return "частично"
+    if status == "missing":
+        return "нет данных"
+    return status or "не требуется"
+
+
+def _format_skipped_reasons(reasons: dict[str, int]) -> str:
+    if not reasons:
+        return "нет"
+    return "; ".join(f"{label}: {count}" for label, count in sorted(reasons.items()))
+
+
+def _input_kind_label(input_kind: str) -> str:
+    if input_kind == "archive":
+        return "архив"
+    if input_kind == "log_file":
+        return "лог-файл"
+    return input_kind
 
 
 def _input_source_summary_text(item: InputSourceSummary) -> str:
@@ -449,10 +672,19 @@ def _input_source_summary_payload(item: InputSourceSummary) -> dict[str, object]
         "input_kind": item.input_kind,
         "log_types": item.log_types,
         "log_type_labels": item.log_type_labels,
+        "log_type_counts": item.log_type_counts,
+        "log_type_evidence": item.log_type_evidence,
         "analyzed_files": item.analyzed_files,
         "extracted_files": item.extracted_files,
         "evidence": item.evidence,
         "summary_text": _input_source_summary_text(item),
+        "archive_file_count": item.archive_file_count,
+        "log_file_count": item.log_file_count,
+        "other_file_count": item.other_file_count,
+        "extracted_file_count": item.extracted_file_count,
+        "analyzed_file_count": item.analyzed_file_count,
+        "skipped_file_count": item.skipped_file_count,
+        "skipped_reasons": item.skipped_reasons,
     }
 
 
@@ -619,27 +851,6 @@ def _summary_cards(
         _metric_card("System logs", system_log_count, system_groups, kind="metric", payload_format="files"),
     ]
     return "".join(cards)
-
-
-def _collapsible_other_section(other_groups: list[dict[str, object]], other_total: int, source_note: str = "") -> str:
-    if other_total == 0:
-        return ""
-    return "\n".join(
-        [
-            '<details class="collapsible">',
-            "<summary>",
-            "<span>",
-            "<strong>Прочие файлы</strong>",
-            f"<em>Файлы, которые не относятся к логам. {escape(source_note)}</em>",
-            "</span>",
-            f"<strong>{other_total}</strong>",
-            "</summary>",
-            '<div class="collapsible-body" id="other-files-root">',
-            _bar_chart(other_groups, other_total),
-            "</div>",
-            "</details>",
-        ]
-    )
 
 
 def _suspicious_section(rows: list[dict[str, object]], source_note: str = "") -> str:
@@ -878,16 +1089,23 @@ def _device_boot_speed_section(reports: list[DeviceBootReport], source_note: str
     if not reports:
         return ""
     rendered_reports = []
-    for report in reports:
+    for index, report in enumerate(reports, start=1):
         rendered_reports.append(
             "\n".join(
                 [
-                    '<article class="device-boot-report">',
+                    '<details class="collapsible device-boot-report">',
+                    "<summary>",
+                    "<span>",
+                    f"<strong>{escape(_device_boot_summary_title(report))}</strong>",
+                    f"<em>{escape(_device_boot_source_summary(report))}</em>",
+                    "</span>",
+                    "</summary>",
+                    '<div class="collapsible-body">',
                     _device_boot_report_head(report),
                     _device_boot_segment_table(report.segments),
-                    '<h3 class="checks-subtitle">Текстовый отчёт</h3>',
-                    f'<pre class="device-boot-text">{escape(_device_boot_text_report(report))}</pre>',
-                    "</article>",
+                    _device_boot_text_report_block(report, index),
+                    "</div>",
+                    "</details>",
                 ]
             )
         )
@@ -902,6 +1120,7 @@ def _device_boot_speed_section(reports: list[DeviceBootReport], source_note: str
             "</span>",
             "</summary>",
             '<div class="collapsible-body">',
+            _device_boot_overview_chart(reports),
             "".join(rendered_reports),
             "</div>",
             "</details>",
@@ -931,7 +1150,97 @@ def _device_boot_report_head(report: DeviceBootReport) -> str:
             f"<h3>{escape(report.title)}</h3>",
             f'<p class="muted">Источник: {escape(sources or "не найден")}</p>',
             f'<div class="device-boot-facts">{cards}</div>',
+            _device_boot_segment_timeline(report.segments, report.total_seconds),
             "</div>",
+        ]
+    )
+
+
+def _device_boot_overview_chart(reports: list[DeviceBootReport]) -> str:
+    durations = [report.total_seconds for report in reports if report.total_seconds is not None]
+    if not durations:
+        return ""
+    max_duration = max(durations) or 1
+    rows = []
+    for report in reports:
+        duration = report.total_seconds
+        width = 0.0 if duration is None else max(1.0, min(100.0, duration / max_duration * 100))
+        rows.append(
+            '<div class="device-boot-chart-row">'
+            f'<span class="device-boot-chart-label">{escape(_device_boot_short_title(report))}</span>'
+            '<div class="device-boot-chart-track">'
+            f'<div class="device-boot-chart-fill" style="width:{width:.2f}%"></div>'
+            "</div>"
+            f'<strong>{escape(_format_duration(duration))}</strong>'
+            "</div>"
+        )
+    return "\n".join(
+        [
+            '<section class="device-boot-chart">',
+            "<h3>Время запусков</h3>",
+            "".join(rows),
+            "</section>",
+        ]
+    )
+
+
+def _device_boot_segment_timeline(segments: list[DeviceBootSegment], total_seconds: float | None) -> str:
+    timed_segments = [segment for segment in segments if segment.duration_seconds is not None]
+    if not timed_segments or total_seconds is None or total_seconds <= 0:
+        return ""
+    chips = []
+    for index, segment in enumerate(timed_segments, start=1):
+        duration = segment.duration_seconds or 0
+        width = max(1.0, min(100.0, duration / total_seconds * 100))
+        chips.append(
+            '<span class="device-boot-timeline-segment" '
+            f'style="width:{width:.2f}%" title="{escape(segment.title)}: {escape(_format_duration(duration))}">'
+            f"{index}"
+            "</span>"
+        )
+    return "\n".join(
+        [
+            '<div class="device-boot-timeline" aria-label="Доли этапов запуска">',
+            "".join(chips),
+            "</div>",
+        ]
+    )
+
+
+def _device_boot_summary_title(report: DeviceBootReport) -> str:
+    serial = report.validator_serial or "не найдено"
+    started_at = _format_datetime(report.started_at)
+    return f"АСКП_{serial} | Запуск {started_at} | Время запуска: {_format_duration(report.total_seconds)}"
+
+
+def _device_boot_short_title(report: DeviceBootReport) -> str:
+    serial = report.validator_serial or "unknown"
+    if report.started_at:
+        return f"АСКП_{serial} {report.started_at:%d.%m %H:%M:%S}"
+    return f"АСКП_{serial}"
+
+
+def _device_boot_source_summary(report: DeviceBootReport) -> str:
+    sources = ", ".join(report.source_files)
+    return f"Источник: {sources or 'не найден'}"
+
+
+def _device_boot_text_report_block(report: DeviceBootReport, index: int) -> str:
+    text_id = f"device-boot-text-{index}"
+    return "\n".join(
+        [
+            '<details class="collapsible device-boot-text-details">',
+            "<summary>",
+            "<span>",
+            "<strong>Текстовый отчёт</strong>",
+            "<em>Подробные этапы запуска и evidence-строки.</em>",
+            "</span>",
+            "</summary>",
+            '<div class="collapsible-body">',
+            f'<button type="button" class="copy-button" data-copy-target="{escape(text_id)}">Скопировать текстовый отчёт</button>',
+            f'<pre class="device-boot-text" id="{escape(text_id)}">{escape(_device_boot_text_report(report))}</pre>',
+            "</div>",
+            "</details>",
         ]
     )
 
@@ -1043,6 +1352,12 @@ def _format_timestamp(value: datetime | None) -> str:
     return value.strftime("%H:%M:%S.%f").rstrip("0").rstrip(".")
 
 
+def _format_datetime(value: datetime | None) -> str:
+    if value is None:
+        return "не найдено"
+    return value.strftime("%d.%m.%Y в %H:%M:%S")
+
+
 def _format_time_range(started_at: datetime | None, finished_at: datetime | None) -> str:
     if started_at is None or finished_at is None:
         return "не рассчитано"
@@ -1052,7 +1367,10 @@ def _format_time_range(started_at: datetime | None, finished_at: datetime | None
 def _format_duration(value: float | None) -> str:
     if value is None:
         return "не рассчитано"
-    return f"{value:.3f}".replace(".", ",") + " секунды"
+    minutes = int(value // 60)
+    seconds = value - minutes * 60
+    seconds_text = f"{seconds:06.3f}".replace(".", ",")
+    return f"{minutes} мин {seconds_text} сек"
 
 
 def _evidence_short_line(evidence: DeviceBootEvidence) -> str:
@@ -3137,6 +3455,13 @@ def _script() -> str:
       clearFilters();
       return;
     }
+    const copyButton = event.target.closest('[data-copy-target]');
+    if (copyButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      copyTextBlock(copyButton);
+      return;
+    }
     const focusGroup = event.target.closest('[data-focus-group]');
     if (focusGroup) {
       event.preventDefault();
@@ -3184,6 +3509,43 @@ def _script() -> str:
     return `${mb.toFixed(1).replace(/\.0$/, '')} MB`;
   }
 
+  function copyTextBlock(button) {
+    const targetId = button.dataset.copyTarget || '';
+    const target = document.getElementById(targetId);
+    const text = target ? target.textContent || '' : '';
+    if (!text) {
+      return;
+    }
+    const original = button.textContent;
+    const done = () => {
+      button.textContent = 'Скопировано';
+      window.setTimeout(() => {
+        button.textContent = original;
+      }, 1600);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+      return;
+    }
+    fallbackCopy(text, done);
+  }
+
+  function fallbackCopy(text, done) {
+    const field = document.createElement('textarea');
+    field.value = text;
+    field.setAttribute('readonly', '');
+    field.style.position = 'fixed';
+    field.style.top = '-9999px';
+    document.body.appendChild(field);
+    field.select();
+    try {
+      document.execCommand('copy');
+      done();
+    } finally {
+      document.body.removeChild(field);
+    }
+  }
+
   renderAll();
 })();
 </script>
@@ -3201,10 +3563,16 @@ h1, h2, p { margin: 0; }
 .header p { color: var(--muted); font-size: 13px; }
 .version { display: inline-block; margin-top: 6px; color: var(--muted); font-size: 13px; }
 .header h1 { font-size: 30px; line-height: 1.1; }
-.upload-composition { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--soft); max-width: 920px; }
-.upload-composition strong { display: block; font-size: 13px; line-height: 1.2; }
-.upload-composition ul { margin: 7px 0 0; padding-left: 18px; color: var(--text); }
-.upload-composition li + li { margin-top: 4px; }
+.upload-composition-summary { margin-bottom: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--soft); }
+.upload-composition-summary ul { margin: 8px 0 0; padding-left: 18px; }
+.upload-composition-part + .upload-composition-part { margin-top: 16px; }
+.upload-composition-part h3 { margin: 0 0 4px; font-size: 15px; line-height: 1.2; }
+.upload-composition-part p { margin-bottom: 10px; }
+.status-table--log-type-detection code { display: inline-block; max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
+.source-status { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 999px; padding: 3px 8px; font-size: 12px; white-space: nowrap; background: var(--soft); }
+.source-status--available { color: #137752; background: #eef8ee; border-color: #c9ddc9; }
+.source-status--partial { color: #9a6700; background: #fff8e6; border-color: #ead7a0; }
+.source-status--missing { color: #b42318; background: #fff1f0; border-color: #f2c4c0; }
 .header-badge { min-width: 130px; background: var(--soft); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
 .header-badge span, .metric span, .bm-meta-card span { display: block; color: var(--muted); font-size: 12px; }
 .header-badge strong, .metric strong, .bm-meta-card strong { display: block; margin-top: 4px; font-size: 18px; line-height: 1.2; }
@@ -3353,15 +3721,35 @@ h1, h2, p { margin: 0; }
 .status-table--checks { table-layout: fixed; }
 .status-table--checks th, .status-table--checks td { padding: 8px 9px; }
 .status-table--checks td:nth-child(5), .status-table--checks th:nth-child(5) { white-space: pre-wrap; overflow-wrap: anywhere; }
-.device-boot-report + .device-boot-report { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
+.device-boot-report + .device-boot-report { margin-top: 12px; }
+.collapsible--device-boot .device-boot-report { box-shadow: none; border-color: #d9e0e7; }
+.device-boot-report summary strong { font-size: 15px; }
+.device-boot-chart { margin-bottom: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--soft); }
+.device-boot-chart h3 { margin: 0 0 10px; font-size: 15px; line-height: 1.2; }
+.device-boot-chart-row { display: grid; grid-template-columns: minmax(180px, 240px) minmax(120px, 1fr) minmax(112px, auto); gap: 10px; align-items: center; min-height: 28px; }
+.device-boot-chart-row + .device-boot-chart-row { margin-top: 8px; }
+.device-boot-chart-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 13px; }
+.device-boot-chart-track { height: 14px; border-radius: 999px; background: #e8edf2; overflow: hidden; }
+.device-boot-chart-fill { height: 100%; border-radius: inherit; background: #2764a3; min-width: 2px; }
+.device-boot-chart-row strong { white-space: nowrap; font-size: 13px; color: var(--muted); text-align: right; }
 .device-boot-head h3 { margin: 0 0 4px; font-size: 16px; }
 .device-boot-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 12px 0; }
 .device-boot-fact { background: var(--soft); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
 .device-boot-fact span { display: block; color: var(--muted); font-size: 12px; }
 .device-boot-fact strong { display: block; margin-top: 3px; font-size: 15px; line-height: 1.25; overflow-wrap: anywhere; }
+.device-boot-timeline { display: flex; width: 100%; min-height: 22px; border-radius: 999px; overflow: hidden; background: #e8edf2; border: 1px solid var(--line); }
+.device-boot-timeline-segment { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; color: #fff; font-size: 11px; line-height: 1; background: #2764a3; border-right: 1px solid rgba(255,255,255,0.6); }
+.device-boot-timeline-segment:nth-child(2n) { background: #137752; }
+.device-boot-timeline-segment:nth-child(3n) { background: #a15c06; }
+.device-boot-timeline-segment:nth-child(4n) { background: #7c3aed; }
 .status-table--device-boot { table-layout: fixed; }
 .status-table--device-boot code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.device-boot-text-details { margin-top: 14px; box-shadow: none; border-color: #d9e0e7; }
+.device-boot-text-details summary strong { font-size: 15px; }
 .device-boot-text { margin: 8px 0 0; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: #f8fafc; color: #1f2933; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.copy-button { appearance: none; border: 1px solid var(--line); background: var(--soft); color: inherit; font: inherit; border-radius: 8px; padding: 8px 10px; cursor: pointer; }
+.copy-button:hover { background: #f2f5f8; border-color: #dbe3ea; }
+.copy-button:focus-visible { outline: 2px solid #9db9d6; outline-offset: 2px; }
 .status-row--check-critical td { color: #b42318; }
 .status-row--check-warning td { color: #9a6700; }
 .status-row--check-info td { color: #111827; }
@@ -3433,6 +3821,8 @@ tr:last-child td { border-bottom: 0; }
 @media (max-width: 760px) {
   main { padding: 16px; }
   .header, .section-title, .modal-line-head { align-items: flex-start; flex-direction: column; }
+  .device-boot-chart-row { grid-template-columns: 1fr; gap: 5px; }
+  .device-boot-chart-row strong { text-align: left; }
   .notes { grid-template-columns: 1fr; }
 }
 """.strip()

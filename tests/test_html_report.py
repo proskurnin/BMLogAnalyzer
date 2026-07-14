@@ -206,6 +206,7 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert ai_context["schema_version"] == "bm-log-analyzer.ai-context.v1"
     assert ai_context["summary"]["events"] == 6
     assert "protocol_scenario_results" in ai_context
+    assert ai_context["input_sources"] == []
 
 
 def test_html_report_maps_mmv2_package_to_mcd2_carrier(tmp_path):
@@ -280,6 +281,11 @@ def test_writes_upload_composition_in_report_header_and_manifest(tmp_path):
                 input_kind="archive",
                 log_types=["bm", "stopper", "oti_reader_library", "validator_app"],
                 log_type_labels=["БМ", "ПО стоппера", "библиотеки ридера ОТИ", "ПО валидатора"],
+                log_type_counts={"bm": 1, "stopper": 1, "oti_reader_library": 1, "validator_app": 1},
+                log_type_evidence={
+                    "bm": ["_workdir/extracted/13-07-2026.zip/bm/a.log: content:PaymentStart"],
+                    "validator_app": ["_workdir/extracted/nested.zip/validator/start.log: content:validator_app"],
+                },
                 analyzed_files=[
                     "_workdir/extracted/13-07-2026.zip/bm/a.log",
                     "_workdir/extracted/nested.zip/validator/start.log",
@@ -288,6 +294,13 @@ def test_writes_upload_composition_in_report_header_and_manifest(tmp_path):
                     "_workdir/extracted/13-07-2026.zip/bm/a.log",
                     "_workdir/extracted/nested.zip/validator/start.log",
                 ],
+                archive_file_count=3,
+                log_file_count=2,
+                other_file_count=1,
+                extracted_file_count=2,
+                analyzed_file_count=2,
+                skipped_file_count=1,
+                skipped_reasons={"прочие файлы в архиве": 1},
             )
         ],
     )
@@ -297,16 +310,51 @@ def test_writes_upload_composition_in_report_header_and_manifest(tmp_path):
 
     html = (tmp_path / "analysis_report.html").read_text(encoding="utf-8")
     manifest = json.loads((tmp_path / "analysis_report.json").read_text(encoding="utf-8"))
+    ai_context = json.loads((tmp_path / "analysis_report.ai_context.json").read_text(encoding="utf-8"))
     expected_text = (
         "Загружен архив 13-07-2026.zip. Он содержит логи следующих типов: "
         "БМ, ПО стоппера, библиотеки ридера ОТИ, ПО валидатора."
     )
     assert "Состав загрузки" in html
     assert expected_text in html
+    assert "Полнота обработки" in html
+    assert "Распознанные типы логов" in html
+    assert "Разделы отчёта и источники" in html
+    assert "Файлов в источнике" in html
+    assert "Проанализировано" in html
+    assert "прочие файлы в архиве: 1" in html
+    assert "content:PaymentStart" in html
+    assert "content:validator_app" in html
+    assert "Скорость загрузки устройства" in html
+    assert "BM-статусы" in html
+    assert "доступен" in html
     assert "upload_composition" in manifest["stable_sections"]
     assert manifest["upload_composition"][0]["summary_text"] == expected_text
     assert manifest["upload_composition"][0]["log_types"] == ["bm", "stopper", "oti_reader_library", "validator_app"]
+    assert manifest["upload_composition"][0]["log_type_counts"] == {
+        "bm": 1,
+        "stopper": 1,
+        "oti_reader_library": 1,
+        "validator_app": 1,
+    }
+    assert manifest["upload_composition"][0]["log_type_evidence"]["bm"] == [
+        "_workdir/extracted/13-07-2026.zip/bm/a.log: content:PaymentStart"
+    ]
+    assert manifest["upload_composition"][0]["archive_file_count"] == 3
+    assert manifest["upload_composition"][0]["log_file_count"] == 2
+    assert manifest["upload_composition"][0]["other_file_count"] == 1
+    assert manifest["upload_composition"][0]["extracted_file_count"] == 2
+    assert manifest["upload_composition"][0]["analyzed_file_count"] == 2
+    assert manifest["upload_composition"][0]["skipped_file_count"] == 1
+    assert manifest["upload_composition"][0]["skipped_reasons"] == {"прочие файлы в архиве": 1}
     assert manifest["section_sources"]["upload_composition"]["data_source"] == "загруженные файлы"
+    assert ai_context["input_sources"][0]["source_file"] == "input/13-07-2026.zip"
+    assert ai_context["input_sources"][0]["log_type_counts"] == {
+        "bm": 1,
+        "stopper": 1,
+        "oti_reader_library": 1,
+        "validator_app": 1,
+    }
 
 
 def test_html_report_shows_non_emv_card_status_and_zero_row_toggle(tmp_path):

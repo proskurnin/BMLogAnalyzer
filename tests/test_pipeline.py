@@ -54,7 +54,15 @@ def test_pipeline_collects_diagnostics_for_malformed_payment_resp(tmp_path):
     assert input_summary.input_kind == "log_file"
     assert input_summary.log_types == ["bm"]
     assert input_summary.log_type_labels == ["БМ"]
+    assert input_summary.log_type_counts == {"bm": 1}
+    assert "bm" in input_summary.log_type_evidence
     assert input_summary.analyzed_files == [str(input_dir / "sample.log")]
+    assert input_summary.archive_file_count == 1
+    assert input_summary.log_file_count == 1
+    assert input_summary.other_file_count == 0
+    assert input_summary.extracted_file_count == 0
+    assert input_summary.analyzed_file_count == 1
+    assert input_summary.skipped_file_count == 0
     assert stats.steps[4].details["log_inventory"] == 1
 
 
@@ -86,8 +94,17 @@ def test_pipeline_does_not_analyze_zip_twice(tmp_path):
     assert input_summary.input_kind == "archive"
     assert input_summary.log_types == ["bm"]
     assert input_summary.log_type_labels == ["БМ"]
+    assert input_summary.log_type_counts == {"bm": 1}
+    assert "bm" in input_summary.log_type_evidence
     assert input_summary.extracted_files == [str(extracted_dir / "logs.zip" / "nested" / "a.log")]
     assert input_summary.analyzed_files == [str(extracted_dir / "logs.zip" / "nested" / "a.log")]
+    assert input_summary.archive_file_count == 1
+    assert input_summary.log_file_count == 1
+    assert input_summary.other_file_count == 0
+    assert input_summary.extracted_file_count == 1
+    assert input_summary.analyzed_file_count == 1
+    assert input_summary.skipped_file_count == 0
+    assert input_summary.skipped_reasons == {}
 
 
 def test_pipeline_maps_nested_archives_to_top_level_input_summary(tmp_path):
@@ -115,10 +132,18 @@ def test_pipeline_maps_nested_archives_to_top_level_input_summary(tmp_path):
     assert input_summary.input_kind == "archive"
     assert input_summary.log_types == ["bm", "validator_app"]
     assert input_summary.log_type_labels == ["БМ", "ПО валидатора"]
+    assert input_summary.log_type_counts == {"bm": 1, "validator_app": 1}
+    assert set(input_summary.log_type_evidence) == {"bm", "validator_app"}
     assert input_summary.extracted_files == [
         str(extracted_dir / "nested.zip" / "bm" / "a.log"),
         str(extracted_dir / "nested.zip" / "validator" / "start.log"),
     ]
+    assert input_summary.archive_file_count == 1
+    assert input_summary.log_file_count == 0
+    assert input_summary.other_file_count == 1
+    assert input_summary.extracted_file_count == 2
+    assert input_summary.analyzed_file_count == 2
+    assert input_summary.skipped_reasons == {"прочие файлы в архиве": 1}
 
 
 def test_pipeline_falls_back_on_invalid_gzip(tmp_path):

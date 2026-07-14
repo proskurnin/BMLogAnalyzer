@@ -38,3 +38,54 @@ def test_collects_log_inventory_by_type_versions_dates_and_reader_metadata():
     assert error_status_counts_by_type(inventory, "reader") == {"error": 1}
     assert error_status_counts_by_type(inventory, "system") == {"timeout": 1}
     assert error_status_counts_by_type(inventory, "oti_reader_library") == {"failure": 1}
+
+
+def test_bm_markers_win_over_generic_stopper_content():
+    collector = LogInventoryCollector()
+    source = "logs/bm/bm-rotate.log"
+    collector.observe_line(
+        source,
+        "2026-04-30 PaymentStart, resp: {Code:0 Message:OK} p: mgt_nbs-oti-4.4.12",
+    )
+    collector.observe_line(source, "readerConfiguration: OK")
+
+    inventory = collector.finalize()
+
+    assert len(inventory) == 1
+    assert inventory[0].log_type == "bm"
+    assert "content:stopper" in inventory[0].evidence
+
+
+def test_temp_directory_name_with_bm_does_not_create_bm_path_hint():
+    collector = LogInventoryCollector()
+    collector.observe_line("/private/tmp/bmlog-work/validator/app.log", "2026-05-03 hello")
+
+    inventory = collector.finalize()
+
+    assert len(inventory) == 1
+    assert inventory[0].log_type == "other"
+    assert "path:bm" not in inventory[0].evidence
+
+
+def test_explicit_bm_path_wins_over_validator_content():
+    collector = LogInventoryCollector()
+    collector.observe_line("logs/bm-std/bm.current.log", "[VALIDATOR] STARTED")
+    collector.observe_line("logs/bm-std/bm.current.log", "START COMPLETED")
+
+    inventory = collector.finalize()
+
+    assert len(inventory) == 1
+    assert inventory[0].log_type == "bm"
+    assert "content:validator_app" in inventory[0].evidence
+    assert "path:bm" in inventory[0].evidence
+
+
+def test_bm_token_in_file_name_creates_bm_path_hint():
+    collector = LogInventoryCollector()
+    collector.observe_line("input/z_bm.log", "2026-05-03 hello")
+
+    inventory = collector.finalize()
+
+    assert len(inventory) == 1
+    assert inventory[0].log_type == "bm"
+    assert "path:bm" in inventory[0].evidence

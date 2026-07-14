@@ -1,6 +1,6 @@
 import json
 
-from core.models import ArchiveInventoryRow, DiagnosticLine, PipelineStats
+from core.models import ArchiveInventoryRow, DiagnosticLine, InputSourceSummary, PipelineStats
 from core.config import ReportConfig
 from core.version import __version__
 from reports.csv_report import write_csv_reports
@@ -18,6 +18,20 @@ def test_writes_extended_csv_reports(tmp_path):
         extracted_files=0,
         input_files=["input/sample.log"],
         analyzed_files=["input/sample.log"],
+        input_source_summaries=[
+            InputSourceSummary(
+                source_file="input/sample.log",
+                input_kind="log_file",
+                log_types=["bm"],
+                log_type_labels=["БМ"],
+                log_type_counts={"bm": 1},
+                log_type_evidence={"bm": ["input/sample.log: content:PaymentStart"]},
+                analyzed_files=["input/sample.log"],
+                archive_file_count=1,
+                log_file_count=1,
+                analyzed_file_count=1,
+            )
+        ],
         archive_inventory=[
             ArchiveInventoryRow(
                 archive="input/archive.zip",
@@ -98,6 +112,12 @@ def test_writes_extended_csv_reports(tmp_path):
     bundle_manifest = json.loads((tmp_path / "bundle_manifest.json").read_text(encoding="utf-8"))
     assert "pipeline_steps" in bundle_manifest
     assert "extraction_archives" in bundle_manifest
+    assert bundle_manifest["input_sources"][0]["source_file"] == "input/sample.log"
+    assert bundle_manifest["input_sources"][0]["log_type_counts"] == {"bm": 1}
+    assert bundle_manifest["input_sources"][0]["log_type_evidence"] == {
+        "bm": ["input/sample.log: content:PaymentStart"]
+    }
+    assert bundle_manifest["input_sources"][0]["analyzed_file_count"] == 1
     assert f"app_version,{__version__}" in (tmp_path / "report_metadata.csv").read_text(encoding="utf-8")
     assert "BM rotate" in (tmp_path / "archive_inventory.csv").read_text(encoding="utf-8")
     assert (tmp_path / "summary_by_archive_category.csv").read_text(encoding="utf-8").splitlines() == [

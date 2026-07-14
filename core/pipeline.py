@@ -187,6 +187,7 @@ def run_analysis(
             source_archives=extraction.source_archives,
             extracted_file_origins=extraction.extracted_file_origins,
             log_inventory=log_inventory,
+            archive_inventory=archive_inventory,
         )
         steps.append(
             stage.finish(

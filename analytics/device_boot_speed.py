@@ -600,4 +600,7 @@ def _parse_datetime(value: str, *formats: str) -> datetime | None:
 
 
 def _format_seconds(value: float) -> str:
-    return f"{value:.3f}".replace(".", ",") + " секунды"
+    minutes = int(value // 60)
+    seconds = value - minutes * 60
+    seconds_text = f"{seconds:06.3f}".replace(".", ",")
+    return f"{minutes} мин {seconds_text} сек"

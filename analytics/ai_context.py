@@ -57,10 +57,29 @@ def build_ai_context(
             "analyzed_files": stats.analyzed_files if stats else [],
             "malformed_payment_lines": stats.malformed_payment_lines if stats else 0,
         },
+        "input_sources": [_input_source_context(item) for item in (stats.input_source_summaries if stats else [])],
         "limits": {
             "max_rows_per_section": MAX_CONTEXT_ROWS,
             "raw_log_lines_are_truncated_to_selected_evidence": True,
         },
+    }
+
+
+def _input_source_context(item) -> dict[str, object]:
+    return {
+        "source_file": item.source_file,
+        "input_kind": item.input_kind,
+        "log_types": item.log_types,
+        "log_type_labels": item.log_type_labels,
+        "log_type_counts": item.log_type_counts,
+        "log_type_evidence": {log_type: values[:3] for log_type, values in item.log_type_evidence.items()},
+        "archive_file_count": item.archive_file_count,
+        "log_file_count": item.log_file_count,
+        "other_file_count": item.other_file_count,
+        "extracted_file_count": item.extracted_file_count,
+        "analyzed_file_count": item.analyzed_file_count,
+        "skipped_file_count": item.skipped_file_count,
+        "skipped_reasons": item.skipped_reasons,
     }
 
 

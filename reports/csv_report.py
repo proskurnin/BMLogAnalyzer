@@ -50,6 +50,7 @@ from core.models import (
     ArchiveInventoryRow,
     CheckResult,
     DiagnosticLine,
+    InputSourceSummary,
     LogFileInventory,
     PaymentEvent,
     PipelineStats,
@@ -389,6 +390,7 @@ def write_bundle_manifest_json(stats: PipelineStats | None, path: Path) -> None:
         "extracted_files": stats.extracted_file_paths if stats else [],
         "analyzed_files": stats.analyzed_files if stats else [],
         "skipped_archives": stats.skipped_archive_paths if stats else [],
+        "input_sources": [_input_source_payload(item) for item in (stats.input_source_summaries if stats else [])],
         "pipeline_steps": [
             {
                 "name": step.name,
@@ -415,6 +417,27 @@ def write_bundle_manifest_json(stats: PipelineStats | None, path: Path) -> None:
         ],
     }
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _input_source_payload(item: InputSourceSummary) -> dict[str, object]:
+    return {
+        "source_file": item.source_file,
+        "input_kind": item.input_kind,
+        "log_types": item.log_types,
+        "log_type_labels": item.log_type_labels,
+        "log_type_counts": item.log_type_counts,
+        "log_type_evidence": item.log_type_evidence,
+        "analyzed_files": item.analyzed_files,
+        "extracted_files": item.extracted_files,
+        "evidence": item.evidence,
+        "archive_file_count": item.archive_file_count,
+        "log_file_count": item.log_file_count,
+        "other_file_count": item.other_file_count,
+        "extracted_file_count": item.extracted_file_count,
+        "analyzed_file_count": item.analyzed_file_count,
+        "skipped_file_count": item.skipped_file_count,
+        "skipped_reasons": item.skipped_reasons,
+    }
 
 
 def _manifest_rows(stats: PipelineStats | None) -> list[dict[str, str]]:

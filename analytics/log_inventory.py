@@ -150,7 +150,13 @@ def _observe_path(item: _InventoryBuilder) -> None:
         item.path_hints.add("path:oti_reader_library")
     if "system" in path or "syslog" in path or "journal" in path:
         item.path_hints.add("path:system")
-    if "bm" in path or "mgt_nbs" in path or "mgt_askp" in path:
+    if (
+        any(part in {"bm", "bm-std"} for part in path_parts)
+        or path_name.startswith(("bm.", "bm-", "bm_"))
+        or re.search(r"(^|[-_.])bm($|[-_.])", path_name) is not None
+        or "mgt_nbs" in path
+        or "mgt_askp" in path
+    ):
         item.path_hints.add("path:bm")
 
 
@@ -275,14 +281,18 @@ def _build_inventory(item: _InventoryBuilder) -> LogFileInventory:
 
 def _detect_log_type(item: _InventoryBuilder) -> str:
     hints = item.content_hints | item.path_hints
+    if "content:stopper_package" in hints or "path:stopper" in hints:
+        return "stopper"
+    if "content:bm_package" in hints or "content:mgt_nbs_package" in hints or "path:bm" in hints:
+        return "bm"
     if "content:validator_app" in hints:
         return "validator_app"
-    if "content:stopper_package" in hints or "content:stopper" in hints or "path:stopper" in hints:
-        return "stopper"
     if "content:oti_reader_library" in hints or "path:oti_reader_library" in hints:
         return "oti_reader_library"
-    if "content:bm_package" in hints or "content:mgt_nbs_package" in hints or "content:PaymentStart" in hints or "path:bm" in hints:
+    if "content:PaymentStart" in hints:
         return "bm"
+    if "content:stopper" in hints:
+        return "stopper"
     if "content:reader_firmware" in hints or "content:reader_model" in hints or "path:reader" in hints:
         return "reader"
     if "content:system" in hints or "path:system" in hints:

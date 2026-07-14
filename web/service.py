@@ -145,6 +145,7 @@ def execute_analysis(request: AnalysisRequest) -> AnalysisBundle:
         stats={
             "archive_inventory": [asdict(row) for row in stats.archive_inventory],
             "log_inventory": [asdict(item) for item in stats.log_inventory],
+            "input_sources": [asdict(item) for item in stats.input_source_summaries],
             "extraction_archives": [asdict(item) for item in stats.extraction_archive_stats],
         },
         schema_version=SNAPSHOT_SCHEMA_VERSION,
