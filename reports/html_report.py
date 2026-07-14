@@ -873,7 +873,7 @@ def _build_log_groups(archive_inventory: list[ArchiveInventoryRow]) -> tuple[lis
 
 def _build_recognized_log_groups(items: list[InputSourceSummary]) -> tuple[list[dict[str, object]], int]:
     log_types = sorted(
-        {log_type for item in items for log_type in item.log_type_counts if log_type != "other"},
+        {log_type for item in items for log_type in item.log_types if log_type != "other"},
         key=lambda value: (LOG_TYPE_ORDER.get(value, 50), value),
     )
     rows = [_recognized_log_type_group(items, {log_type}, label=_log_type_display_label(log_type)) for log_type in log_types]
@@ -890,7 +890,7 @@ def _recognized_log_type_group(items: list[InputSourceSummary], log_types: set[s
     archives = []
     total = 0
     for item in items:
-        count = sum(int(item.log_type_counts.get(log_type, 0)) for log_type in log_types)
+        count = sum(_recognized_log_type_item_count(item, log_type) for log_type in log_types)
         if count <= 0:
             continue
         files = []
@@ -908,8 +908,20 @@ def _recognized_log_type_group(items: list[InputSourceSummary], log_types: set[s
     return {"label": label, "count": total, "size_bytes": 0, "payload": archives}
 
 
+def _recognized_log_type_item_count(item: InputSourceSummary, log_type: str) -> int:
+    count = int(item.log_type_counts.get(log_type, 0))
+    if count > 0:
+        return count
+    if log_type not in item.log_types:
+        return 0
+    evidence_files = _source_files_from_evidence(item.log_type_evidence.get(log_type, []))
+    if evidence_files:
+        return len(set(evidence_files))
+    return 1
+
+
 def _recognized_log_type_count(items: list[InputSourceSummary], log_types: set[str]) -> int:
-    return sum(int(item.log_type_counts.get(log_type, 0)) for item in items for log_type in log_types)
+    return sum(_recognized_log_type_item_count(item, log_type) for item in items for log_type in log_types)
 
 
 def _source_files_from_evidence(evidence_rows: list[str]) -> list[str]:
@@ -938,6 +950,8 @@ def _build_other_groups(archive_inventory: list[ArchiveInventoryRow]) -> tuple[l
             continue
         file_entries = row.file_sizes.items() if row.file_sizes else ((file_name, 0) for file_name in row.files)
         for file_name, size_bytes in file_entries:
+            if _is_archive_container_file(str(file_name)):
+                continue
             label = _classify_other_file(file_name)
             archive_name = Path(row.archive).name
             group = groups.setdefault(label, {"label": label, "count": 0, "size_bytes": 0, "archives": defaultdict(lambda: {"archive": "", "count": 0, "size_bytes": 0, "files": []})})
@@ -973,6 +987,16 @@ def _build_other_groups(archive_inventory: list[ArchiveInventoryRow]) -> tuple[l
             }
         )
     return rows, total
+
+
+def _is_archive_container_file(file_name: str) -> bool:
+    name = file_name.lower()
+    return (
+        name.endswith(".zip")
+        or name.endswith(".rar")
+        or name.endswith(".tar.gz")
+        or name.endswith(".tgz")
+    )
 
 
 def _summary_cards(

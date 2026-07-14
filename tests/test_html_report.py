@@ -383,6 +383,101 @@ def test_writes_upload_composition_in_report_header_and_manifest(tmp_path):
     }
 
 
+def test_upload_composition_log_type_chart_uses_all_recognized_types(tmp_path):
+    stats = PipelineStats(
+        scanned_lines=2,
+        malformed_payment_lines=0,
+        extracted_files=2,
+        input_files=["input/13-07-2026.zip"],
+        analyzed_files=[
+            "_workdir/extracted/13-07-2026.zip/bm/a.log",
+            "_workdir/extracted/13-07-2026.zip/validator/start.log",
+        ],
+        input_source_summaries=[
+            InputSourceSummary(
+                source_file="input/13-07-2026.zip",
+                input_kind="archive",
+                log_types=["bm", "stopper", "oti_reader_library", "validator_app"],
+                log_type_labels=["БМ", "ПО стоппера", "библиотеки ридера ОТИ", "ПО валидатора"],
+                log_type_counts={"bm": 1, "stopper": 1, "oti_reader_library": 1},
+                log_type_evidence={
+                    "bm": ["_workdir/extracted/13-07-2026.zip/bm/a.log: content:PaymentStart"],
+                    "validator_app": ["_workdir/extracted/13-07-2026.zip/validator/start.log: content:validator_app"],
+                },
+                analyzed_files=[
+                    "_workdir/extracted/13-07-2026.zip/bm/a.log",
+                    "_workdir/extracted/13-07-2026.zip/validator/start.log",
+                ],
+                extracted_files=[
+                    "_workdir/extracted/13-07-2026.zip/bm/a.log",
+                    "_workdir/extracted/13-07-2026.zip/validator/start.log",
+                ],
+                archive_file_count=2,
+                log_file_count=2,
+                other_file_count=0,
+                extracted_file_count=2,
+                analyzed_file_count=2,
+                skipped_file_count=0,
+                skipped_reasons={},
+            )
+        ],
+    )
+
+    write_html_report([], analyze_events([]), tmp_path / "analysis_report.html", stats=stats)
+
+    html = (tmp_path / "analysis_report.html").read_text(encoding="utf-8")
+    assert "Загружен архив 13-07-2026.zip. Распознано типов логов: 4." in html
+    assert 'data-label="БМ"' in html
+    assert 'data-label="ПО стоппера"' in html
+    assert 'data-label="библиотеки ридера ОТИ"' in html
+    assert 'data-label="ПО валидатора"' in html
+
+
+def test_upload_composition_does_not_show_extracted_nested_archives_as_other_files(tmp_path):
+    stats = PipelineStats(
+        scanned_lines=1,
+        malformed_payment_lines=0,
+        extracted_files=1,
+        input_files=["input/logs.zip"],
+        analyzed_files=["_workdir/extracted/nested.zip/bm/a.log"],
+        archive_inventory=[
+            ArchiveInventoryRow(
+                archive="input/logs.zip",
+                category="Other",
+                count=1,
+                files=["nested.zip"],
+                file_sizes={"nested.zip": 128},
+            ),
+        ],
+        input_source_summaries=[
+            InputSourceSummary(
+                source_file="input/logs.zip",
+                input_kind="archive",
+                log_types=["bm"],
+                log_type_labels=["БМ"],
+                log_type_counts={"bm": 1},
+                log_type_evidence={"bm": ["_workdir/extracted/nested.zip/bm/a.log: content:PaymentStart"]},
+                analyzed_files=["_workdir/extracted/nested.zip/bm/a.log"],
+                extracted_files=["_workdir/extracted/nested.zip/bm/a.log"],
+                archive_file_count=1,
+                log_file_count=1,
+                other_file_count=0,
+                extracted_file_count=1,
+                analyzed_file_count=1,
+                skipped_file_count=0,
+                skipped_reasons={},
+            )
+        ],
+    )
+
+    write_html_report([], analyze_events([]), tmp_path / "analysis_report.html", stats=stats)
+
+    html = (tmp_path / "analysis_report.html").read_text(encoding="utf-8")
+    assert "Прочих файлов: 1" not in html
+    assert "Прочие файлы</h3>" not in html
+    assert 'data-label="Архивы"' not in html
+
+
 def test_html_report_shows_non_emv_card_status_and_zero_row_toggle(tmp_path):
     stats = PipelineStats(scanned_lines=1, malformed_payment_lines=0, extracted_files=0)
     non_emv_event = replace(

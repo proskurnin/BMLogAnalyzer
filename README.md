@@ -2,9 +2,10 @@
 
 CLI-first analyzer for BM PaymentStart response logs.
 
-Current analyzer version: `1.7.8`.
+Current analyzer version: `1.7.9`.
 
 Deployment notes are in [README_DEPLOY.md](README_DEPLOY.md). Release changes are tracked in [CHANGELOG.md](CHANGELOG.md).
+The product development plan is tracked in [docs/development-plan.md](docs/development-plan.md).
 
 ## Run
 

@@ -138,12 +138,12 @@ def test_pipeline_maps_nested_archives_to_top_level_input_summary(tmp_path):
         str(extracted_dir / "nested.zip" / "bm" / "a.log"),
         str(extracted_dir / "nested.zip" / "validator" / "start.log"),
     ]
-    assert input_summary.archive_file_count == 1
-    assert input_summary.log_file_count == 0
-    assert input_summary.other_file_count == 1
+    assert input_summary.archive_file_count == 2
+    assert input_summary.log_file_count == 2
+    assert input_summary.other_file_count == 0
     assert input_summary.extracted_file_count == 2
     assert input_summary.analyzed_file_count == 2
-    assert input_summary.skipped_reasons == {"прочие файлы в архиве": 1}
+    assert input_summary.skipped_reasons == {}
 
 
 def test_pipeline_falls_back_on_invalid_gzip(tmp_path):

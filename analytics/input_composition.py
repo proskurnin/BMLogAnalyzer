@@ -97,15 +97,19 @@ def _build_summary(
         )
     )
     log_type_evidence = _log_type_evidence(related_inventory)
+    analyzed_unique = sorted(set(analyzed_files))
+    extracted_unique = sorted(set(extracted_files))
     archive_file_count = sum(row.count for row in archive_rows)
     if not archive_rows and input_kind != "archive":
         archive_file_count = 1
-    log_file_count = sum(row.count for row in archive_rows if _is_log_inventory_category(row.category))
+    inventory_log_file_count = sum(row.count for row in archive_rows if _is_log_inventory_category(row.category))
+    detected_log_file_count = sum(1 for item in related_inventory if item.log_type != "other")
+    log_file_count = max(inventory_log_file_count, detected_log_file_count)
     if not archive_rows and input_kind != "archive":
         log_file_count = 1 if any(item.log_type != "other" for item in related_inventory) else 0
-    other_file_count = max(0, archive_file_count - log_file_count)
-    analyzed_unique = sorted(set(analyzed_files))
-    extracted_unique = sorted(set(extracted_files))
+    processed_archive_container_count = _processed_archive_container_count(archive_rows)
+    reportable_archive_file_count = max(log_file_count, archive_file_count - processed_archive_container_count)
+    other_file_count = max(0, reportable_archive_file_count - log_file_count)
     skipped_reasons = _skipped_reasons(
         other_file_count=other_file_count,
         extracted_file_count=len(extracted_unique),
@@ -127,7 +131,7 @@ def _build_summary(
                 if item.evidence
             }
         ),
-        archive_file_count=archive_file_count,
+        archive_file_count=reportable_archive_file_count,
         log_file_count=log_file_count,
         other_file_count=other_file_count,
         extracted_file_count=len(extracted_unique),
@@ -164,6 +168,25 @@ def _is_log_inventory_category(category: str) -> bool:
         "System logs",
         "Other log-like",
     }
+
+
+def _processed_archive_container_count(rows: list[ArchiveInventoryRow]) -> int:
+    return sum(
+        1
+        for row in rows
+        for file_name in row.files or row.file_sizes or row.examples
+        if _is_archive_container(file_name)
+    )
+
+
+def _is_archive_container(file_name: str) -> bool:
+    name = file_name.lower()
+    return (
+        name.endswith(".zip")
+        or name.endswith(".rar")
+        or name.endswith(".tar.gz")
+        or name.endswith(".tgz")
+    )
 
 
 def _skipped_reasons(
