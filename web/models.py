@@ -118,6 +118,10 @@ class UploadItemModel:
     size_bytes: int
     status: str = "stored"
     status_message: str = ""
+    processing_stage: str = ""
+    progress_percent: int = 0
+    processing_started_at: str = ""
+    processing_finished_at: str = ""
     report_run_id: str = ""
     report_url: str = ""
     report_has_ai: bool = False

@@ -177,6 +177,39 @@ class DeviceBootReport:
 
 
 @dataclass(frozen=True)
+class CardReadingEvidence:
+    source_file: str
+    line_number: int
+    timestamp: datetime | None
+    label: str
+    raw_line: str
+
+
+@dataclass(frozen=True)
+class CardReadingComponent:
+    title: str
+    duration_seconds: float | None
+    description: str
+    evidence: list[CardReadingEvidence] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class CardReadingReport:
+    reader_type: str | None
+    card_id: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    total_seconds: float | None
+    result: str
+    payment_start_code: int | None = None
+    auth_type: int | None = None
+    payment_confirm_code: int | None = None
+    components: list[CardReadingComponent] = field(default_factory=list)
+    evidence: list[CardReadingEvidence] = field(default_factory=list)
+    source_files: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class ArchiveInventoryRow:
     archive: str
     category: str
@@ -206,6 +239,7 @@ class PipelineStats:
     input_source_summaries: list[InputSourceSummary] = field(default_factory=list)
     archive_inventory: list[ArchiveInventoryRow] = field(default_factory=list)
     device_boot_reports: list[DeviceBootReport] = field(default_factory=list)
+    card_reading_reports: list[CardReadingReport] = field(default_factory=list)
     extraction_archive_stats: list[ExtractionArchiveStat] = field(default_factory=list)
 
 

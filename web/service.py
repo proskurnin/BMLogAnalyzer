@@ -23,7 +23,7 @@ from analytics.log_inventory import (
 )
 from core.config import load_app_config
 from core.contracts import SNAPSHOT_SCHEMA_VERSION
-from core.pipeline import run_analysis
+from core.pipeline import PipelineProgressCallback, run_analysis
 from core.version import format_version
 from web.models import AnalysisModel, ArchiveModel, PipelineModel, ReportsModel, RequestModel, SnapshotModel
 from reports.csv_report import write_csv_reports
@@ -50,7 +50,11 @@ class AnalysisBundle:
     stats: Any
 
 
-def execute_analysis(request: AnalysisRequest) -> AnalysisBundle:
+def execute_analysis(
+    request: AnalysisRequest,
+    *,
+    progress_callback: PipelineProgressCallback | None = None,
+) -> AnalysisBundle:
     config = load_app_config(request.config_path)
     input_path = Path(request.input_path or config.input_path)
     extracted_dir = Path(request.extracted_dir or config.extracted_dir)
@@ -62,6 +66,7 @@ def execute_analysis(request: AnalysisRequest) -> AnalysisBundle:
         reader_filter=request.reader,
         bm_filter=request.bm,
         archive_cache_dir=reports_dir.parent / "_archive_cache",
+        progress_callback=progress_callback,
     )
 
     written_reports: list[str] = []
@@ -228,6 +233,7 @@ def execute_uploaded_analysis(
     *,
     summary: bool = False,
     storage_dir: Path | None = None,
+    progress_callback: PipelineProgressCallback | None = None,
 ) -> AnalysisBundle:
     storage_base = Path(storage_dir or "./_workdir/uploads")
     storage_base.mkdir(parents=True, exist_ok=True)
@@ -242,7 +248,7 @@ def execute_uploaded_analysis(
         bm=request.bm,
         generate_reports=request.generate_reports,
     )
-    bundle = execute_analysis(staged_request)
+    bundle = execute_analysis(staged_request, progress_callback=progress_callback)
     if summary:
         return AnalysisBundle(
             snapshot=SnapshotModel(
@@ -269,6 +275,7 @@ def execute_uploaded_path_analysis(
     *,
     summary: bool = False,
     storage_dir: Path | None = None,
+    progress_callback: PipelineProgressCallback | None = None,
 ) -> AnalysisBundle:
     storage_base = Path(storage_dir or "./_workdir/uploads")
     storage_base.mkdir(parents=True, exist_ok=True)
@@ -283,7 +290,7 @@ def execute_uploaded_path_analysis(
         bm=request.bm,
         generate_reports=request.generate_reports,
     )
-    bundle = execute_analysis(staged_request)
+    bundle = execute_analysis(staged_request, progress_callback=progress_callback)
     if summary:
         return AnalysisBundle(
             snapshot=SnapshotModel(

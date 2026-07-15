@@ -175,6 +175,8 @@ def update_upload_status(
     *,
     status: str,
     status_message: str = "",
+    processing_stage: str = "",
+    progress_percent: int | None = None,
     storage_dir: Path | None = None,
 ) -> None:
     root = _upload_root(storage_dir)
@@ -184,6 +186,15 @@ def update_upload_status(
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["status"] = status
     payload["status_message"] = status_message
+    if processing_stage:
+        payload["processing_stage"] = processing_stage
+    if progress_percent is not None:
+        payload["progress_percent"] = _clamp_progress(progress_percent)
+    if status == "processing":
+        payload["processing_started_at"] = payload.get("processing_started_at") or _utc_now()
+        payload["processing_finished_at"] = ""
+    elif status in {"ready", "error", "failed", "expired"}:
+        payload["processing_finished_at"] = _utc_now()
     payload["download_url"] = payload.get("download_url") or f"/uploads/download/{upload_id}"
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -203,6 +214,9 @@ def update_upload_reports(
         payload = json.loads(path.read_text(encoding="utf-8"))
         payload["status"] = "ready"
         payload["status_message"] = ""
+        payload["processing_stage"] = "ready"
+        payload["progress_percent"] = 100
+        payload["processing_finished_at"] = _utc_now()
         payload["report_run_id"] = report_run_id
         payload["report_url"] = report_url
         payload["report_has_ai"] = False
@@ -338,8 +352,13 @@ def _load_upload_payload(path: Path) -> dict[str, Any] | None:
     payload.setdefault("download_url", "")
     payload.setdefault("status", "ready" if payload.get("report_url") else "stored")
     payload.setdefault("status_message", "")
+    payload.setdefault("processing_stage", "ready" if payload.get("report_url") else "")
+    payload.setdefault("progress_percent", 100 if payload.get("report_url") else 0)
+    payload.setdefault("processing_started_at", "")
+    payload.setdefault("processing_finished_at", "")
     payload.setdefault("owner_email", "")
     payload.setdefault("owner_name", "")
+    payload["progress_percent"] = _clamp_progress(payload.get("progress_percent"))
     return payload
 
 
@@ -417,9 +436,20 @@ def _expire_upload_payload(path: Path, payload: dict[str, Any]) -> bool:
         shutil.rmtree(stored_path.parent, ignore_errors=True)
     payload["status"] = "expired"
     payload["status_message"] = "Срок хранения истёк"
+    payload["processing_stage"] = "expired"
+    payload["progress_percent"] = 100
+    payload["processing_finished_at"] = _utc_now()
     payload["download_url"] = ""
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return True
+
+
+def _clamp_progress(value: object) -> int:
+    try:
+        progress = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(100, progress))
 
 
 def _parse_datetime(value: str | None) -> datetime | None:

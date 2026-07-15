@@ -18,6 +18,9 @@ from core.contracts import REPORT_MANIFEST_SCHEMA_VERSION
 from core.models import (
     AnalysisResult,
     ArchiveInventoryRow,
+    CardReadingComponent,
+    CardReadingEvidence,
+    CardReadingReport,
     CheckCase,
     CheckResult,
     DeviceBootEvidence,
@@ -129,6 +132,7 @@ def render_html_report(
     bm_versions = _bm_versions(events)
     archive_names = _archive_name_set(stats.input_files if stats else [])
     device_boot_reports = stats.device_boot_reports if stats else []
+    card_reading_reports = stats.card_reading_reports if stats else []
     report_carriers = _report_carriers_from_device_boot(device_boot_reports)
     reader_device_profiles = _reader_device_profiles(events, device_boot_reports)
     event_reader_overrides = _event_reader_overrides(reader_device_profiles)
@@ -260,6 +264,10 @@ def render_html_report(
                 _section_source_text(section_sources, "protocol_scenarios"),
             ),
             _device_boot_speed_section(device_boot_reports, _section_source_text(section_sources, "device_boot_speed")),
+            _card_reading_speed_section(
+                card_reading_reports,
+                _section_source_text(section_sources, "card_reading_speed"),
+            ),
             _bm_status_section(
                 events,
                 bm_group_rows,
@@ -307,6 +315,7 @@ def render_html_report_manifest(
     archive_names = _archive_name_set(stats.input_files if stats else [])
     validator_sections = _validator_analytics(events, archive_names)
     device_boot_reports = stats.device_boot_reports if stats else []
+    card_reading_reports = stats.card_reading_reports if stats else []
     suspicious_rows = suspicious_line_payloads(events)
     check_cases = [check for check in load_check_cases() if check.enabled]
     check_results = run_builtin_checks(events, checks=check_cases)
@@ -339,6 +348,9 @@ def render_html_report_manifest(
     if device_boot_reports:
         insert_at = stable_sections.index("bm_statuses")
         stable_sections.insert(insert_at, "device_boot_speed")
+    if card_reading_reports:
+        insert_at = stable_sections.index("bm_statuses")
+        stable_sections.insert(insert_at, "card_reading_speed")
     if unclassified_total := sum(int(row.get("count", 0)) for row in _unclassified_diagnostics(events)):
         stable_sections.insert(-1, "unclassified_diagnostics")
     section_sources = build_section_sources(stats, events, stable_sections)
@@ -368,6 +380,7 @@ def render_html_report_manifest(
             "protocol_scenarios",
             "protocol_scenario_results",
             "device_boot_speed",
+            "card_reading_speed",
             "section_sources",
             "pipeline_steps",
             "extraction_archives",
@@ -390,6 +403,7 @@ def render_html_report_manifest(
             "validation_checks": len(check_results),
             "protocol_scenarios": len(protocol_results),
             "device_boot_reports": len(device_boot_reports),
+            "card_reading_reports": len(card_reading_reports),
             "input_sources": len(input_source_summaries),
         },
         "sections": stable_sections,
@@ -404,6 +418,7 @@ def render_html_report_manifest(
         "validation_checks": [_check_result_payload(item) for item in check_results],
         "protocol_scenario_results": [_protocol_scenario_result_payload(item) for item in protocol_results],
         "device_boot_speed": [_device_boot_report_payload(item) for item in device_boot_reports],
+        "card_reading_speed": [_card_reading_report_payload(item) for item in card_reading_reports],
         "section_sources": section_sources,
         "pipeline_steps": [_pipeline_step_payload(item) for item in (stats.steps if stats else [])],
         "extraction_archives": [_extraction_archive_payload(item) for item in (stats.extraction_archive_stats if stats else [])],
@@ -1598,6 +1613,269 @@ def _device_boot_evidence_payload(evidence: DeviceBootEvidence) -> dict[str, obj
         "label": evidence.label,
         "raw_line": evidence.raw_line,
     }
+
+
+def _card_reading_speed_section(reports: list[CardReadingReport], source_note: str = "") -> str:
+    if not reports:
+        return ""
+    rendered_reports = []
+    for index, report in enumerate(reports, start=1):
+        rendered_reports.append(
+            "\n".join(
+                [
+                    '<details class="collapsible card-reading-report">',
+                    "<summary>",
+                    "<span>",
+                    f"<strong>{escape(_card_reading_summary_title(report))}</strong>",
+                    f"<em>{escape(report.result)}. Источников: {len(report.source_files)}.</em>",
+                    "</span>",
+                    "</summary>",
+                    '<div class="collapsible-body">',
+                    _card_reading_report_head(report),
+                    _card_reading_component_table(report.components),
+                    _card_reading_evidence_table(report.evidence),
+                    _card_reading_text_report_block(report, index),
+                    "</div>",
+                    "</details>",
+                ]
+            )
+        )
+    summary = f"Кейсов дольше 3 сек: {len(reports)}."
+    return "\n".join(
+        [
+            '<details class="collapsible collapsible--card-reading">',
+            "<summary>",
+            "<span>",
+            "<strong>Долгое чтение и валидация карт</strong>",
+            f"<em>{escape(summary)} Факты рассчитаны по строкам ПО валидатора и BM. {escape(source_note)}</em>",
+            "</span>",
+            "</summary>",
+            '<div class="collapsible-body">',
+            _card_reading_summary_cards(reports),
+            _card_reading_overview_table(reports),
+            "".join(rendered_reports),
+            "</div>",
+            "</details>",
+        ]
+    )
+
+
+def _card_reading_report_head(report: CardReadingReport) -> str:
+    facts = [
+        ("Ридер", report.reader_type or "не найдено"),
+        ("Карта", report.card_id or "не найдено"),
+        ("Начало", _format_datetime(report.started_at)),
+        ("Всего", _format_duration(report.total_seconds)),
+        ("Результат", report.result),
+    ]
+    cards = "".join(
+        '<div class="device-boot-fact">'
+        f"<span>{escape(label)}</span>"
+        f"<strong>{escape(value)}</strong>"
+        "</div>"
+        for label, value in facts
+    )
+    sources = ", ".join(report.source_files)
+    return "\n".join(
+        [
+            '<div class="device-boot-head">',
+            f"<h3>{escape(_card_reading_summary_title(report))}</h3>",
+            f'<p class="muted">Источник: {escape(sources or "не найден")}</p>',
+            f'<div class="device-boot-facts">{cards}</div>',
+            "</div>",
+        ]
+    )
+
+
+def _card_reading_summary_cards(reports: list[CardReadingReport]) -> str:
+    durations = sorted(report.total_seconds for report in reports if report.total_seconds is not None)
+    if not durations:
+        return ""
+    reader_counts: dict[str, int] = defaultdict(int)
+    for report in reports:
+        reader_counts[report.reader_type or "не найдено"] += 1
+    reader_text = ", ".join(f"{reader}: {count}" for reader, count in sorted(reader_counts.items()))
+    facts = [
+        ("Кейсов", str(len(reports))),
+        ("По ридерам", reader_text),
+        ("Максимум", _format_duration(durations[-1])),
+        ("Среднее", _format_duration(sum(durations) / len(durations))),
+    ]
+    cards = "".join(
+        '<div class="device-boot-fact">'
+        f"<span>{escape(label)}</span>"
+        f"<strong>{escape(value)}</strong>"
+        "</div>"
+        for label, value in facts
+    )
+    return f'<div class="device-boot-facts device-boot-facts--summary">{cards}</div>'
+
+
+def _card_reading_overview_table(reports: list[CardReadingReport]) -> str:
+    rows = []
+    for report in sorted(reports, key=lambda item: item.total_seconds or 0, reverse=True)[:12]:
+        rows.append(
+            '<tr class="status-row">'
+            f"<td>{escape(report.reader_type or 'не найдено')}</td>"
+            f"<td>{escape(_format_datetime(report.started_at))}</td>"
+            f"<td>{escape(report.card_id or 'не найдено')}</td>"
+            f"<td>{escape(_format_duration(report.total_seconds))}</td>"
+            f"<td>{escape(report.result)}</td>"
+            "</tr>"
+        )
+    return "\n".join(
+        [
+            '<section class="device-boot-chart">',
+            "<h3>Самые долгие кейсы</h3>",
+            '<div class="table-wrap">',
+            '<table class="status-table status-table--card-reading-overview">',
+            '<colgroup><col style="width:10%"><col style="width:18%"><col style="width:20%"><col style="width:14%"><col style="width:38%"></colgroup>',
+            '<thead class="status-table-head"><tr><th>Ридер</th><th>Начало</th><th>Карта</th><th>Время</th><th>Результат</th></tr></thead>',
+            f"<tbody>{''.join(rows)}</tbody>",
+            "</table>",
+            "</div>",
+            "</section>",
+        ]
+    )
+
+
+def _card_reading_component_table(components: list[CardReadingComponent]) -> str:
+    rows = []
+    for component in components:
+        evidence = "<br>".join(
+            f"<code>{escape(_card_reading_evidence_short_line(item))}</code>"
+            for item in component.evidence[:6]
+        )
+        if not evidence:
+            evidence = '<span class="muted">evidence не найден</span>'
+        rows.append(
+            '<tr class="status-row">'
+            f"<td><strong>{escape(component.title)}</strong><br><span class=\"muted\">{escape(component.description)}</span></td>"
+            f"<td>{escape(_format_duration(component.duration_seconds))}</td>"
+            f"<td>{evidence}</td>"
+            "</tr>"
+        )
+    return "\n".join(
+        [
+            '<div class="table-wrap checks-table-wrap">',
+            '<table class="status-table status-table--card-reading">',
+            '<colgroup><col style="width:34%"><col style="width:14%"><col style="width:52%"></colgroup>',
+            '<thead class="status-table-head"><tr><th>Компонент</th><th>Длительность</th><th>Evidence</th></tr></thead>',
+            f"<tbody>{''.join(rows)}</tbody>",
+            "</table>",
+            "</div>",
+        ]
+    )
+
+
+def _card_reading_evidence_table(evidence: list[CardReadingEvidence]) -> str:
+    rows = []
+    for item in evidence[:30]:
+        rows.append(
+            '<tr class="status-row">'
+            f"<td>{escape(_format_timestamp(item.timestamp))}</td>"
+            f"<td>{escape(item.label)}</td>"
+            f"<td><code>{escape(_card_reading_evidence_short_line(item))}</code></td>"
+            "</tr>"
+        )
+    if not rows:
+        return ""
+    return "\n".join(
+        [
+            '<div class="table-wrap checks-table-wrap">',
+            '<table class="status-table status-table--card-reading-evidence">',
+            '<colgroup><col style="width:12%"><col style="width:20%"><col style="width:68%"></colgroup>',
+            '<thead class="status-table-head"><tr><th>Время</th><th>Факт</th><th>Строка</th></tr></thead>',
+            f"<tbody>{''.join(rows)}</tbody>",
+            "</table>",
+            "</div>",
+        ]
+    )
+
+
+def _card_reading_text_report_block(report: CardReadingReport, index: int) -> str:
+    text_id = f"card-reading-text-{index}"
+    return "\n".join(
+        [
+            '<details class="collapsible device-boot-text-details">',
+            "<summary>",
+            "<span>",
+            "<strong>Текстовый отчёт</strong>",
+            "<em>Компоненты длительности и evidence-строки.</em>",
+            "</span>",
+            "</summary>",
+            '<div class="collapsible-body">',
+            f'<button type="button" class="copy-button" data-copy-target="{escape(text_id)}">Скопировать текстовый отчёт</button>',
+            f'<pre class="device-boot-text" id="{escape(text_id)}">{escape(_card_reading_text_report(report))}</pre>',
+            "</div>",
+            "</details>",
+        ]
+    )
+
+
+def _card_reading_text_report(report: CardReadingReport) -> str:
+    lines = [
+        _card_reading_summary_title(report),
+        "",
+        f"Результат: {report.result}.",
+        f"Начало: {_format_timestamp(report.started_at)}.",
+        f"Конец: {_format_timestamp(report.finished_at)}.",
+        f"Всего: {_format_duration(report.total_seconds)}.",
+        "",
+        "Компоненты:",
+    ]
+    for component in report.components:
+        lines.append(f"- {component.title}: {_format_duration(component.duration_seconds)}")
+    lines.extend(["", "Лог:"])
+    lines.extend(_card_reading_evidence_short_line(item) for item in report.evidence)
+    return "\n".join(lines).strip()
+
+
+def _card_reading_report_payload(report: CardReadingReport) -> dict[str, object]:
+    return {
+        "reader_type": report.reader_type,
+        "card_id": report.card_id,
+        "started_at": report.started_at.isoformat(sep=" ") if report.started_at else None,
+        "finished_at": report.finished_at.isoformat(sep=" ") if report.finished_at else None,
+        "total_seconds": report.total_seconds,
+        "result": report.result,
+        "payment_start_code": report.payment_start_code,
+        "auth_type": report.auth_type,
+        "payment_confirm_code": report.payment_confirm_code,
+        "source_files": report.source_files,
+        "components": [_card_reading_component_payload(item) for item in report.components],
+        "evidence": [_card_reading_evidence_payload(item) for item in report.evidence],
+    }
+
+
+def _card_reading_component_payload(component: CardReadingComponent) -> dict[str, object]:
+    return {
+        "title": component.title,
+        "duration_seconds": component.duration_seconds,
+        "description": component.description,
+        "evidence": [_card_reading_evidence_payload(item) for item in component.evidence],
+    }
+
+
+def _card_reading_evidence_payload(evidence: CardReadingEvidence) -> dict[str, object]:
+    return {
+        "source_file": evidence.source_file,
+        "line_number": evidence.line_number,
+        "timestamp": evidence.timestamp.isoformat(sep=" ") if evidence.timestamp else None,
+        "label": evidence.label,
+        "raw_line": evidence.raw_line,
+    }
+
+
+def _card_reading_summary_title(report: CardReadingReport) -> str:
+    reader = report.reader_type or "не найдено"
+    card = report.card_id or "карта не найдена"
+    return f"{reader} | Чтение {_format_datetime(report.started_at)} | Карта {card} | Время: {_format_duration(report.total_seconds)}"
+
+
+def _card_reading_evidence_short_line(evidence: CardReadingEvidence) -> str:
+    timestamp = _format_timestamp(evidence.timestamp)
+    return f"{evidence.source_file}:{evidence.line_number} [{timestamp}] {evidence.raw_line}"
 
 
 def _format_timestamp(value: datetime | None) -> str:

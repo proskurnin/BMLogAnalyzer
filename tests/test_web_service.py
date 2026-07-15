@@ -673,6 +673,8 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
     upload_id = store_data["items"][0]["upload_id"]
     assert store_data["items"][0]["report_url"] == ""
     assert store_data["items"][0]["status"] == "processing"
+    assert store_data["items"][0]["processing_stage"] == "queued"
+    assert store_data["items"][0]["progress_percent"] == 5
 
     download_response = client.get(f"/uploads/download/{upload_id}")
     assert download_response.status_code == 200
@@ -761,6 +763,7 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
         "protocol_scenarios",
         "protocol_scenario_results",
         "device_boot_speed",
+        "card_reading_speed",
         "section_sources",
         "pipeline_steps",
         "extraction_archives",
@@ -1169,9 +1172,18 @@ def test_upload_rebuild_report_refreshes_existing_upload(tmp_path, monkeypatch):
 
     assert rebuild_response.status_code == 200
     payload = rebuild_response.json()
-    assert payload["status"] == "ok"
-    assert payload["message"] == "Отчёт пересобран."
-    assert payload["report_url"].startswith("/report/")
-    assert payload["report_url"] != old_report_url
-    assert payload["item"]["status"] == "ready"
-    assert payload["item"]["report_url"] == payload["report_url"]
+    assert payload["status"] == "processing"
+    assert payload["message"] == "Пересборка отчёта запущена."
+    assert payload["report_url"] == ""
+    assert payload["item"]["status"] == "processing"
+    assert payload["item"]["processing_stage"] == "queued"
+    assert payload["item"]["progress_percent"] == 5
+
+    updated = client.get("/api/uploads")
+    assert updated.status_code == 200
+    item = updated.json()[0]
+    assert item["status"] == "ready"
+    assert item["report_url"].startswith("/report/")
+    assert item["report_url"] != old_report_url
+    assert item["processing_stage"] == "ready"
+    assert item["progress_percent"] == 100

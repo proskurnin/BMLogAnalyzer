@@ -55,6 +55,14 @@ from web.uploads import (
     update_upload_reports,
 )
 
+PIPELINE_PROGRESS_STAGES: dict[str, tuple[int, int, str]] = {
+    "extract_archives": (15, 35, "Распаковка архивов"),
+    "inventory_archives": (35, 45, "Определение состава логов"),
+    "scan_and_parse_logs": (45, 75, "Сканирование и парсинг логов"),
+    "aggregate_statistics": (75, 85, "Расчёт статистики"),
+    "finalize_pipeline_stats": (85, 90, "Финализация данных отчёта"),
+}
+
 try:  # pragma: no cover - optional dependency
     from fastapi import BackgroundTasks, FastAPI, File, Form, Request, UploadFile
     from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -704,7 +712,14 @@ def create_app() -> Any:
             return JSONResponse({"detail": limit_error}, status_code=413)
         summary = summary_from_uploads(stored, rejected_count=len(rejected_files))
         for item in stored:
-            update_upload_status(item.upload_id, status="processing", status_message="Формируем отчёт", storage_dir=None)
+            update_upload_status(
+                item.upload_id,
+                status="processing",
+                status_message="Ожидает обработки",
+                processing_stage="queued",
+                progress_percent=5,
+                storage_dir=None,
+            )
         if stored:
             background_tasks.add_task(
                 _build_upload_reports_background,
@@ -783,7 +798,7 @@ def create_app() -> Any:
         return {"status": "ok", "upload_id": upload_id}
 
     @app.post("/api/uploads/{upload_id}/rebuild")
-    def rebuild_upload_report(request: Request, upload_id: str) -> dict[str, Any]:
+    def rebuild_upload_report(request: Request, background_tasks: BackgroundTasks, upload_id: str) -> dict[str, Any]:
         user = _request_user(request)
         try:
             item = load_upload(upload_id)
@@ -792,22 +807,30 @@ def create_app() -> Any:
         if item.owner_email != user.email and user.role != "admin":
             return JSONResponse({"detail": "Доступ запрещён"}, status_code=403)
         if not Path(item.stored_path).exists():
-            update_upload_status(upload_id, status="error", status_message="Исходный файл удалён")
+            update_upload_status(
+                upload_id,
+                status="error",
+                status_message="Исходный файл удалён",
+                processing_stage="failed",
+                progress_percent=100,
+            )
             return JSONResponse({"detail": "Исходный файл удалён"}, status_code=404)
 
-        update_upload_status(upload_id, status="processing", status_message="Формируем отчёт")
-        try:
-            report = _build_upload_report(item, user)
-        except Exception as exc:
-            update_upload_status(upload_id, status="error", status_message="Ошибка формирования отчёта")
-            return JSONResponse({"detail": f"Не удалось сформировать отчёт: {exc}"}, status_code=500)
+        update_upload_status(
+            upload_id,
+            status="processing",
+            status_message="Ожидает пересборки отчёта",
+            processing_stage="queued",
+            progress_percent=5,
+        )
+        background_tasks.add_task(_rebuild_upload_report_background, upload_id, user.email, user.name)
         refreshed = asdict(load_upload(upload_id))
         return {
-            "status": "ok",
+            "status": "processing",
             "item": refreshed,
-            "run_id": report["run_id"],
-            "report_url": report["report_url"],
-            "message": "Отчёт пересобран.",
+            "run_id": "",
+            "report_url": "",
+            "message": "Пересборка отчёта запущена.",
         }
 
     @app.get("/uploads/download/{upload_id}")
@@ -866,6 +889,34 @@ def _no_cache_headers() -> dict[str, str]:
     }
 
 
+def _upload_progress_callback(upload_id: str):
+    def callback(event: str, payload) -> None:
+        if event == "start":
+            stage_name = str(payload)
+            start, _, message = PIPELINE_PROGRESS_STAGES.get(stage_name, (10, 90, "Формируем отчёт"))
+            update_upload_status(
+                upload_id,
+                status="processing",
+                status_message=message,
+                processing_stage=stage_name,
+                progress_percent=start,
+            )
+            return
+        stage_name = str(getattr(payload, "name", ""))
+        _, finish, message = PIPELINE_PROGRESS_STAGES.get(stage_name, (10, 90, "Формируем отчёт"))
+        status = str(getattr(payload, "status", "ok"))
+        suffix = " завершено с предупреждениями" if status == "completed_with_errors" else ""
+        update_upload_status(
+            upload_id,
+            status="processing",
+            status_message=f"{message}{suffix}",
+            processing_stage=stage_name,
+            progress_percent=finish,
+        )
+
+    return callback
+
+
 def _report_file_for_run(run_id: str) -> Path | None:
     report_path = run_report_path(run_id)
     if report_path.exists():
@@ -886,6 +937,13 @@ def _build_upload_report(item, user) -> dict[str, Any]:
     run_id = new_run_id()
     report_root = run_directory(run_id)
     report_path = run_report_path(run_id)
+    update_upload_status(
+        item.upload_id,
+        status="processing",
+        status_message="Подготовка файла",
+        processing_stage="prepare_input",
+        progress_percent=10,
+    )
     analysis_request = AnalysisRequest(
         config_path="./config/config.yaml",
         reports_dir=str(report_root),
@@ -900,10 +958,25 @@ def _build_upload_report(item, user) -> dict[str, Any]:
         [(item.original_name, Path(item.stored_path))],
         summary=False,
         storage_dir=report_root,
+        progress_callback=_upload_progress_callback(item.upload_id),
     )
     from reports.html_report import write_html_report
 
+    update_upload_status(
+        item.upload_id,
+        status="processing",
+        status_message="Формирование HTML-отчёта",
+        processing_stage="render_html_report",
+        progress_percent=90,
+    )
     write_html_report(bundle.events, bundle.result, report_path, stats=bundle.stats)
+    update_upload_status(
+        item.upload_id,
+        status="processing",
+        status_message="Запись отчёта в историю",
+        processing_stage="record_history",
+        progress_percent=97,
+    )
     record_history(
         bundle.snapshot,
         mode="analysis",
@@ -917,6 +990,24 @@ def _build_upload_report(item, user) -> dict[str, Any]:
     return {"upload_id": item.upload_id, "run_id": run_id, "report_url": f"/report/{run_id}"}
 
 
+def _rebuild_upload_report_background(upload_id: str, owner_email: str, owner_name: str) -> None:
+    user = _BackgroundReportUser(email=owner_email, name=owner_name)
+    try:
+        item = load_upload(upload_id)
+    except FileNotFoundError:
+        return
+    try:
+        _build_upload_report(item, user)
+    except Exception as exc:  # pragma: no cover - defensive production guard
+        update_upload_status(
+            upload_id,
+            status="failed",
+            status_message=f"Ошибка формирования отчёта: {exc}",
+            processing_stage="failed",
+            progress_percent=100,
+        )
+
+
 def _build_upload_reports_background(upload_ids: list[str], owner_email: str, owner_name: str) -> None:
     user = _BackgroundReportUser(email=owner_email, name=owner_name)
     for upload_id in upload_ids:
@@ -925,13 +1016,21 @@ def _build_upload_reports_background(upload_ids: list[str], owner_email: str, ow
         except FileNotFoundError:
             continue
         try:
-            update_upload_status(upload_id, status="processing", status_message="Формируем отчёт")
+            update_upload_status(
+                upload_id,
+                status="processing",
+                status_message="Ожидает обработки",
+                processing_stage="queued",
+                progress_percent=5,
+            )
             _build_upload_report(item, user)
         except Exception as exc:  # pragma: no cover - defensive production guard
             update_upload_status(
                 upload_id,
                 status="failed",
                 status_message=f"Ошибка формирования отчёта: {exc}",
+                processing_stage="failed",
+                progress_percent=100,
             )
 
 
@@ -2868,6 +2967,14 @@ def _landing_html(user=None) -> str:
         return item.status_message || 'отчёт формируется';
       }
 
+      function uploadReportProgress(items) {
+        if (!items.length) {
+          return 0;
+        }
+        const total = items.reduce((sum, item) => sum + Math.max(0, Math.min(100, Number(item.progress_percent || 0))), 0);
+        return Math.round(total / items.length);
+      }
+
       function renderUploadReportStatus(summary, clientRejectedCount, items) {
         const rows = items.map((item) => {
           const name = escapeHtml(item.original_name || 'загрузка');
@@ -2925,8 +3032,11 @@ def _landing_html(user=None) -> str:
           setProgress(100, 'Отчёт ещё формируется. Проверьте готовность в истории загрузок.');
           return;
         }
-        const progress = Math.min(95, 75 + attempt);
-        setProgress(progress, `Отчёт формируется: готово ${readyItems.length} из ${items.length}.`);
+        const backendProgress = uploadReportProgress(items);
+        const progress = Math.max(40, Math.min(95, 40 + Math.round(backendProgress * 0.55)));
+        const processingItem = items.find((item) => String(item.status || '').toLowerCase() === 'processing');
+        const processingText = processingItem?.status_message || 'отчёт формируется';
+        setProgress(progress, `${processingText}: готово ${readyItems.length} из ${items.length}.`);
         window.setTimeout(() => {
           pollUploadReports(uploadIds, summary, clientRejectedCount, attempt + 1).catch((error) => {
             message.textContent = error instanceof Error ? error.message : String(error);
@@ -3207,8 +3317,7 @@ def _uploads_html(user=None) -> str:
       .report-note { display: block; color: var(--muted); font-size: 12px; }
       .report-progress-wrap { display: grid; gap: 6px; }
       .report-progress { position: relative; height: 8px; border-radius: 999px; background: #e2e8f0; overflow: hidden; }
-      .report-progress span { position: absolute; inset: 0; width: 40%; background: linear-gradient(90deg, #2457a6, #4f8be8); border-radius: inherit; animation: report-progress-move 1.1s ease-in-out infinite; }
-      @keyframes report-progress-move { 0% { transform: translateX(-120%); } 50% { transform: translateX(80%); } 100% { transform: translateX(220%); } }
+      .report-progress span { position: absolute; inset: 0 auto 0 0; width: 0%; background: linear-gradient(90deg, #2457a6, #4f8be8); border-radius: inherit; transition: width 180ms ease; }
       .retention-note { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
       .report-empty { color: var(--muted); }
       .uploads-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: nowrap; white-space: nowrap; }
@@ -3281,6 +3390,7 @@ def _uploads_html(user=None) -> str:
       const uploadsPageSize = 25;
       let currentUploadsPage = 1;
       let currentUploadsTotalPages = 1;
+      let uploadsPollTimer = null;
 
       async function readJsonResponse(response) {
         const text = await response.text();
@@ -3297,6 +3407,24 @@ def _uploads_html(user=None) -> str:
       function renderSelectedCount() {
         selectedCount.textContent = `Выбрано ${selectedUploads.size}`;
         buildReportButton.disabled = selectedUploads.size === 0;
+      }
+
+      function escapeHtml(value) {
+        return String(value).replace(/[&<>"']/g, (char) => ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#039;',
+        }[char]));
+      }
+
+      function clampProgress(value) {
+        const progress = Number(value || 0);
+        if (!Number.isFinite(progress)) {
+          return 0;
+        }
+        return Math.max(0, Math.min(100, Math.round(progress)));
       }
 
       async function deleteUploadItem(uploadId, button) {
@@ -3369,11 +3497,13 @@ def _uploads_html(user=None) -> str:
         const isSelected = selectedUploads.has(item.upload_id);
         const reportLabel = item.report_has_ai ? 'Отчёт (+ai)' : 'Отчёт';
         const reportDate = item.report_generated_at ? `<span class="report-note">Сформирован: ${formatMoscowDateTime(item.report_generated_at)}</span>` : '';
+        const progress = clampProgress(item.progress_percent);
+        const statusMessage = escapeHtml(item.status_message || 'Формируем отчёт');
         const reportHtml = isProcessing
-          ? `<div class="report-progress-wrap"><div class="report-progress" aria-hidden="true"><span></span></div><span class="report-empty">${item.status_message || 'Формируем отчёт'}</span></div>`
+          ? `<div class="report-progress-wrap"><div class="report-progress" aria-hidden="true"><span style="width:${progress}%"></span></div><span class="report-empty">${statusMessage} · ${progress}%</span></div>`
           : item.report_url
             ? `<div class="report-link-wrap"><a class="report-link" href="${item.report_url}">${reportLabel}</a>${reportDate}</div>`
-            : status === 'error'
+            : status === 'error' || status === 'failed'
               ? `<span class="report-empty">${item.status_message || 'Ошибка формирования отчёта'}</span>`
               : `<span class="report-empty">${item.status_message || 'Ожидает обработки'}</span>`;
         const fileHtml = item.download_url
@@ -3429,6 +3559,23 @@ def _uploads_html(user=None) -> str:
         });
         renderUploadsPager(currentPage, totalPages);
         renderSelectedCount();
+        scheduleUploadsPolling(items);
+      }
+
+      function scheduleUploadsPolling(items) {
+        if (uploadsPollTimer) {
+          window.clearTimeout(uploadsPollTimer);
+          uploadsPollTimer = null;
+        }
+        const hasProcessing = Array.isArray(items) && items.some((item) => String(item.status || '').toLowerCase() === 'processing');
+        if (!hasProcessing) {
+          return;
+        }
+        uploadsPollTimer = window.setTimeout(() => {
+          loadUploads(currentUploadsPage).catch((error) => {
+            uploadsMessage.textContent = error instanceof Error ? error.message : String(error);
+          });
+        }, 2500);
       }
 
       function formatMoscowDateTime(value) {
@@ -3507,7 +3654,7 @@ def _uploads_html(user=None) -> str:
           if (!response.ok) {
             throw new Error(data?.detail || data?.message || 'Не удалось пересобрать отчёт.');
           }
-          uploadsMessage.innerHTML = `${data.message || 'Отчёт пересобран.'} <a class="report-link" href="${data.report_url}">Отчёт</a>`;
+          uploadsMessage.textContent = data.message || 'Пересборка отчёта запущена.';
           await loadUploads();
         } catch (error) {
           uploadsMessage.textContent = error instanceof Error ? error.message : String(error);
