@@ -16,6 +16,8 @@ def test_loads_paths_and_report_flags_from_config(tmp_path):
                 "device_boot_diagnostics:",
                 "  long_qr_seconds: 12.5",
                 "  frequent_bm_stop_count: 3",
+                "  slow_info_chain_seconds: 4.5",
+                "  info_chain_duration_ratio: 1.7",
                 "  version_duration_ratio: 1.5",
             ]
         ),
@@ -32,6 +34,8 @@ def test_loads_paths_and_report_flags_from_config(tmp_path):
     assert config.report_config.enabled("summary_by_code")
     assert config.device_boot_diagnostics.long_qr_seconds == 12.5
     assert config.device_boot_diagnostics.frequent_bm_stop_count == 3
+    assert config.device_boot_diagnostics.slow_info_chain_seconds == 4.5
+    assert config.device_boot_diagnostics.info_chain_duration_ratio == 1.7
     assert config.device_boot_diagnostics.version_duration_ratio == 1.5
 
 

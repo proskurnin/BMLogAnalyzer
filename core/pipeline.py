@@ -12,6 +12,8 @@ from analytics.counters import analyze_events
 from analytics.device_boot_speed import DeviceBootSpeedCollector
 from analytics.input_composition import build_input_source_summaries
 from analytics.log_inventory import LogInventoryCollector
+from analytics.nbs_startup import NbsStartupCollector
+from analytics.validator_info_chains import ValidatorInfoChainCollector
 from core.archive_extractor import extract_archives
 from core.log_scanner import iter_log_sources, scan_logs
 from core.models import (
@@ -117,6 +119,8 @@ def run_analysis(
     inventory_collector = LogInventoryCollector()
     device_boot_collector = DeviceBootSpeedCollector()
     card_reading_collector = CardReadingCollector()
+    validator_info_chain_collector = ValidatorInfoChainCollector()
+    nbs_startup_collector = NbsStartupCollector()
     scanned_lines = 0
 
     with _Stage("scan_and_parse_logs", progress_callback) as stage:
@@ -126,6 +130,8 @@ def run_analysis(
                 inventory_collector.observe_line(log_line.source_file, log_line.text)
                 device_boot_collector.observe_line(log_line.source_file, log_line.line_number, log_line.text)
                 card_reading_collector.observe_line(log_line.source_file, log_line.line_number, log_line.text)
+                validator_info_chain_collector.observe_line(log_line.source_file, log_line.line_number, log_line.text)
+                nbs_startup_collector.observe_line(log_line.source_file, log_line.line_number, log_line.text)
                 stats_for_file = file_stats.setdefault(
                     log_line.source_file,
                     FileProcessingStats(source_file=log_line.source_file),
@@ -186,6 +192,8 @@ def run_analysis(
         log_inventory = inventory_collector.finalize()
         device_boot_reports = device_boot_collector.finalize()
         card_reading_reports = card_reading_collector.finalize()
+        validator_info_chain_reports = validator_info_chain_collector.finalize(boot_reports=device_boot_reports)
+        nbs_startup_reports = nbs_startup_collector.finalize()
         input_source_summaries = build_input_source_summaries(
             direct_files=input_direct_files,
             source_archives=extraction.source_archives,
@@ -200,6 +208,8 @@ def run_analysis(
                     "input_sources": len(input_source_summaries),
                     "device_boot_reports": len(device_boot_reports),
                     "card_reading_reports": len(card_reading_reports),
+                    "validator_info_chain_reports": len(validator_info_chain_reports),
+                    "nbs_startup_reports": len(nbs_startup_reports),
                     "files": len(file_stats),
                 },
             )
@@ -222,6 +232,8 @@ def run_analysis(
         archive_inventory=archive_inventory,
         device_boot_reports=device_boot_reports,
         card_reading_reports=card_reading_reports,
+        validator_info_chain_reports=validator_info_chain_reports,
+        nbs_startup_reports=nbs_startup_reports,
         extraction_archive_stats=extraction.archive_stats,
     )
     return events, result, stats

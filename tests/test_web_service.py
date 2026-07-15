@@ -763,6 +763,8 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
         "protocol_scenarios",
         "protocol_scenario_results",
         "device_boot_speed",
+        "validator_info_chains",
+        "nbs_startup",
         "card_reading_speed",
         "section_sources",
         "pipeline_steps",

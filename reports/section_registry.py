@@ -36,6 +36,8 @@ SECTION_DEFINITIONS: tuple[ReportSectionDefinition, ...] = (
     ReportSectionDefinition("suspicious", "Подозрительно", ("bm",)),
     ReportSectionDefinition("protocol_scenarios", "Сценарии из протокола взаимодействия", ("bm",)),
     ReportSectionDefinition("device_boot_speed", "Скорость загрузки устройства", ("validator_app", "bm")),
+    ReportSectionDefinition("validator_info_chains", "Цепочки Info ПО валидатора", ("validator_app",)),
+    ReportSectionDefinition("nbs_startup", "Выход НБС в работу после открытия смены", ("validator_app", "stopper")),
     ReportSectionDefinition("card_reading_speed", "Долгое чтение и валидация карт", ("validator_app", "bm")),
     ReportSectionDefinition("bm_statuses", "BM-статусы", ("bm",)),
     ReportSectionDefinition("grouped_statuses", "Группировка статусов", ("bm",)),

@@ -91,6 +91,8 @@ class DeviceBootDiagnosticsConfig:
     fixed_wait_max_seconds: float = 35.0
     long_bm_start_seconds: float = 30.0
     long_first_info_seconds: float = 10.0
+    slow_info_chain_seconds: float = 3.0
+    info_chain_duration_ratio: float = 2.0
     version_duration_ratio: float = 1.25
 
 
@@ -132,6 +134,8 @@ def _device_boot_diagnostics_config(value: object) -> DeviceBootDiagnosticsConfi
         fixed_wait_max_seconds=_float_value(value.get("fixed_wait_max_seconds"), defaults.fixed_wait_max_seconds),
         long_bm_start_seconds=_float_value(value.get("long_bm_start_seconds"), defaults.long_bm_start_seconds),
         long_first_info_seconds=_float_value(value.get("long_first_info_seconds"), defaults.long_first_info_seconds),
+        slow_info_chain_seconds=_float_value(value.get("slow_info_chain_seconds"), defaults.slow_info_chain_seconds),
+        info_chain_duration_ratio=_float_value(value.get("info_chain_duration_ratio"), defaults.info_chain_duration_ratio),
         version_duration_ratio=_float_value(value.get("version_duration_ratio"), defaults.version_duration_ratio),
     )
 

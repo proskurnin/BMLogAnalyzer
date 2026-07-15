@@ -225,6 +225,71 @@ class CardReadingReport:
 
 
 @dataclass(frozen=True)
+class ValidatorInfoChainEvidence:
+    source_file: str
+    line_number: int
+    timestamp: datetime | None
+    label: str
+    raw_line: str
+
+
+@dataclass(frozen=True)
+class ValidatorInfoChainReport:
+    started_at: datetime | None
+    finished_at: datetime | None
+    duration_seconds: float | None
+    source_file: str
+    thread_id: str | None
+    endpoint: str | None = None
+    linked_boot_title: str | None = None
+    linked_boot_started_at: datetime | None = None
+    evidence: list[ValidatorInfoChainEvidence] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class NbsStartupEvidence:
+    source_file: str
+    line_number: int
+    timestamp: datetime | None
+    label: str
+    raw_line: str
+
+
+@dataclass(frozen=True)
+class NbsStartupSegment:
+    title: str
+    description: str
+    started_at: datetime | None
+    finished_at: datetime | None
+    duration_seconds: float | None
+    evidence: list[NbsStartupEvidence] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class NbsStartupReport:
+    title: str
+    reader_type: str | None
+    started_at: datetime | None
+    mode_validate_at: datetime | None
+    first_info_at: datetime | None
+    first_ready_status_at: datetime | None
+    first_qr_at: datetime | None
+    mode_validate_to_qr_seconds: float | None
+    source_file: str
+    segments: list[NbsStartupSegment] = field(default_factory=list)
+    evidence: list[NbsStartupEvidence] = field(default_factory=list)
+    ready_status_seen: bool = False
+    info_failure_count: int = 0
+    info_timeout_count: int = 0
+    stopper_load_marker_count: int = 0
+    stopper_reader_configuration_count: int = 0
+    stopper_skip_count: int = 0
+    stopper_evidence: list[NbsStartupEvidence] = field(default_factory=list)
+    stoplist_search_max_ms: float | None = None
+    stoplist_search_evidence: list[NbsStartupEvidence] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class ArchiveInventoryRow:
     archive: str
     category: str
@@ -255,6 +320,8 @@ class PipelineStats:
     archive_inventory: list[ArchiveInventoryRow] = field(default_factory=list)
     device_boot_reports: list[DeviceBootReport] = field(default_factory=list)
     card_reading_reports: list[CardReadingReport] = field(default_factory=list)
+    validator_info_chain_reports: list[ValidatorInfoChainReport] = field(default_factory=list)
+    nbs_startup_reports: list[NbsStartupReport] = field(default_factory=list)
     extraction_archive_stats: list[ExtractionArchiveStat] = field(default_factory=list)
 
 

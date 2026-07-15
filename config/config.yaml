@@ -9,6 +9,8 @@ device_boot_diagnostics:
   fixed_wait_max_seconds: 35
   long_bm_start_seconds: 30
   long_first_info_seconds: 10
+  slow_info_chain_seconds: 3
+  info_chain_duration_ratio: 2
   version_duration_ratio: 1.25
 
 reports:

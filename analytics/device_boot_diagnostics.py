@@ -14,6 +14,8 @@ class DeviceBootDiagnosticThresholds:
     fixed_wait_max_seconds: float = 35.0
     long_bm_start_seconds: float = 30.0
     long_first_info_seconds: float = 10.0
+    slow_info_chain_seconds: float = 3.0
+    info_chain_duration_ratio: float = 2.0
     version_duration_ratio: float = 1.25
 
 
@@ -43,6 +45,7 @@ def diagnose_device_boot_report(
     diagnostics.extend(_fixed_bm_wait(report, active_thresholds))
     diagnostics.extend(_long_bm_start(report, active_thresholds))
     diagnostics.extend(_long_first_info(report, active_thresholds))
+    diagnostics.extend(_slow_info_chain(report, active_thresholds))
     diagnostics.extend(_update_configuration_when_ready(report))
     return diagnostics
 
@@ -170,6 +173,46 @@ def _long_first_info(
             evidence=segment.evidence,
         )
     ]
+
+
+def _slow_info_chain(
+    report: DeviceBootReport,
+    thresholds: DeviceBootDiagnosticThresholds,
+) -> list[DeviceBootDiagnostic]:
+    chains = [
+        segment
+        for segment in report.segments
+        if "цепочка info" in segment.title.lower() and segment.duration_seconds is not None
+    ]
+    if not chains:
+        return []
+    fastest = min(segment.duration_seconds for segment in chains if segment.duration_seconds is not None)
+    diagnostics: list[DeviceBootDiagnostic] = []
+    for segment in chains:
+        duration = segment.duration_seconds
+        if duration is None or duration < thresholds.slow_info_chain_seconds:
+            continue
+        if len(chains) > 1 and duration < fastest * thresholds.info_chain_duration_ratio:
+            continue
+        comparison = (
+            f"; самая быстрая полная цепочка Info в этом запуске: {_format_seconds(fastest)}"
+            if len(chains) > 1
+            else "; других полных цепочек Info в этом запуске не найдено"
+        )
+        diagnostics.append(
+            DeviceBootDiagnostic(
+                diagnostic_id="slow_info_chain",
+                title="Медленная цепочка Info",
+                severity="warning",
+                fact=f"Полная цепочка Info заняла {_format_seconds(duration)}{comparison}.",
+                what_to_check="Проверить, почему валидатор медленно выполняет сетевой обмен Info с БМ.",
+                started_at=segment.started_at,
+                finished_at=segment.finished_at,
+                duration_seconds=duration,
+                evidence=segment.evidence,
+            )
+        )
+    return diagnostics
 
 
 def _update_configuration_when_ready(report: DeviceBootReport) -> list[DeviceBootDiagnostic]:

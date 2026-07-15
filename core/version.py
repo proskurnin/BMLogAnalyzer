@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 APP_NAME = "BM Log Analyzer"
-__version__ = "1.7.13"
+__version__ = "1.7.14"
 
 
 def format_version() -> str:

@@ -181,3 +181,45 @@ def test_device_boot_diagnostics_compare_old_validator_versions():
     assert [item.diagnostic_id for item in diagnostics[old_key]] == ["old_validator_version"]
     assert diagnostics[old_key][0].fact.startswith("Запуск выполнен на версии 1.35.0.453")
     assert diagnostics[new_key] == []
+
+
+def test_device_boot_diagnostics_find_slow_info_chain():
+    report = _report(
+        [
+            _segment(
+                "АСКП и БМ. Цепочка Info 1",
+                10,
+                10.5,
+                [
+                    _evidence("Send Commands::info", 10, "bm::Connection: Send Commands::info with timeout: 5000"),
+                    _evidence("Connection endpoint", 10.1, "bm::Connection: Connection endpoint"),
+                    _evidence("Connection succeed", 10.2, "bm::Connection: Connection succeed"),
+                    _evidence("Write buffer", 10.3, "bm::Connection: Write buffer"),
+                    _evidence("Writting succeed", 10.5, "bm::Connection: Writting succeed"),
+                ],
+            ),
+            _segment(
+                "АСКП и БМ. Цепочка Info 2",
+                20,
+                24.2,
+                [
+                    _evidence("Send Commands::info", 20, "bm::Connection: Send Commands::info with timeout: 5000"),
+                    _evidence("Connection endpoint", 21, "bm::Connection: Connection endpoint"),
+                    _evidence("Connection succeed", 22, "bm::Connection: Connection succeed"),
+                    _evidence("Write buffer", 23, "bm::Connection: Write buffer"),
+                    _evidence("Writting succeed", 24.2, "bm::Connection: Writting succeed"),
+                ],
+            ),
+        ]
+    )
+
+    diagnostics = diagnose_device_boot_report(
+        report,
+        thresholds=DeviceBootDiagnosticThresholds(slow_info_chain_seconds=3, info_chain_duration_ratio=2),
+    )
+
+    assert [item.diagnostic_id for item in diagnostics] == ["slow_info_chain"]
+    assert diagnostics[0].fact == (
+        "Полная цепочка Info заняла 4,200 сек; самая быстрая полная цепочка Info в этом запуске: 0,500 сек."
+    )
+    assert diagnostics[0].evidence[0].raw_line == "bm::Connection: Send Commands::info with timeout: 5000"

@@ -9,6 +9,7 @@ from core.models import DeviceBootEvidence, DeviceBootReport, DeviceBootSegment
 VALIDATOR_TS_RE = re.compile(
     r"\[(?P<date>20\d{2}-[A-Za-z]{3}-\d{2}) (?P<time>\d{2}:\d{2}:\d{2}(?:\.\d+)?)\]"
 )
+DOT_TS_RE = re.compile(r"\[(?P<value>20\d{2}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?)\]")
 SHORT_TS_RE = re.compile(r"\[(?P<time>\d{2}:\d{2}:\d{2}(?:\.\d+)?)\]")
 BM_TS_RE = re.compile(r'time="(?P<value>20\d{2}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?)"')
 
@@ -34,6 +35,12 @@ VALIDATOR_MARKERS = (
     ("start_bm", "start BM:", "start BM"),
     ("start_completed", "START COMPLETED", "START COMPLETED"),
     ("send_error", "send error:", "send error"),
+    ("info_send", "Send Commands::info", "Send Commands::info"),
+    ("info_connection_endpoint", "Connection endpoint", "Connection endpoint"),
+    ("info_connection_succeed", "Connection succeed", "Connection succeed"),
+    ("info_write_buffer", "Write buffer", "Write buffer"),
+    ("info_writting_succeed", "Writting succeed", "Writting succeed"),
+    ("info_writing_succeed", "Writing succeed", "Writing succeed"),
     ("current_protocol", "current protocol:", "current protocol"),
     ("stop_reader", "Stop reader", "Stop reader"),
     ("end_stop_reader", "End stop reader", "End stop reader"),
@@ -97,7 +104,11 @@ BOOT_PREFILTER_NEEDLES = (
     "version_",
     "QR",
     "socket",
+    "Connection",
     "connect",
+    "Write",
+    "Writting",
+    "Writing",
     "start",
     "START",
     "Stop",
@@ -187,7 +198,21 @@ class DeviceBootSpeedCollector:
     def _observe_validator_marker(self, source_file: str, line_number: int, timestamp: datetime | None, line: str) -> None:
         for key, needle, label in VALIDATOR_MARKERS:
             if needle in line:
-                repeated = key in {"bm_stop", "qr_failed", "update_send"}
+                if key == "info_send" and "with timeout" not in line:
+                    continue
+                if key.startswith("info_") and _boot_status_complete(self._current):
+                    continue
+                repeated = key in {
+                    "bm_stop",
+                    "qr_failed",
+                    "update_send",
+                    "info_send",
+                    "info_connection_endpoint",
+                    "info_connection_succeed",
+                    "info_write_buffer",
+                    "info_writting_succeed",
+                    "info_writing_succeed",
+                }
                 self._record(key, source_file, line_number, timestamp, line, label, repeated=repeated)
         if "Open QR failed" in line:
             self._record("qr_failed", source_file, line_number, timestamp, line, "Open QR failed", repeated=True)
@@ -445,6 +470,7 @@ def _build_segments(session: _BootSession) -> list[DeviceBootSegment]:
             "current_protocol",
             ["send_error", "info_status_64", "current_protocol"],
         ),
+        *_build_info_chain_segments(session),
         _segment(
             session,
             "АСКП и БМ. Подготовка UpdateConfiguration",
@@ -470,6 +496,89 @@ def _build_segments(session: _BootSession) -> list[DeviceBootSegment]:
             ["bm_info_request", "info_status_0_0"],
         ),
     ]
+
+
+def _build_info_chain_segments(session: _BootSession) -> list[DeviceBootSegment]:
+    chains = _info_chains(session)
+    segments: list[DeviceBootSegment] = []
+    for index, chain in enumerate(chains, start=1):
+        started_at = chain[0].timestamp
+        finished_at = chain[-1].timestamp
+        segments.append(
+            DeviceBootSegment(
+                title=f"АСКП и БМ. Цепочка Info {index}",
+                description="Обмен Info от отправки команды до записи буфера в соединение BM.",
+                started_at=started_at,
+                finished_at=finished_at,
+                duration_seconds=_duration_seconds(started_at, finished_at),
+                evidence=chain,
+            )
+        )
+    return segments
+
+
+def _info_chains(session: _BootSession) -> list[list[DeviceBootEvidence]]:
+    window_start = _event_time(session, "start_completed") or _event_time(session, "validator_started")
+    window_end = (
+        _event_time(session, "info_status_0_0")
+        or _event_time(session, "update_result")
+        or _event_time(session, "current_protocol")
+    )
+    sends = [
+        item
+        for item in _sorted_evidence(session.repeated.get("info_send", []))
+        if _timestamp_in_window(item.timestamp, window_start, window_end)
+    ]
+    if not sends:
+        return []
+    chains: list[list[DeviceBootEvidence]] = []
+    marker_keys = [
+        "info_connection_endpoint",
+        "info_connection_succeed",
+        "info_write_buffer",
+    ]
+    writing_succeeds = _sorted_evidence(
+        [
+            *session.repeated.get("info_writting_succeed", []),
+            *session.repeated.get("info_writing_succeed", []),
+        ]
+    )
+    for index, start in enumerate(sends):
+        next_start = sends[index + 1].timestamp if index + 1 < len(sends) else None
+        chain = [start]
+        cursor = start.timestamp
+        complete = True
+        for key in marker_keys:
+            item = _first_evidence_after(session.repeated.get(key, []), cursor, next_start)
+            if item is None:
+                complete = False
+                break
+            chain.append(item)
+            cursor = item.timestamp
+        if not complete:
+            continue
+        finish = _first_evidence_after(writing_succeeds, cursor, next_start)
+        if finish is None:
+            continue
+        chain.append(finish)
+        chains.append(chain)
+    return chains
+
+
+def _first_evidence_after(
+    items: list[DeviceBootEvidence],
+    cursor: datetime | None,
+    boundary: datetime | None,
+) -> DeviceBootEvidence | None:
+    for item in _sorted_evidence(items):
+        if item.timestamp is None:
+            continue
+        if cursor is not None and item.timestamp < cursor:
+            continue
+        if boundary is not None and item.timestamp >= boundary:
+            continue
+        return item
+    return None
 
 
 def _segment(
@@ -554,6 +663,10 @@ def _duration_between(session: _BootSession, start_key: str, end_key: str) -> fl
     return _duration_seconds(start.timestamp if start else None, end.timestamp if end else None)
 
 
+def _boot_status_complete(session: _BootSession | None) -> bool:
+    return session is not None and "info_status_0_0" in session.events
+
+
 def _duration_seconds(started_at: datetime | None, finished_at: datetime | None) -> float | None:
     if started_at is None or finished_at is None:
         return None
@@ -580,6 +693,8 @@ def _report_title(session: _BootSession, started: datetime | None) -> str:
 def _parse_timestamp(line: str, base_date: date | None) -> datetime | None:
     if match := BM_TS_RE.search(line):
         return _parse_datetime(match.group("value"), "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S")
+    if match := DOT_TS_RE.search(line):
+        return _parse_datetime(match.group("value"), "%Y.%m.%d %H:%M:%S.%f", "%Y.%m.%d %H:%M:%S")
     if match := VALIDATOR_TS_RE.search(line):
         return _parse_datetime(
             f"{match.group('date')} {match.group('time')}",

@@ -38,6 +38,11 @@ def test_pipeline_builds_device_boot_speed_report(tmp_path):
                 "[14:19:33.874002] start BM: /validator/bm_modules/17/bm.sh start",
                 "[14:20:51.375781] START COMPLETED!",
                 "[14:20:51.377149] [error] send error: 1",
+                "[2026.07.13 14:20:51.500] bm::Connection: Send Commands::info with timeout: 5000",
+                "[2026.07.13 14:20:51.600] bm::Connection: Connection endpoint",
+                "[2026.07.13 14:20:51.700] bm::Connection: Connection succeed",
+                "[2026.07.13 14:20:51.800] bm::Connection: Write buffer",
+                "[2026.07.13 14:20:51.900] bm::Connection: Writting succeed",
                 "[14:20:52.406207] Info response",
                 "Reader status: 0",
                 "Bm status: 64",
@@ -85,7 +90,8 @@ def test_pipeline_builds_device_boot_speed_report(tmp_path):
     assert report.total_seconds == 155.273
     assert report.segments[0].duration_seconds == 5.71
     assert report.segments[4].duration_seconds == 51.727
-    assert report.segments[9].duration_seconds == 0.257
+    control_info = next(item for item in report.segments if item.title == "АСКП и БМ. Контрольный Info 0/0")
+    assert control_info.duration_seconds == 0.257
     assert {item.log_type for item in stats.log_inventory} == {"bm", "validator_app"}
 
     write_html_report(events, result, tmp_path / "analysis_report.html", stats=stats)
@@ -95,6 +101,7 @@ def test_pipeline_builds_device_boot_speed_report(tmp_path):
     assert "АСКП_59757. Запуск 13.07.2026 в 14:18:26" in html
     assert "АСКП_59757 | Запуск 13.07.2026 в 14:18:26 | Время запуска: 2 мин 35,273 сек" in html
     assert "АСКП. Справочники и настройки" in html
+    assert "АСКП и БМ. Цепочка Info 1" in html
     assert "АСКП и БМ. Контрольный Info 0/0" in html
     assert "UpdateSuccess: true" in html
     assert "Время запусков" in html
@@ -124,6 +131,10 @@ def test_pipeline_builds_device_boot_speed_report(tmp_path):
     ]
     assert manifest["device_boot_speed"][0]["diagnostics"][2]["hypothesis"].startswith("Возможна задержка systemd")
     assert manifest["device_boot_speed"][0]["slowest_segments"][0]["title"] == "АСКП/systemd. Запуск БМ"
+    assert any(
+        item["title"] == "АСКП и БМ. Цепочка Info 1"
+        for item in manifest["device_boot_speed"][0]["segments"]
+    )
 
 
 def test_negative_device_boot_duration_is_not_reported_as_fact():

@@ -33,8 +33,13 @@ from core.models import (
     DeviceBootReport,
     DeviceBootSegment,
     InputSourceSummary,
+    NbsStartupEvidence,
+    NbsStartupReport,
+    NbsStartupSegment,
     PaymentEvent,
     PipelineStats,
+    ValidatorInfoChainEvidence,
+    ValidatorInfoChainReport,
 )
 from core.version import __version__
 from reports.section_registry import build_section_sources
@@ -148,6 +153,8 @@ def render_html_report(
     archive_names = _archive_name_set(stats.input_files if stats else [])
     device_boot_reports = stats.device_boot_reports if stats else []
     card_reading_reports = stats.card_reading_reports if stats else []
+    validator_info_chain_reports = stats.validator_info_chain_reports if stats else []
+    nbs_startup_reports = stats.nbs_startup_reports if stats else []
     report_carriers = _report_carriers_from_device_boot(device_boot_reports)
     reader_device_profiles = _reader_device_profiles(events, device_boot_reports)
     event_reader_overrides = _event_reader_overrides(reader_device_profiles)
@@ -184,6 +191,8 @@ def render_html_report(
         bm_date_records=bm_date_records,
         validator_sections=validator_sections,
         protocol_results=protocol_results,
+        validator_info_chain_reports=validator_info_chain_reports,
+        nbs_startup_reports=nbs_startup_reports,
         report_carriers=report_carriers,
         event_reader_overrides=event_reader_overrides,
     )
@@ -283,6 +292,14 @@ def render_html_report(
                 _section_source_text(section_sources, "device_boot_speed"),
                 thresholds=device_boot_thresholds,
             ),
+            _validator_info_chains_section(
+                validator_info_chain_reports,
+                _section_source_text(section_sources, "validator_info_chains"),
+            ),
+            _nbs_startup_section(
+                nbs_startup_reports,
+                _section_source_text(section_sources, "nbs_startup"),
+            ),
             _card_reading_speed_section(
                 card_reading_reports,
                 _section_source_text(section_sources, "card_reading_speed"),
@@ -339,6 +356,8 @@ def render_html_report_manifest(
     validator_sections = _validator_analytics(events, archive_names)
     device_boot_reports = stats.device_boot_reports if stats else []
     card_reading_reports = stats.card_reading_reports if stats else []
+    validator_info_chain_reports = stats.validator_info_chain_reports if stats else []
+    nbs_startup_reports = stats.nbs_startup_reports if stats else []
     suspicious_rows = suspicious_line_payloads(events)
     check_cases = [check for check in load_check_cases() if check.enabled]
     check_results = run_builtin_checks(events, checks=check_cases)
@@ -371,6 +390,12 @@ def render_html_report_manifest(
     if device_boot_reports:
         insert_at = stable_sections.index("bm_statuses")
         stable_sections.insert(insert_at, "device_boot_speed")
+    if validator_info_chain_reports:
+        insert_at = stable_sections.index("bm_statuses")
+        stable_sections.insert(insert_at, "validator_info_chains")
+    if nbs_startup_reports:
+        insert_at = stable_sections.index("bm_statuses")
+        stable_sections.insert(insert_at, "nbs_startup")
     if card_reading_reports:
         insert_at = stable_sections.index("bm_statuses")
         stable_sections.insert(insert_at, "card_reading_speed")
@@ -403,6 +428,8 @@ def render_html_report_manifest(
             "protocol_scenarios",
             "protocol_scenario_results",
             "device_boot_speed",
+            "validator_info_chains",
+            "nbs_startup",
             "card_reading_speed",
             "section_sources",
             "pipeline_steps",
@@ -426,6 +453,8 @@ def render_html_report_manifest(
             "validation_checks": len(check_results),
             "protocol_scenarios": len(protocol_results),
             "device_boot_reports": len(device_boot_reports),
+            "validator_info_chain_reports": len(validator_info_chain_reports),
+            "nbs_startup_reports": len(nbs_startup_reports),
             "card_reading_reports": len(card_reading_reports),
             "input_sources": len(input_source_summaries),
         },
@@ -444,6 +473,8 @@ def render_html_report_manifest(
             _device_boot_report_payload(item, diagnostics=diagnostics)
             for item, diagnostics in _device_boot_reports_with_diagnostics(device_boot_reports, device_boot_thresholds)
         ],
+        "validator_info_chains": [_validator_info_chain_payload(item) for item in validator_info_chain_reports],
+        "nbs_startup": [_nbs_startup_report_payload(item) for item in nbs_startup_reports],
         "card_reading_speed": [_card_reading_report_payload(item) for item in card_reading_reports],
         "section_sources": section_sources,
         "pipeline_steps": [_pipeline_step_payload(item) for item in (stats.steps if stats else [])],
@@ -1796,6 +1827,508 @@ def _device_boot_evidence_payload(evidence: DeviceBootEvidence) -> dict[str, obj
     }
 
 
+def _validator_info_chains_section(reports: list[ValidatorInfoChainReport], source_note: str = "") -> str:
+    if not reports:
+        return ""
+    rendered_reports = []
+    for index, report in enumerate(reports[:20], start=1):
+        rendered_reports.append(
+            "\n".join(
+                [
+                    '<details class="collapsible card-reading-report">',
+                    "<summary>",
+                    "<span>",
+                    f"<strong>{escape(_validator_info_chain_summary_title(report))}</strong>",
+                    f"<em>{escape(_validator_info_chain_link_text(report))}</em>",
+                    "</span>",
+                    "</summary>",
+                    '<div class="collapsible-body">',
+                    _validator_info_chain_head(report),
+                    _validator_info_chain_evidence_table(report.evidence),
+                    "</div>",
+                    "</details>",
+                ]
+            )
+        )
+    summary = f"Медленных цепочек Info: {len(reports)}."
+    return "\n".join(
+        [
+            '<details class="collapsible collapsible--validator-info-chains">',
+            "<summary>",
+            "<span>",
+            "<strong>Цепочки Info ПО валидатора</strong>",
+            f"<em>{escape(summary)} Факты рассчитаны отдельно от скорости загрузки устройства. {escape(source_note)}</em>",
+            "</span>",
+            "</summary>",
+            '<div class="collapsible-body">',
+            _validator_info_chain_summary_cards(reports),
+            _validator_info_chain_overview_table(reports),
+            "".join(rendered_reports),
+            "</div>",
+            "</details>",
+        ]
+    )
+
+
+def _validator_info_chain_summary_cards(reports: list[ValidatorInfoChainReport]) -> str:
+    durations = sorted(report.duration_seconds for report in reports if report.duration_seconds is not None)
+    if not durations:
+        return ""
+    linked_count = sum(1 for report in reports if report.linked_boot_title)
+    facts = [
+        ("Цепочек", str(len(reports))),
+        ("Связаны с запуском", str(linked_count)),
+        ("Максимум", _format_duration(durations[-1])),
+        ("Среднее", _format_duration(sum(durations) / len(durations))),
+    ]
+    cards = "".join(
+        '<div class="device-boot-fact">'
+        f"<span>{escape(label)}</span>"
+        f"<strong>{escape(value)}</strong>"
+        "</div>"
+        for label, value in facts
+    )
+    return f'<div class="device-boot-facts device-boot-facts--summary">{cards}</div>'
+
+
+def _validator_info_chain_overview_table(reports: list[ValidatorInfoChainReport]) -> str:
+    rows = []
+    for report in reports[:12]:
+        rows.append(
+            '<tr class="status-row">'
+            f"<td>{escape(_format_datetime(report.started_at))}</td>"
+            f"<td>{escape(_format_duration(report.duration_seconds))}</td>"
+            f"<td>{escape(report.endpoint or 'не найдено')}</td>"
+            f"<td>{escape(report.thread_id or 'не найдено')}</td>"
+            f"<td>{escape(_validator_info_chain_link_text(report))}</td>"
+            f"<td><code>{escape(_validator_info_chain_source_short(report.source_file))}</code></td>"
+            "</tr>"
+        )
+    return "\n".join(
+        [
+            '<section class="device-boot-chart">',
+            "<h3>Самые долгие цепочки Info</h3>",
+            '<div class="table-wrap">',
+            '<table class="status-table status-table--validator-info-chains">',
+            '<colgroup><col style="width:14%"><col style="width:12%"><col style="width:16%"><col style="width:12%"><col style="width:22%"><col style="width:24%"></colgroup>',
+            '<thead class="status-table-head"><tr><th>Начало</th><th>Длительность</th><th>Endpoint</th><th>Thread</th><th>Связь с запуском</th><th>Источник</th></tr></thead>',
+            f"<tbody>{''.join(rows)}</tbody>",
+            "</table>",
+            "</div>",
+            "</section>",
+        ]
+    )
+
+
+def _validator_info_chain_head(report: ValidatorInfoChainReport) -> str:
+    facts = [
+        ("Начало", _format_datetime(report.started_at)),
+        ("Всего", _format_duration(report.duration_seconds)),
+        ("Endpoint", report.endpoint or "не найдено"),
+        ("Thread", report.thread_id or "не найдено"),
+        ("Связь с запуском", _validator_info_chain_link_text(report)),
+    ]
+    cards = "".join(
+        '<div class="device-boot-fact">'
+        f"<span>{escape(label)}</span>"
+        f"<strong>{escape(value)}</strong>"
+        "</div>"
+        for label, value in facts
+    )
+    return "\n".join(
+        [
+            '<div class="device-boot-head">',
+            f"<h3>{escape(_validator_info_chain_summary_title(report))}</h3>",
+            f'<p class="muted">Источник: {escape(report.source_file)}</p>',
+            f'<div class="device-boot-facts">{cards}</div>',
+            "</div>",
+        ]
+    )
+
+
+def _validator_info_chain_evidence_table(evidence: list[ValidatorInfoChainEvidence]) -> str:
+    rows = []
+    for item in evidence:
+        rows.append(
+            '<tr class="status-row">'
+            f"<td>{escape(_format_timestamp(item.timestamp))}</td>"
+            f"<td>{escape(item.label)}</td>"
+            f"<td><code>{escape(_validator_info_chain_evidence_short_line(item))}</code></td>"
+            "</tr>"
+        )
+    return "\n".join(
+        [
+            '<div class="table-wrap checks-table-wrap">',
+            '<table class="status-table status-table--validator-info-chain-evidence">',
+            '<colgroup><col style="width:12%"><col style="width:20%"><col style="width:68%"></colgroup>',
+            '<thead class="status-table-head"><tr><th>Время</th><th>Факт</th><th>Строка</th></tr></thead>',
+            f"<tbody>{''.join(rows)}</tbody>",
+            "</table>",
+            "</div>",
+        ]
+    )
+
+
+def _validator_info_chain_payload(report: ValidatorInfoChainReport) -> dict[str, object]:
+    return {
+        "started_at": report.started_at.isoformat(sep=" ") if report.started_at else None,
+        "finished_at": report.finished_at.isoformat(sep=" ") if report.finished_at else None,
+        "duration_seconds": report.duration_seconds,
+        "source_file": report.source_file,
+        "thread_id": report.thread_id,
+        "endpoint": report.endpoint,
+        "linked_boot_title": report.linked_boot_title,
+        "linked_boot_started_at": report.linked_boot_started_at.isoformat(sep=" ") if report.linked_boot_started_at else None,
+        "evidence": [_validator_info_chain_evidence_payload(item) for item in report.evidence],
+    }
+
+
+def _validator_info_chain_evidence_payload(evidence: ValidatorInfoChainEvidence) -> dict[str, object]:
+    return {
+        "source_file": evidence.source_file,
+        "line_number": evidence.line_number,
+        "timestamp": evidence.timestamp.isoformat(sep=" ") if evidence.timestamp else None,
+        "label": evidence.label,
+        "raw_line": evidence.raw_line,
+    }
+
+
+def _validator_info_chain_summary_title(report: ValidatorInfoChainReport) -> str:
+    return f"Info {_format_datetime(report.started_at)} | Время: {_format_duration(report.duration_seconds)}"
+
+
+def _validator_info_chain_link_text(report: ValidatorInfoChainReport) -> str:
+    return report.linked_boot_title or "связь с запуском не установлена"
+
+
+def _validator_info_chain_source_short(source_file: str) -> str:
+    parts = source_file.split("/")
+    return "/".join(parts[-4:]) if len(parts) > 4 else source_file
+
+
+def _validator_info_chain_evidence_short_line(evidence: ValidatorInfoChainEvidence) -> str:
+    timestamp = _format_timestamp(evidence.timestamp)
+    return f"{evidence.source_file}:{evidence.line_number} [{timestamp}] {evidence.raw_line}"
+
+
+def _nbs_startup_section(reports: list[NbsStartupReport], source_note: str = "") -> str:
+    if not reports:
+        return ""
+    rendered_reports = []
+    for index, report in enumerate(reports[:20], start=1):
+        rendered_reports.append(
+            "\n".join(
+                [
+                    '<details class="collapsible card-reading-report">',
+                    "<summary>",
+                    "<span>",
+                    f"<strong>{escape(_nbs_startup_summary_title(report))}</strong>",
+                    f"<em>{escape(_nbs_startup_summary_note(report))}</em>",
+                    "</span>",
+                    "</summary>",
+                    '<div class="collapsible-body">',
+                    _nbs_startup_report_head(report),
+                    _nbs_startup_segment_table(report.segments),
+                    _nbs_startup_evidence_table(report.evidence, title="Ключевые строки ПО валидатора"),
+                    _nbs_startup_evidence_table(report.stopper_evidence, title="События ПО стоппера в окне запуска"),
+                    _nbs_startup_evidence_table(report.stoplist_search_evidence, title="Строки длительности поиска стоп-листов"),
+                    _nbs_startup_text_report_block(report, index),
+                    "</div>",
+                    "</details>",
+                ]
+            )
+        )
+    summary = f"Запусков НБС дольше 3 сек: {len(reports)}."
+    return "\n".join(
+        [
+            '<details class="collapsible collapsible--nbs-startup">',
+            "<summary>",
+            "<span>",
+            "<strong>Выход НБС в работу после открытия смены</strong>",
+            f"<em>{escape(summary)} Факты рассчитаны по Log started, MODE::VALIDATE и QR data. {escape(source_note)}</em>",
+            "</span>",
+            "</summary>",
+            '<div class="collapsible-body">',
+            _nbs_startup_summary_cards(reports),
+            _nbs_startup_overview_table(reports),
+            "".join(rendered_reports),
+            "</div>",
+            "</details>",
+        ]
+    )
+
+
+def _nbs_startup_summary_cards(reports: list[NbsStartupReport]) -> str:
+    durations = sorted(report.mode_validate_to_qr_seconds for report in reports if report.mode_validate_to_qr_seconds is not None)
+    if not durations:
+        return ""
+    no_stopper_load = sum(1 for report in reports if report.stopper_load_marker_count == 0)
+    facts = [
+        ("Запусков", str(len(reports))),
+        ("Максимум MODE::VALIDATE -> QR", _format_duration(durations[-1])),
+        ("Среднее MODE::VALIDATE -> QR", _format_duration(sum(durations) / len(durations))),
+        ("Без загрузки стоп-листов в окне", str(no_stopper_load)),
+    ]
+    cards = "".join(
+        '<div class="device-boot-fact">'
+        f"<span>{escape(label)}</span>"
+        f"<strong>{escape(value)}</strong>"
+        "</div>"
+        for label, value in facts
+    )
+    return f'<div class="device-boot-facts device-boot-facts--summary">{cards}</div>'
+
+
+def _nbs_startup_overview_table(reports: list[NbsStartupReport]) -> str:
+    rows = []
+    for report in reports[:12]:
+        rows.append(
+            '<tr class="status-row">'
+            f"<td>{escape(report.reader_type or 'не найдено')}</td>"
+            f"<td>{escape(_format_datetime(report.mode_validate_at))}</td>"
+            f"<td>{escape(_format_duration(report.mode_validate_to_qr_seconds))}</td>"
+            f"<td>{escape(_format_duration(_nbs_startup_first_info_pause(report)))}</td>"
+            f"<td>{escape(str(_nbs_startup_info_failure_count(report)))}</td>"
+            f"<td>{escape(str(report.stopper_load_marker_count))}</td>"
+            f"<td>{escape(_format_ms(report.stoplist_search_max_ms))}</td>"
+            f"<td><code>{escape(_validator_info_chain_source_short(report.source_file))}</code></td>"
+            "</tr>"
+        )
+    return "\n".join(
+        [
+            '<section class="device-boot-chart">',
+            "<h3>Самые долгие выходы НБС в работу</h3>",
+            '<div class="table-wrap">',
+            '<table class="status-table status-table--nbs-startup">',
+            '<colgroup><col style="width:8%"><col style="width:14%"><col style="width:14%"><col style="width:12%"><col style="width:10%"><col style="width:10%"><col style="width:12%"><col style="width:20%"></colgroup>',
+            '<thead class="status-table-head"><tr><th>Ридер</th><th>MODE::VALIDATE</th><th>До QR</th><th>До Info</th><th>Ошибки Info</th><th>Загрузки стоп-листов</th><th>Поиск стоп-листов</th><th>Источник</th></tr></thead>',
+            f"<tbody>{''.join(rows)}</tbody>",
+            "</table>",
+            "</div>",
+            "</section>",
+        ]
+    )
+
+
+def _nbs_startup_report_head(report: NbsStartupReport) -> str:
+    facts = [
+        ("Ридер", report.reader_type or "не найдено"),
+        ("Log started", _format_datetime(report.started_at)),
+        ("MODE::VALIDATE", _format_datetime(report.mode_validate_at)),
+        ("Первый Info", _format_datetime(report.first_info_at)),
+        ("Первый статус 0/0", _format_datetime(report.first_ready_status_at)),
+        ("Первый QR", _format_datetime(report.first_qr_at)),
+        ("MODE::VALIDATE -> QR", _format_duration(report.mode_validate_to_qr_seconds)),
+        ("Ошибки Info", str(_nbs_startup_info_failure_count(report))),
+        ("InfoWithTimeout", str(report.info_timeout_count)),
+        ("Загрузки стоп-листов", str(report.stopper_load_marker_count)),
+        ("readerConfiguration", str(report.stopper_reader_configuration_count)),
+        ("skip БД стоппера", str(report.stopper_skip_count)),
+        ("Макс. поиск стоп-листов", _format_ms(report.stoplist_search_max_ms)),
+    ]
+    cards = "".join(
+        '<div class="device-boot-fact">'
+        f"<span>{escape(label)}</span>"
+        f"<strong>{escape(value)}</strong>"
+        "</div>"
+        for label, value in facts
+    )
+    return "\n".join(
+        [
+            '<div class="device-boot-head">',
+            f"<h3>{escape(_nbs_startup_summary_title(report))}</h3>",
+            f'<p class="muted">Источник: {escape(report.source_file)}</p>',
+            f'<div class="device-boot-facts">{cards}</div>',
+            "</div>",
+        ]
+    )
+
+
+def _nbs_startup_segment_table(segments: list[NbsStartupSegment]) -> str:
+    rows = []
+    for segment in segments:
+        rows.append(
+            '<tr class="status-row">'
+            f"<td>{escape(segment.title)}</td>"
+            f"<td>{escape(_format_datetime(segment.started_at))}</td>"
+            f"<td>{escape(_format_datetime(segment.finished_at))}</td>"
+            f"<td>{escape(_format_duration(segment.duration_seconds))}</td>"
+            f"<td>{escape(segment.description)}</td>"
+            "</tr>"
+        )
+    return "\n".join(
+        [
+            '<div class="table-wrap checks-table-wrap">',
+            '<table class="status-table status-table--nbs-startup-segments">',
+            '<colgroup><col style="width:24%"><col style="width:16%"><col style="width:16%"><col style="width:14%"><col style="width:30%"></colgroup>',
+            '<thead class="status-table-head"><tr><th>Сегмент</th><th>Начало</th><th>Конец</th><th>Длительность</th><th>Описание</th></tr></thead>',
+            f"<tbody>{''.join(rows)}</tbody>",
+            "</table>",
+            "</div>",
+        ]
+    )
+
+
+def _nbs_startup_evidence_table(evidence: list[NbsStartupEvidence], *, title: str) -> str:
+    if not evidence:
+        return ""
+    rows = []
+    for item in evidence:
+        rows.append(
+            '<tr class="status-row">'
+            f"<td>{escape(_format_timestamp(item.timestamp))}</td>"
+            f"<td>{escape(item.label)}</td>"
+            f"<td><code>{escape(_nbs_startup_evidence_short_line(item))}</code></td>"
+            "</tr>"
+        )
+    return "\n".join(
+        [
+            f"<h3>{escape(title)}</h3>",
+            '<div class="table-wrap checks-table-wrap">',
+            '<table class="status-table status-table--nbs-startup-evidence">',
+            '<colgroup><col style="width:12%"><col style="width:20%"><col style="width:68%"></colgroup>',
+            '<thead class="status-table-head"><tr><th>Время</th><th>Факт</th><th>Строка</th></tr></thead>',
+            f"<tbody>{''.join(rows)}</tbody>",
+            "</table>",
+            "</div>",
+        ]
+    )
+
+
+def _nbs_startup_text_report_block(report: NbsStartupReport, index: int) -> str:
+    text_id = f"nbs-startup-text-{index}"
+    return "\n".join(
+        [
+            '<details class="collapsible device-boot-text-details">',
+            "<summary>",
+            "<span>",
+            "<strong>Текстовый отчёт</strong>",
+            "<em>Фактические интервалы выхода НБС в работу и evidence-строки.</em>",
+            "</span>",
+            "</summary>",
+            '<div class="collapsible-body">',
+            f'<button type="button" class="copy-button" data-copy-target="{escape(text_id)}">Скопировать текстовый отчёт</button>',
+            f'<pre class="device-boot-text" id="{escape(text_id)}">{escape(_nbs_startup_text_report(report))}</pre>',
+            "</div>",
+            "</details>",
+        ]
+    )
+
+
+def _nbs_startup_text_report(report: NbsStartupReport) -> str:
+    lines = [
+        _nbs_startup_summary_title(report),
+        "",
+        f"Источник: {report.source_file}.",
+        f"Ридер: {report.reader_type or 'не найдено'}.",
+        f"Log started: {_format_timestamp(report.started_at)}.",
+        f"MODE::VALIDATE: {_format_timestamp(report.mode_validate_at)}.",
+        f"Первый Send Commands::info: {_format_timestamp(report.first_info_at)}.",
+        f"Первый reader/bm status 0/0: {_format_timestamp(report.first_ready_status_at)}.",
+        f"Первый непустой QR: {_format_timestamp(report.first_qr_at)}.",
+        f"MODE::VALIDATE -> первый QR: {_format_duration(report.mode_validate_to_qr_seconds)}.",
+        f"MODE::VALIDATE -> первый Info: {_format_duration(_nbs_startup_first_info_pause(report))}.",
+        "",
+        "Факт из логов:",
+        f"- В окне MODE::VALIDATE -> первый QR найдено признаков загрузки стоп-листов: {report.stopper_load_marker_count}.",
+        f"- В том же окне найдено readerConfiguration: {report.stopper_reader_configuration_count}.",
+        f"- В том же окне найдено skip БД стоппера: {report.stopper_skip_count}.",
+        f"- Максимальный найденный поиск StopListDb/References_nbs_slm: {_format_ms(report.stoplist_search_max_ms)}.",
+        f"- Статус reader/bm 0/0 до первого QR найден: {'да' if report.ready_status_seen else 'нет'}.",
+        f"- Send Commands::info failed до первого QR: {report.info_failure_count}.",
+        f"- InfoWithTimeout до первого QR: {report.info_timeout_count}.",
+        "",
+        "Сегменты:",
+    ]
+    for segment in report.segments:
+        lines.append(
+            f"- {segment.title}: {_format_duration(segment.duration_seconds)}, "
+            f"{_format_time_range(segment.started_at, segment.finished_at)}."
+        )
+    lines.extend(["", "Evidence ПО валидатора:"])
+    lines.extend(f"- {_nbs_startup_evidence_short_line(item)}" for item in report.evidence)
+    if report.stopper_evidence:
+        lines.extend(["", "Evidence ПО стоппера в окне сценария:"])
+        lines.extend(f"- {_nbs_startup_evidence_short_line(item)}" for item in report.stopper_evidence)
+    if report.stoplist_search_evidence:
+        lines.extend(["", "Evidence поиска стоп-листов:"])
+        lines.extend(f"- {_nbs_startup_evidence_short_line(item)}" for item in report.stoplist_search_evidence)
+    return "\n".join(lines)
+
+
+def _nbs_startup_report_payload(report: NbsStartupReport) -> dict[str, object]:
+    return {
+        "title": report.title,
+        "reader_type": report.reader_type,
+        "started_at": report.started_at.isoformat(sep=" ") if report.started_at else None,
+        "mode_validate_at": report.mode_validate_at.isoformat(sep=" ") if report.mode_validate_at else None,
+        "first_info_at": report.first_info_at.isoformat(sep=" ") if report.first_info_at else None,
+        "first_ready_status_at": report.first_ready_status_at.isoformat(sep=" ") if report.first_ready_status_at else None,
+        "first_qr_at": report.first_qr_at.isoformat(sep=" ") if report.first_qr_at else None,
+        "mode_validate_to_qr_seconds": report.mode_validate_to_qr_seconds,
+        "source_file": report.source_file,
+        "segments": [_nbs_startup_segment_payload(item) for item in report.segments],
+        "evidence": [_nbs_startup_evidence_payload(item) for item in report.evidence],
+        "ready_status_seen": report.ready_status_seen,
+        "info_failure_count": report.info_failure_count,
+        "info_timeout_count": report.info_timeout_count,
+        "stopper_load_marker_count": report.stopper_load_marker_count,
+        "stopper_reader_configuration_count": report.stopper_reader_configuration_count,
+        "stopper_skip_count": report.stopper_skip_count,
+        "stopper_evidence": [_nbs_startup_evidence_payload(item) for item in report.stopper_evidence],
+        "stoplist_search_max_ms": report.stoplist_search_max_ms,
+        "stoplist_search_evidence": [_nbs_startup_evidence_payload(item) for item in report.stoplist_search_evidence],
+    }
+
+
+def _nbs_startup_segment_payload(segment: NbsStartupSegment) -> dict[str, object]:
+    return {
+        "title": segment.title,
+        "description": segment.description,
+        "started_at": segment.started_at.isoformat(sep=" ") if segment.started_at else None,
+        "finished_at": segment.finished_at.isoformat(sep=" ") if segment.finished_at else None,
+        "duration_seconds": segment.duration_seconds,
+        "evidence": [_nbs_startup_evidence_payload(item) for item in segment.evidence],
+    }
+
+
+def _nbs_startup_evidence_payload(evidence: NbsStartupEvidence) -> dict[str, object]:
+    return {
+        "source_file": evidence.source_file,
+        "line_number": evidence.line_number,
+        "timestamp": evidence.timestamp.isoformat(sep=" ") if evidence.timestamp else None,
+        "label": evidence.label,
+        "raw_line": evidence.raw_line,
+    }
+
+
+def _nbs_startup_summary_title(report: NbsStartupReport) -> str:
+    reader = report.reader_type or "ридер не найден"
+    return f"{reader} | MODE::VALIDATE {_format_datetime(report.mode_validate_at)} | До QR: {_format_duration(report.mode_validate_to_qr_seconds)}"
+
+
+def _nbs_startup_summary_note(report: NbsStartupReport) -> str:
+    return (
+        f"Первый Info: {_format_datetime(report.first_info_at)}. "
+        f"Загрузки стоп-листов в окне: {report.stopper_load_marker_count}."
+    )
+
+
+def _nbs_startup_first_info_pause(report: NbsStartupReport) -> float | None:
+    if report.mode_validate_at is None or report.first_info_at is None:
+        return None
+    return round((report.first_info_at - report.mode_validate_at).total_seconds(), 3)
+
+
+def _nbs_startup_info_failure_count(report: NbsStartupReport) -> int:
+    return report.info_failure_count + report.info_timeout_count
+
+
+def _nbs_startup_evidence_short_line(evidence: NbsStartupEvidence) -> str:
+    timestamp = _format_timestamp(evidence.timestamp)
+    return f"{evidence.source_file}:{evidence.line_number} [{timestamp}] {evidence.raw_line}"
+
+
 def _card_reading_speed_section(reports: list[CardReadingReport], source_note: str = "") -> str:
     if not reports:
         return ""
@@ -2086,6 +2619,12 @@ def _format_duration(value: float | None) -> str:
     return f"{minutes} мин {seconds_text} сек"
 
 
+def _format_ms(value: float | None) -> str:
+    if value is None:
+        return "не рассчитано"
+    return f"{value:.3f}".replace(".", ",") + " мс"
+
+
 def _format_percent_value(value: float | None) -> str:
     if value is None:
         return "не рассчитано"
@@ -2202,6 +2741,8 @@ def _report_data(
     bm_date_records: list[dict[str, object]],
     validator_sections: list[dict[str, object]],
     protocol_results: list[object],
+    validator_info_chain_reports: list[ValidatorInfoChainReport] | None = None,
+    nbs_startup_reports: list[NbsStartupReport] | None = None,
     report_carriers: list[str] | None = None,
     event_reader_overrides: dict[int, str] | None = None,
 ) -> dict[str, object]:
@@ -2245,6 +2786,14 @@ def _report_data(
         },
         "validators": validator_sections,
         "protocol_scenarios": [_protocol_scenario_result_payload(item) for item in protocol_results],
+        "validator_info_chains": [
+            _validator_info_chain_payload(item)
+            for item in (validator_info_chain_reports or [])
+        ],
+        "nbs_startup": [
+            _nbs_startup_report_payload(item)
+            for item in (nbs_startup_reports or [])
+        ],
         "events": event_rows,
     }
 

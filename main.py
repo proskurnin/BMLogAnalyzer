@@ -108,6 +108,8 @@ def _device_boot_thresholds(config) -> DeviceBootDiagnosticThresholds:
         fixed_wait_max_seconds=config.fixed_wait_max_seconds,
         long_bm_start_seconds=config.long_bm_start_seconds,
         long_first_info_seconds=config.long_first_info_seconds,
+        slow_info_chain_seconds=config.slow_info_chain_seconds,
+        info_chain_duration_ratio=config.info_chain_duration_ratio,
         version_duration_ratio=config.version_duration_ratio,
     )
 
