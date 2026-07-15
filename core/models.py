@@ -177,6 +177,21 @@ class DeviceBootReport:
 
 
 @dataclass(frozen=True)
+class DeviceBootDiagnostic:
+    diagnostic_id: str
+    title: str
+    severity: str
+    fact: str
+    what_to_check: str
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    duration_seconds: float | None = None
+    count: int | None = None
+    hypothesis: str = ""
+    evidence: list[DeviceBootEvidence] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class CardReadingEvidence:
     source_file: str
     line_number: int

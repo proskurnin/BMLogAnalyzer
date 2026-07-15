@@ -2,6 +2,15 @@ input_path: ./_workdir/input
 reports_dir: ./_workdir/reports
 extracted_dir: ./_workdir/extracted
 
+device_boot_diagnostics:
+  long_qr_seconds: 10
+  frequent_bm_stop_count: 2
+  fixed_wait_min_seconds: 25
+  fixed_wait_max_seconds: 35
+  long_bm_start_seconds: 30
+  long_first_info_seconds: 10
+  version_duration_ratio: 1.25
+
 reports:
   report_metadata: false
   parsed_events: false

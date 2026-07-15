@@ -13,6 +13,10 @@ def test_loads_paths_and_report_flags_from_config(tmp_path):
                 "reports:",
                 "  parsed_events: false",
                 "  analysis_report_html: false",
+                "device_boot_diagnostics:",
+                "  long_qr_seconds: 12.5",
+                "  frequent_bm_stop_count: 3",
+                "  version_duration_ratio: 1.5",
             ]
         ),
         encoding="utf-8",
@@ -26,6 +30,9 @@ def test_loads_paths_and_report_flags_from_config(tmp_path):
     assert not config.report_config.enabled("parsed_events")
     assert not config.report_config.enabled("analysis_report_html")
     assert config.report_config.enabled("summary_by_code")
+    assert config.device_boot_diagnostics.long_qr_seconds == 12.5
+    assert config.device_boot_diagnostics.frequent_bm_stop_count == 3
+    assert config.device_boot_diagnostics.version_duration_ratio == 1.5
 
 
 def test_load_settings_uses_explicit_auth_dir(tmp_path, monkeypatch):

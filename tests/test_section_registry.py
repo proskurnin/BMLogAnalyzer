@@ -50,3 +50,24 @@ def test_section_sources_use_upload_composition_when_inventory_is_empty():
 
     assert section_sources["device_boot_speed"]["status"] == "available"
     assert section_sources["device_boot_speed"]["required_log_type_labels"] == ["ПО валидатора", "БМ"]
+
+
+def test_upload_composition_section_source_uses_concrete_input_files():
+    stats = PipelineStats(
+        scanned_lines=0,
+        malformed_payment_lines=0,
+        extracted_files=0,
+        input_source_summaries=[
+            InputSourceSummary(source_file="input/13-07-2026.zip", input_kind="archive"),
+            InputSourceSummary(source_file="input/kzp_logs_260715.zip", input_kind="archive"),
+        ],
+    )
+
+    section_sources = build_section_sources(stats, [], ["upload_composition"])
+
+    assert section_sources["upload_composition"]["data_source"] == "13-07-2026.zip, kzp_logs_260715.zip"
+    assert section_sources["upload_composition"]["source_files"] == ["13-07-2026.zip", "kzp_logs_260715.zip"]
+    assert (
+        section_sources["upload_composition"]["note"]
+        == "Источник данных: 13-07-2026.zip, kzp_logs_260715.zip."
+    )

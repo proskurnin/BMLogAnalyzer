@@ -12,6 +12,11 @@ from analytics.bm_statuses import UNCLASSIFIED_STATUS, bm_status_summary_rows, c
 from analytics.ai_context import build_ai_context
 from analytics.carrier_directory import carrier_markers_for_text, carrier_names_for_text, load_carrier_rules
 from analytics.check_cases import load_check_cases, run_builtin_checks
+from analytics.device_boot_diagnostics import (
+    DeviceBootDiagnosticThresholds,
+    diagnose_device_boot,
+    diagnose_device_boot_report,
+)
 from analytics.protocol_scenarios import load_protocol_scenarios, run_protocol_scenarios
 from analytics.suspicious import suspicious_line_payloads
 from core.contracts import REPORT_MANIFEST_SCHEMA_VERSION
@@ -23,6 +28,7 @@ from core.models import (
     CardReadingReport,
     CheckCase,
     CheckResult,
+    DeviceBootDiagnostic,
     DeviceBootEvidence,
     DeviceBootReport,
     DeviceBootSegment,
@@ -69,13 +75,21 @@ def write_html_report(
     path: Path | str,
     *,
     stats: PipelineStats | None = None,
+    device_boot_thresholds: DeviceBootDiagnosticThresholds | None = None,
 ) -> None:
     report_path = Path(path)
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(render_html_report(events, result, stats=stats), encoding="utf-8")
+    report_path.write_text(
+        render_html_report(events, result, stats=stats, device_boot_thresholds=device_boot_thresholds),
+        encoding="utf-8",
+    )
     manifest_path = report_path.with_suffix(".json")
     manifest_path.write_text(
-        json.dumps(render_html_report_manifest(events, result, stats=stats), ensure_ascii=False, indent=2),
+        json.dumps(
+            render_html_report_manifest(events, result, stats=stats, device_boot_thresholds=device_boot_thresholds),
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
     ai_context_path = report_path.with_suffix(".ai_context.json")
@@ -94,9 +108,10 @@ def render_html_report(
     result: AnalysisResult,
     *,
     stats: PipelineStats | None = None,
+    device_boot_thresholds: DeviceBootDiagnosticThresholds | None = None,
 ) -> str:
     archive_inventory = stats.archive_inventory if stats else []
-    log_groups, log_total = _build_log_groups(archive_inventory)
+    archive_log_groups, archive_log_total = _build_log_groups(archive_inventory)
     other_groups, other_total = _build_other_groups(archive_inventory)
     input_source_summaries = stats.input_source_summaries if stats else []
     bm_summary_count = _recognized_log_type_count(input_source_summaries, {"bm"}) if input_source_summaries else bm_log_count(archive_inventory)
@@ -111,8 +126,8 @@ def render_html_report(
         else explicit_system_log_count(archive_inventory)
     )
     recognized_log_groups, recognized_log_total = _build_recognized_log_groups(input_source_summaries)
-    visible_log_groups = recognized_log_groups if recognized_log_total else log_groups
-    visible_log_total = recognized_log_total if recognized_log_total else log_total
+    visible_log_groups = recognized_log_groups if recognized_log_total else archive_log_groups
+    visible_log_total = recognized_log_total if recognized_log_total else archive_log_total
     bm_summary_groups = (
         _recognized_log_type_groups(input_source_summaries, {"bm"})
         if input_source_summaries
@@ -160,7 +175,7 @@ def render_html_report(
     report_data = _report_data(
         events,
         archive_names,
-        log_groups=log_groups,
+        log_groups=visible_log_groups,
         other_groups=other_groups,
         bm_version_records=bm_version_records,
         bm_carrier_records=bm_carrier_records,
@@ -187,7 +202,7 @@ def render_html_report(
     )
     summary_cards = _summary_cards(
         archive_count=archive_count,
-        log_total=log_total,
+        log_total=visible_log_total,
         other_total=other_total,
         bm_version_count=_bm_version_count(events),
         bm_version_records=bm_version_records,
@@ -195,7 +210,7 @@ def render_html_report(
         reader_log_count=reader_summary_count,
         system_log_count=system_summary_count,
         archive_records=_archive_records(stats.input_files if stats else []),
-        log_groups=log_groups,
+        log_groups=visible_log_groups,
         other_groups=other_groups,
         bm_groups=bm_summary_groups,
         reader_groups=reader_summary_groups,
@@ -263,7 +278,11 @@ def render_html_report(
                 protocol_scenarios,
                 _section_source_text(section_sources, "protocol_scenarios"),
             ),
-            _device_boot_speed_section(device_boot_reports, _section_source_text(section_sources, "device_boot_speed")),
+            _device_boot_speed_section(
+                device_boot_reports,
+                _section_source_text(section_sources, "device_boot_speed"),
+                thresholds=device_boot_thresholds,
+            ),
             _card_reading_speed_section(
                 card_reading_reports,
                 _section_source_text(section_sources, "card_reading_speed"),
@@ -294,11 +313,15 @@ def render_html_report_manifest(
     result: AnalysisResult,
     *,
     stats: PipelineStats | None = None,
+    device_boot_thresholds: DeviceBootDiagnosticThresholds | None = None,
 ) -> dict[str, object]:
     archive_inventory = stats.archive_inventory if stats else []
-    log_groups, log_total = _build_log_groups(archive_inventory)
+    archive_log_groups, archive_log_total = _build_log_groups(archive_inventory)
     other_groups, other_total = _build_other_groups(archive_inventory)
     input_source_summaries = stats.input_source_summaries if stats else []
+    recognized_log_groups, recognized_log_total = _build_recognized_log_groups(input_source_summaries)
+    visible_log_groups = recognized_log_groups if recognized_log_total else archive_log_groups
+    visible_log_total = recognized_log_total if recognized_log_total else archive_log_total
     bm_summary_count = _recognized_log_type_count(input_source_summaries, {"bm"}) if input_source_summaries else bm_log_count(archive_inventory)
     reader_summary_count = (
         _recognized_log_type_count(input_source_summaries, {"reader", "oti_reader_library"})
@@ -329,12 +352,12 @@ def render_html_report_manifest(
         "date_dynamics",
         "validator_analytics",
     ]
-    if log_total:
+    if visible_log_total:
         stable_sections.insert(2, "log_files")
     if input_source_summaries:
         stable_sections.insert(1, "upload_composition")
     if other_total:
-        insert_at = stable_sections.index("log_files") + 1 if log_total else stable_sections.index("bm_meta") + 1
+        insert_at = stable_sections.index("log_files") + 1 if visible_log_total else stable_sections.index("bm_meta") + 1
         stable_sections.insert(insert_at, "other_files")
     if suspicious_rows:
         insert_at = stable_sections.index("bm_statuses")
@@ -388,7 +411,7 @@ def render_html_report_manifest(
         "stable_sections": stable_sections,
         "counts": {
             "archives": len(stats.input_files) if stats else 0,
-            "log_files": log_total,
+            "log_files": visible_log_total,
             "other_files": other_total,
             "bm_logs": bm_summary_count,
             "reader_logs": reader_summary_count,
@@ -409,7 +432,7 @@ def render_html_report_manifest(
         "sections": stable_sections,
         "status_groups": [str(row["status"]) for row in summary_rows],
         "grouped_statuses": [str(row["label"]) for row in grouped_rows],
-        "log_groups": [str(group["label"]) for group in log_groups],
+        "log_groups": [str(group["label"]) for group in visible_log_groups],
         "other_groups": [str(group["label"]) for group in other_groups],
         "upload_composition": [_input_source_summary_payload(item) for item in input_source_summaries],
         "validator_sections": [str(item["validator"]) for item in validator_sections],
@@ -417,7 +440,10 @@ def render_html_report_manifest(
         "validation_check_catalog": [_check_case_payload(item) for item in check_cases],
         "validation_checks": [_check_result_payload(item) for item in check_results],
         "protocol_scenario_results": [_protocol_scenario_result_payload(item) for item in protocol_results],
-        "device_boot_speed": [_device_boot_report_payload(item) for item in device_boot_reports],
+        "device_boot_speed": [
+            _device_boot_report_payload(item, diagnostics=diagnostics)
+            for item, diagnostics in _device_boot_reports_with_diagnostics(device_boot_reports, device_boot_thresholds)
+        ],
         "card_reading_speed": [_card_reading_report_payload(item) for item in card_reading_reports],
         "section_sources": section_sources,
         "pipeline_steps": [_pipeline_step_payload(item) for item in (stats.steps if stats else [])],
@@ -618,7 +644,7 @@ def _upload_log_type_detection(items: list[InputSourceSummary]) -> str:
                 "<tr>"
                 f"<td>{escape(Path(item.source_file).name)}</td>"
                 f"<td>{escape(_log_type_label(item, log_type))}</td>"
-                f"<td>{item.log_type_counts.get(log_type, 0)}</td>"
+                f"<td>{_recognized_log_type_item_count(item, log_type)}</td>"
                 f"<td>{evidence_html}</td>"
                 "</tr>"
             )
@@ -1281,11 +1307,18 @@ def _protocol_scenario_results_section(results, scenarios, source_note: str = ""
     )
 
 
-def _device_boot_speed_section(reports: list[DeviceBootReport], source_note: str = "") -> str:
+def _device_boot_speed_section(
+    reports: list[DeviceBootReport],
+    source_note: str = "",
+    *,
+    thresholds: DeviceBootDiagnosticThresholds | None = None,
+) -> str:
     if not reports:
         return ""
+    diagnostics_by_report = diagnose_device_boot(reports, thresholds=thresholds)
     rendered_reports = []
     for index, report in enumerate(reports, start=1):
+        report_diagnostics = diagnostics_by_report.get(_device_boot_report_key(report), [])
         rendered_reports.append(
             "\n".join(
                 [
@@ -1298,6 +1331,7 @@ def _device_boot_speed_section(reports: list[DeviceBootReport], source_note: str
                     "</summary>",
                     '<div class="collapsible-body">',
                     _device_boot_report_head(report),
+                    _device_boot_diagnostics_table(report_diagnostics),
                     _device_boot_segment_table(report.segments),
                     _device_boot_text_report_block(report, index),
                     "</div>",
@@ -1319,6 +1353,7 @@ def _device_boot_speed_section(reports: list[DeviceBootReport], source_note: str
             _device_boot_summary_cards(reports),
             _device_boot_overview_chart(reports),
             _device_boot_slowest_segments(reports),
+            _device_boot_diagnostics_overview(reports, diagnostics_by_report),
             "".join(rendered_reports),
             "</div>",
             "</details>",
@@ -1568,7 +1603,23 @@ def _device_boot_text_report(report: DeviceBootReport) -> str:
     return "\n".join(lines).strip()
 
 
-def _device_boot_report_payload(report: DeviceBootReport) -> dict[str, object]:
+def _device_boot_reports_with_diagnostics(
+    reports: list[DeviceBootReport],
+    thresholds: DeviceBootDiagnosticThresholds | None = None,
+) -> list[tuple[DeviceBootReport, list[DeviceBootDiagnostic]]]:
+    diagnostics_by_report = diagnose_device_boot(reports, thresholds=thresholds)
+    return [
+        (report, diagnostics_by_report.get(_device_boot_report_key(report), []))
+        for report in reports
+    ]
+
+
+def _device_boot_report_payload(
+    report: DeviceBootReport,
+    *,
+    diagnostics: list[DeviceBootDiagnostic] | None = None,
+) -> dict[str, object]:
+    resolved_diagnostics = diagnostics if diagnostics is not None else diagnose_device_boot_report(report)
     return {
         "title": report.title,
         "validator_serial": report.validator_serial,
@@ -1581,9 +1632,139 @@ def _device_boot_report_payload(report: DeviceBootReport) -> dict[str, object]:
         "total_seconds": report.total_seconds,
         "source_files": report.source_files,
         "summary": report.summary,
+        "diagnostics": [_device_boot_diagnostic_payload(item) for item in resolved_diagnostics],
         "slowest_segments": [_device_boot_segment_payload(item) for item in _slowest_report_segments(report)],
         "segments": [_device_boot_segment_payload(item) for item in report.segments],
     }
+
+
+def _device_boot_diagnostics_overview(
+    reports: list[DeviceBootReport],
+    diagnostics_by_report: dict[str, list[DeviceBootDiagnostic]],
+) -> str:
+    rows = []
+    for report in reports:
+        for diagnostic in diagnostics_by_report.get(_device_boot_report_key(report), []):
+            rows.append(
+                '<tr class="status-row">'
+                f"<td>{escape(_device_boot_short_title(report))}</td>"
+                f"<td><strong>{escape(diagnostic.title)}</strong><br><span class=\"muted\">{escape(diagnostic.severity)}</span></td>"
+                f"<td>{escape(_format_duration(diagnostic.duration_seconds))}</td>"
+                f"<td>{escape(diagnostic.fact)}</td>"
+                "</tr>"
+            )
+    if not rows:
+        return ""
+    comparisons = _device_boot_diagnostic_comparison_cards(reports, diagnostics_by_report)
+    return "\n".join(
+        [
+            '<section class="device-boot-chart">',
+            "<h3>Выводы по долгим запускам</h3>",
+            comparisons,
+            '<div class="table-wrap">',
+            '<table class="status-table status-table--device-boot-diagnostics">',
+            '<colgroup><col style="width:18%"><col style="width:22%"><col style="width:12%"><col style="width:48%"></colgroup>',
+            '<thead class="status-table-head"><tr><th>Запуск</th><th>Вывод</th><th>Длительность</th><th>Факт из логов</th></tr></thead>',
+            f"<tbody>{''.join(rows)}</tbody>",
+            "</table>",
+            "</div>",
+            "</section>",
+        ]
+    )
+
+
+def _device_boot_diagnostic_comparison_cards(
+    reports: list[DeviceBootReport],
+    diagnostics_by_report: dict[str, list[DeviceBootDiagnostic]],
+) -> str:
+    reader_counts: dict[str, int] = defaultdict(int)
+    validator_counts: dict[str, int] = defaultdict(int)
+    bm_counts: dict[str, int] = defaultdict(int)
+    for report in reports:
+        count = len(diagnostics_by_report.get(_device_boot_report_key(report), []))
+        if count <= 0:
+            continue
+        reader_counts[report.reader_type or "не найдено"] += count
+        validator_counts[report.validator_version or "не найдено"] += count
+        bm_counts[report.bm_version or "не найдено"] += count
+    facts = [
+        ("По ридеру", _format_counter(reader_counts)),
+        ("По ПО валидатора", _format_counter(validator_counts)),
+        ("По версии БМ", _format_counter(bm_counts)),
+    ]
+    cards = "".join(
+        '<div class="device-boot-fact">'
+        f"<span>{escape(label)}</span>"
+        f"<strong>{escape(value)}</strong>"
+        "</div>"
+        for label, value in facts
+        if value
+    )
+    return f'<div class="device-boot-facts device-boot-facts--summary">{cards}</div>' if cards else ""
+
+
+def _format_counter(values: dict[str, int]) -> str:
+    if not values:
+        return ""
+    return ", ".join(f"{key}: {count}" for key, count in sorted(values.items()))
+
+
+def _device_boot_diagnostics_table(diagnostics: list[DeviceBootDiagnostic]) -> str:
+    if not diagnostics:
+        return ""
+    rows = []
+    for diagnostic in diagnostics:
+        evidence = "<br>".join(
+            f"<code>{escape(_evidence_short_line(item))}</code>"
+            for item in diagnostic.evidence[:6]
+        )
+        if not evidence:
+            evidence = '<span class="muted">evidence не найден</span>'
+        hypothesis = diagnostic.hypothesis or "нет неподтверждённой гипотезы"
+        rows.append(
+            '<tr class="status-row">'
+            f"<td><strong>{escape(diagnostic.title)}</strong><br><span class=\"muted\">{escape(diagnostic.severity)}</span></td>"
+            f"<td>{escape(_format_duration(diagnostic.duration_seconds))}</td>"
+            f"<td>{escape(diagnostic.fact)}<br><span class=\"muted\">Гипотеза: {escape(hypothesis)}</span><br><span class=\"muted\">Что проверить: {escape(diagnostic.what_to_check)}</span></td>"
+            f"<td>{evidence}</td>"
+            "</tr>"
+        )
+    return "\n".join(
+        [
+            '<section class="device-boot-chart">',
+            "<h3>Выводы по долгому запуску</h3>",
+            '<div class="table-wrap">',
+            '<table class="status-table status-table--device-boot-diagnostics">',
+            '<colgroup><col style="width:18%"><col style="width:12%"><col style="width:34%"><col style="width:36%"></colgroup>',
+            '<thead class="status-table-head"><tr><th>Вывод</th><th>Длительность</th><th>Факт / гипотеза / проверка</th><th>Evidence</th></tr></thead>',
+            f"<tbody>{''.join(rows)}</tbody>",
+            "</table>",
+            "</div>",
+            "</section>",
+        ]
+    )
+
+
+def _device_boot_diagnostic_payload(diagnostic: DeviceBootDiagnostic) -> dict[str, object]:
+    return {
+        "diagnostic_id": diagnostic.diagnostic_id,
+        "title": diagnostic.title,
+        "severity": diagnostic.severity,
+        "fact": diagnostic.fact,
+        "hypothesis": diagnostic.hypothesis,
+        "what_to_check": diagnostic.what_to_check,
+        "started_at": diagnostic.started_at.isoformat(sep=" ") if diagnostic.started_at else None,
+        "finished_at": diagnostic.finished_at.isoformat(sep=" ") if diagnostic.finished_at else None,
+        "duration_seconds": diagnostic.duration_seconds,
+        "count": diagnostic.count,
+        "evidence": [_device_boot_evidence_payload(item) for item in diagnostic.evidence],
+    }
+
+
+def _device_boot_report_key(report: DeviceBootReport) -> str:
+    started = report.started_at.isoformat(sep=" ") if report.started_at else ""
+    serial = report.validator_serial or "unknown"
+    return f"{serial}|{started}"
 
 
 def _slowest_report_segments(report: DeviceBootReport, limit: int = 3) -> list[DeviceBootSegment]:

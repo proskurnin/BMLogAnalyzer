@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable
 
 from core.models import PaymentEvent, PipelineStats
@@ -53,11 +54,13 @@ def build_section_sources(
 ) -> dict[str, dict[str, object]]:
     available = available_log_types(stats, events)
     selected_ids = list(section_ids) if section_ids is not None else [item.section_id for item in SECTION_DEFINITIONS]
-    return {
+    payload = {
         section_id: _section_source_payload(SECTION_DEFINITIONS_BY_ID[section_id], available)
         for section_id in selected_ids
         if section_id in SECTION_DEFINITIONS_BY_ID
     }
+    _apply_upload_composition_sources(payload, stats)
+    return payload
 
 
 def available_log_types(stats: PipelineStats | None, events: Iterable[PaymentEvent] | None = None) -> set[str]:
@@ -125,3 +128,31 @@ def _join_labels(log_types: list[str]) -> str:
 
 def _log_type_label(log_type: str) -> str:
     return LOG_TYPE_LABELS.get(log_type, log_type)
+
+
+def _apply_upload_composition_sources(payload: dict[str, dict[str, object]], stats: PipelineStats | None) -> None:
+    section = payload.get("upload_composition")
+    if not section or stats is None:
+        return
+    names = _upload_source_names(stats)
+    if not names:
+        return
+    source_text = _format_upload_source_names(names)
+    section["data_source"] = source_text
+    section["source_files"] = names
+    section["note"] = f"Источник данных: {source_text}."
+
+
+def _upload_source_names(stats: PipelineStats) -> list[str]:
+    values = [item.source_file for item in stats.input_source_summaries]
+    if not values:
+        values = stats.input_files
+    names = sorted({Path(value).name for value in values if value})
+    return names
+
+
+def _format_upload_source_names(names: list[str], *, limit: int = 3) -> str:
+    if len(names) <= limit:
+        return ", ".join(names)
+    visible = ", ".join(names[:limit])
+    return f"{visible} и ещё {len(names) - limit}"

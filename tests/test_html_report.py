@@ -530,6 +530,8 @@ def test_writes_upload_composition_in_report_header_and_manifest(tmp_path):
     expected_text = "Загружен архив 13-07-2026.zip. Распознано типов логов: 4."
     assert "Состав загрузки" in html
     assert expected_text in html
+    assert "Источник данных: 13-07-2026.zip." in html
+    assert "Источник данных: загруженные файлы." not in html
     assert "Он содержит логи следующих типов:" in html
     assert "БМ" in html
     assert "ПО стоппера" in html
@@ -569,7 +571,8 @@ def test_writes_upload_composition_in_report_header_and_manifest(tmp_path):
     assert manifest["upload_composition"][0]["analyzed_file_count"] == 2
     assert manifest["upload_composition"][0]["skipped_file_count"] == 1
     assert manifest["upload_composition"][0]["skipped_reasons"] == {"прочие файлы в архиве": 1}
-    assert manifest["section_sources"]["upload_composition"]["data_source"] == "загруженные файлы"
+    assert manifest["section_sources"]["upload_composition"]["data_source"] == "13-07-2026.zip"
+    assert manifest["section_sources"]["upload_composition"]["source_files"] == ["13-07-2026.zip"]
     assert ai_context["input_sources"][0]["source_file"] == "input/13-07-2026.zip"
     assert ai_context["input_sources"][0]["log_type_counts"] == {
         "bm": 1,
@@ -622,11 +625,14 @@ def test_upload_composition_log_type_chart_uses_all_recognized_types(tmp_path):
     write_html_report([], analyze_events([]), tmp_path / "analysis_report.html", stats=stats)
 
     html = (tmp_path / "analysis_report.html").read_text(encoding="utf-8")
+    manifest = json.loads((tmp_path / "analysis_report.json").read_text(encoding="utf-8"))
     assert "Загружен архив 13-07-2026.zip. Распознано типов логов: 4." in html
     assert 'data-label="БМ"' in html
     assert 'data-label="ПО стоппера"' in html
     assert 'data-label="библиотеки ридера ОТИ"' in html
     assert 'data-label="ПО валидатора"' in html
+    assert manifest["counts"]["log_files"] == 4
+    assert manifest["log_groups"] == ["БМ", "ПО стоппера", "библиотеки ридера ОТИ", "ПО валидатора"]
 
 
 def test_upload_composition_does_not_show_extracted_nested_archives_as_other_files(tmp_path):

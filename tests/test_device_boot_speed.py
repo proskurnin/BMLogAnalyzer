@@ -99,6 +99,12 @@ def test_pipeline_builds_device_boot_speed_report(tmp_path):
     assert "UpdateSuccess: true" in html
     assert "Время запусков" in html
     assert "Самые долгие этапы" in html
+    assert "Выводы по долгим запускам" in html
+    assert "По ридеру" in html
+    assert "По ПО валидатора" in html
+    assert "Долгий поиск QR-ридера" in html
+    assert "Факт из логов" in html
+    assert "Что проверить" in html
     assert "Запусков с временем" in html
     assert "Доля запуска" in html
     assert "device-boot-chart-row" in html
@@ -111,6 +117,12 @@ def test_pipeline_builds_device_boot_speed_report(tmp_path):
     assert "copyTextBlock" in html
     assert "device_boot_speed" in manifest["stable_sections"]
     assert manifest["device_boot_speed"][0]["validator_serial"] == "59757"
+    assert [item["diagnostic_id"] for item in manifest["device_boot_speed"][0]["diagnostics"]] == [
+        "long_qr_search",
+        "fixed_bm_wait",
+        "long_bm_start",
+    ]
+    assert manifest["device_boot_speed"][0]["diagnostics"][2]["hypothesis"].startswith("Возможна задержка systemd")
     assert manifest["device_boot_speed"][0]["slowest_segments"][0]["title"] == "АСКП/systemd. Запуск БМ"
 
 

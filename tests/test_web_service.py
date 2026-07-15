@@ -772,10 +772,10 @@ def test_web_upload_creates_report_page(tmp_path, monkeypatch):
     assert "summary" in stable_sections
     assert "upload_composition" in stable_sections
     assert "bm_meta" in stable_sections
+    assert "log_files" in stable_sections
     assert "suspicious" not in stable_sections
     assert "bm_statuses" in stable_sections
     assert "validator_analytics" in stable_sections
-    assert "log_files" not in stable_sections
     assert "other_files" not in stable_sections
     assert report_manifest.json()["section_sources"]["bm_statuses"]["status"] == "available"
 

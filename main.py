@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 from time import perf_counter
 
+from analytics.device_boot_diagnostics import DeviceBootDiagnosticThresholds
 from core.config import load_app_config
 from core.models import PipelineStepResult
 from core.pipeline import run_analysis
@@ -62,7 +63,13 @@ def main() -> int:
         )
         if config.report_config.enabled("analysis_report_html"):
             html_report_path = reports_dir / "analysis_report.html"
-            write_html_report(events, result, html_report_path, stats=stats)
+            write_html_report(
+                events,
+                result,
+                html_report_path,
+                stats=stats,
+                device_boot_thresholds=_device_boot_thresholds(config.device_boot_diagnostics),
+            )
             written_reports.append(html_report_path)
         csv_step = PipelineStepResult(
             name="write_reports",
@@ -91,6 +98,18 @@ def main() -> int:
     print(f"Reports: {reports_dir}")
     pipeline_reporter.print_total()
     return 0
+
+
+def _device_boot_thresholds(config) -> DeviceBootDiagnosticThresholds:
+    return DeviceBootDiagnosticThresholds(
+        long_qr_seconds=config.long_qr_seconds,
+        frequent_bm_stop_count=config.frequent_bm_stop_count,
+        fixed_wait_min_seconds=config.fixed_wait_min_seconds,
+        fixed_wait_max_seconds=config.fixed_wait_max_seconds,
+        long_bm_start_seconds=config.long_bm_start_seconds,
+        long_first_info_seconds=config.long_first_info_seconds,
+        version_duration_ratio=config.version_duration_ratio,
+    )
 
 
 if __name__ == "__main__":
