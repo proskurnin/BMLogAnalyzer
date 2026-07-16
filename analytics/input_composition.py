@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections import defaultdict
+from pathlib import Path
 
 from core.log_types import archive_category_is_log, archive_category_log_type, log_type_label, log_type_sort_key
 from core.models import ArchiveInventoryRow, InputSourceSummary, LogFileInventory
@@ -130,6 +131,7 @@ def _log_type_counts(
             log_type = archive_category_log_type(row.category)
             if log_type:
                 counts[log_type] += row.count
+        _reclassify_other_log_like_counts(counts, related_inventory, archive_rows)
         return dict(sorted(counts.items(), key=lambda entry: log_type_sort_key(entry[0])))
 
     return _inventory_log_type_counts(related_inventory)
@@ -142,6 +144,50 @@ def _inventory_log_type_counts(related_inventory: list[LogFileInventory]) -> dic
             key=lambda entry: log_type_sort_key(entry[0]),
         )
     )
+
+
+def _reclassify_other_log_like_counts(
+    counts: Counter[str],
+    related_inventory: list[LogFileInventory],
+    archive_rows: list[ArchiveInventoryRow],
+) -> None:
+    archive_name = Path(archive_rows[0].archive).name if archive_rows else ""
+    other_members = {
+        str(file_name)
+        for row in archive_rows
+        if row.category == "Other log-like"
+        for file_name in (row.files or row.file_sizes or row.examples)
+    }
+    if not archive_name or not other_members or not counts.get("other"):
+        return
+
+    reclassified: set[str] = set()
+    for item in related_inventory:
+        if item.log_type == "other":
+            continue
+        member_name = _inventory_member_name(item.source_file, archive_name)
+        if member_name not in other_members or member_name in reclassified:
+            continue
+        counts["other"] -= 1
+        counts[item.log_type] += 1
+        reclassified.add(member_name)
+
+    if counts.get("other") == 0:
+        del counts["other"]
+
+
+def _inventory_member_name(source_file: str, archive_name: str) -> str:
+    normalized = source_file.replace("\\", "/")
+    marker = f"/{archive_name}/"
+    if marker in normalized:
+        return _archive_member_name_from_extracted(normalized.split(marker, 1)[1])
+    return _archive_member_name_from_extracted(normalized)
+
+
+def _archive_member_name_from_extracted(value: str) -> str:
+    if value.endswith(".gz.log"):
+        return value[:-4]
+    return value
 
 
 def _log_type_evidence(inventory: list[LogFileInventory]) -> dict[str, list[str]]:

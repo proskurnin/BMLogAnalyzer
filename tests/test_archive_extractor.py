@@ -1,9 +1,10 @@
 import gzip
+import json
 import subprocess
 import tarfile
 import zipfile
 
-from core.archive_extractor import extract_archives
+from core.archive_extractor import _archive_cache_key, extract_archives
 
 
 def test_extracts_gz_archive(tmp_path):
@@ -139,6 +140,36 @@ def test_reuses_cached_extraction_for_same_archive(tmp_path):
     assert second.archive_stats[0].cache_status == "hit"
     assert second.extracted_files == [str(extracted / "logs.zip" / "nested" / "a.log")]
     assert (extracted / "logs.zip" / "nested" / "a.log").read_text(encoding="utf-8") == "first\n"
+
+
+def test_ignores_legacy_archive_cache_without_schema_version(tmp_path):
+    source = tmp_path / "logs.zip"
+    extracted = tmp_path / "extracted"
+    cache_dir = tmp_path / "cache"
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr("nested/a.log", "fresh\n")
+        archive.writestr("nested/b.log", "also fresh\n")
+
+    cache_path = cache_dir / _archive_cache_key(source)
+    files_root = cache_path / "files"
+    files_root.mkdir(parents=True)
+    (files_root / "logs.zip" / "nested").mkdir(parents=True)
+    (files_root / "logs.zip" / "nested" / "a.log").write_text("stale\n", encoding="utf-8")
+    (cache_path / "manifest.json").write_text(
+        json.dumps({"files": ["logs.zip/nested/a.log"]}),
+        encoding="utf-8",
+    )
+
+    result = extract_archives(source, extracted, cache_dir=cache_dir)
+
+    assert result.cache_hits == 0
+    assert result.cache_misses == 1
+    assert result.archive_stats[0].cache_status == "miss"
+    assert result.extracted_files == [
+        str(extracted / "logs.zip" / "nested" / "a.log"),
+        str(extracted / "logs.zip" / "nested" / "b.log"),
+    ]
+    assert (extracted / "logs.zip" / "nested" / "a.log").read_text(encoding="utf-8") == "fresh\n"
 
 
 def test_extracts_log_files_from_tar_gz(tmp_path):

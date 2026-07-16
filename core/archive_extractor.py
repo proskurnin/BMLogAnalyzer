@@ -15,6 +15,7 @@ from core.models import ExtractionArchiveStat, ExtractionResult
 
 ARCHIVE_SUFFIXES = {".zip", ".gz", ".tgz", ".rar"}
 CACHE_MANIFEST = "manifest.json"
+CACHE_SCHEMA_VERSION = 2
 
 
 def extract_archives(input_path: Path | str, extracted_dir: Path | str, *, cache_dir: Path | str | None = None) -> ExtractionResult:
@@ -340,6 +341,8 @@ def _restore_cached_extraction(cache_path: Path, output_root: Path) -> list[str]
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+    if payload.get("schema_version") != CACHE_SCHEMA_VERSION:
+        return None
     relative_files = [str(item) for item in payload.get("files", []) if _is_safe_member_path(Path(str(item)))]
     if not relative_files:
         return []
@@ -374,7 +377,10 @@ def _store_cached_extraction(cache_path: Path, output_root: Path, extracted_file
         target_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target_path)
         relative_files.append(relative.as_posix())
-    (temp_path / CACHE_MANIFEST).write_text(json.dumps({"files": relative_files}, ensure_ascii=False, indent=2), encoding="utf-8")
+    (temp_path / CACHE_MANIFEST).write_text(
+        json.dumps({"schema_version": CACHE_SCHEMA_VERSION, "files": relative_files}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     if cache_path.exists():
         shutil.rmtree(cache_path)
     temp_path.replace(cache_path)

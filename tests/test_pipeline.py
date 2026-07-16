@@ -206,6 +206,33 @@ def test_pipeline_extracts_and_scans_stdout_logs_without_extension(tmp_path):
     assert input_summary.skipped_reasons == {}
 
 
+def test_pipeline_reclassifies_other_log_like_files_from_content_without_losing_archive_counts(tmp_path):
+    input_dir = tmp_path / "input"
+    extracted_dir = tmp_path / "extracted"
+    input_dir.mkdir()
+    archive_path = input_dir / "logs.zip"
+    system_gz = io.BytesIO()
+    validator_gz = io.BytesIO()
+    with gzip.GzipFile(fileobj=system_gz, mode="wb") as handle:
+        handle.write(b"kernel: usb device changed\n")
+    with gzip.GzipFile(fileobj=validator_gz, mode="wb") as handle:
+        handle.write(b"[VALIDATOR] STARTED\n")
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("device/logs/bm/bm-empty.log", "")
+        archive.writestr("device/a.log.gz", system_gz.getvalue())
+        archive.writestr("device/b.log.gz", validator_gz.getvalue())
+
+    _, _, stats = run_analysis(input_dir, extracted_dir=extracted_dir)
+
+    input_summary = stats.input_source_summaries[0]
+    assert input_summary.log_file_count == 3
+    assert input_summary.extracted_file_count == 3
+    assert input_summary.analyzed_file_count == 3
+    assert input_summary.log_type_counts == {"bm": 1, "validator_app": 1, "system": 1}
+    assert input_summary.log_type_labels == ["БМ", "ПО валидатора", "операционной системы"]
+    assert input_summary.skipped_reasons == {}
+
+
 def test_pipeline_falls_back_on_invalid_gzip(tmp_path):
     input_dir = tmp_path / "input"
     extracted_dir = tmp_path / "extracted"

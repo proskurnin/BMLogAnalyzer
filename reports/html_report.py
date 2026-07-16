@@ -93,8 +93,9 @@ def render_html_report(
     device_boot_thresholds: DeviceBootDiagnosticThresholds | None = None,
 ) -> str:
     archive_inventory = stats.archive_inventory if stats else []
-    archive_log_groups, archive_log_total = _build_log_groups(archive_inventory)
-    inventory_log_groups, inventory_log_total = _build_inventory_log_groups(stats.log_inventory if stats else [], archive_inventory)
+    log_inventory = stats.log_inventory if stats else []
+    archive_log_groups, archive_log_total = _build_log_groups(archive_inventory, log_inventory)
+    inventory_log_groups, inventory_log_total = _build_inventory_log_groups(log_inventory, archive_inventory)
     other_groups, other_total = _build_other_groups(archive_inventory)
     input_source_summaries = stats.input_source_summaries if stats else []
     input_log_total = sum(item.log_file_count for item in input_source_summaries)
@@ -320,8 +321,9 @@ def render_html_report_manifest(
     device_boot_thresholds: DeviceBootDiagnosticThresholds | None = None,
 ) -> dict[str, object]:
     archive_inventory = stats.archive_inventory if stats else []
-    archive_log_groups, archive_log_total = _build_log_groups(archive_inventory)
-    inventory_log_groups, inventory_log_total = _build_inventory_log_groups(stats.log_inventory if stats else [], archive_inventory)
+    log_inventory = stats.log_inventory if stats else []
+    archive_log_groups, archive_log_total = _build_log_groups(archive_inventory, log_inventory)
+    inventory_log_groups, inventory_log_total = _build_inventory_log_groups(log_inventory, archive_inventory)
     other_groups, other_total = _build_other_groups(archive_inventory)
     input_source_summaries = stats.input_source_summaries if stats else []
     input_log_total = sum(item.log_file_count for item in input_source_summaries)
@@ -947,15 +949,121 @@ def _build_metric_groups(
     return payload
 
 
-def _build_log_groups(archive_inventory: list[ArchiveInventoryRow]) -> tuple[list[dict[str, object]], int]:
-    rows: list[dict[str, object]] = []
+def _build_log_groups(
+    archive_inventory: list[ArchiveInventoryRow],
+    inventory: list | None = None,
+) -> tuple[list[dict[str, object]], int]:
+    groups_by_label: dict[str, dict[str, object]] = {}
     total = 0
     for label, categories in LOG_GROUP_SPECS:
-        payload, count, size_bytes = _aggregate_archive_categories(archive_inventory, categories)
+        direct_categories = categories - {"Other log-like"}
+        if not direct_categories:
+            continue
+        payload, count, size_bytes = _aggregate_archive_categories(archive_inventory, direct_categories)
         if count:
-            rows.append({"label": label, "count": count, "size_bytes": size_bytes, "payload": payload})
+            groups_by_label[label] = {"label": label, "count": count, "size_bytes": size_bytes, "payload": payload}
             total += count
+
+    other_rows = [row for row in archive_inventory if row.category == "Other log-like"]
+    if other_rows:
+        other_groups, other_total = _other_log_like_groups(other_rows, inventory or [], archive_inventory)
+        total += other_total
+        for group in other_groups:
+            label = str(group["label"])
+            if label in groups_by_label:
+                _merge_file_group(groups_by_label[label], group)
+            else:
+                groups_by_label[label] = group
+
+    ordered_labels = [label for label, _ in LOG_GROUP_SPECS]
+    rows = [groups_by_label[label] for label in ordered_labels if label in groups_by_label]
+    rows.extend(group for label, group in sorted(groups_by_label.items()) if label not in set(ordered_labels))
     return rows, total
+
+
+def _other_log_like_groups(
+    rows: list[ArchiveInventoryRow],
+    inventory: list,
+    archive_inventory: list[ArchiveInventoryRow],
+) -> tuple[list[dict[str, object]], int]:
+    classified = _inventory_type_map(inventory, archive_inventory)
+    groups: dict[str, dict[str, object]] = {}
+    total = 0
+    for row in rows:
+        archive_name = Path(row.archive).name
+        file_entries = row.file_sizes.items() if row.file_sizes else ((file_name, 0) for file_name in row.files or row.examples)
+        for file_name, size_bytes in file_entries:
+            log_type, evidence = classified.get((archive_name, str(file_name)), ("other", ""))
+            label = log_type_label(log_type)
+            group = groups.setdefault(
+                label,
+                {
+                    "label": label,
+                    "count": 0,
+                    "size_bytes": 0,
+                    "archives": defaultdict(lambda: {"archive": "", "count": 0, "size_bytes": 0, "files": [], "file_details": []}),
+                },
+            )
+            archive_group = group["archives"][archive_name]
+            archive_group["archive"] = archive_name
+            archive_group["count"] += 1
+            archive_group["size_bytes"] += int(size_bytes)
+            archive_group["files"].append(str(file_name))
+            archive_group["file_details"].append(
+                {
+                    "path": str(file_name),
+                    "size_bytes": int(size_bytes),
+                    "category": row.category,
+                    "reason": evidence or _archive_category_reason(row.category, str(file_name)),
+                }
+            )
+            group["count"] += 1
+            group["size_bytes"] += int(size_bytes)
+            total += 1
+
+    result = []
+    for label in sorted(groups, key=lambda value: log_type_sort_key(_label_log_type(value))):
+        group = groups[label]
+        payload = []
+        for archive_name in sorted(group["archives"]):
+            archive_group = group["archives"][archive_name]
+            payload.append(
+                {
+                    "archive": archive_group["archive"],
+                    "count": archive_group["count"],
+                    "size_bytes": archive_group["size_bytes"],
+                    "files": sorted({str(name) for name in archive_group["files"] if name}),
+                    "file_details": sorted(archive_group["file_details"], key=lambda value: str(value["path"])),
+                }
+            )
+        result.append({"label": label, "count": group["count"], "size_bytes": group["size_bytes"], "payload": payload})
+    return result, total
+
+
+def _merge_file_group(target: dict[str, object], source: dict[str, object]) -> None:
+    target["count"] = int(target.get("count", 0)) + int(source.get("count", 0))
+    target["size_bytes"] = int(target.get("size_bytes", 0)) + int(source.get("size_bytes", 0))
+    target["payload"] = [*list(target.get("payload", [])), *list(source.get("payload", []))]
+
+
+def _label_log_type(label: str) -> str:
+    for log_type in ["bm", "stopper", "vil", "validator_app", "reader", "oti_reader_library", "system", "other"]:
+        if log_type_label(log_type) == label:
+            return log_type
+    return label
+
+
+def _inventory_type_map(
+    inventory: list,
+    archive_inventory: list[ArchiveInventoryRow],
+) -> dict[tuple[str, str], tuple[str, str]]:
+    archive_names = sorted({Path(row.archive).name for row in archive_inventory})
+    result: dict[tuple[str, str], tuple[str, str]] = {}
+    for item in inventory:
+        archive_name = _inventory_archive_name(item.source_file, archive_names)
+        member_name = _inventory_member_name(item.source_file, archive_name)
+        result[(archive_name, member_name)] = (str(item.log_type or "other"), str(item.evidence or ""))
+    return result
 
 
 def _build_inventory_log_groups(
@@ -1040,8 +1148,14 @@ def _inventory_member_name(source_file: str, archive_name: str) -> str:
     normalized = source_file.replace("\\", "/")
     marker = f"/{archive_name}/"
     if marker in normalized:
-        return normalized.split(marker, 1)[1]
-    return source_file
+        return _archive_member_name_from_extracted(normalized.split(marker, 1)[1])
+    return _archive_member_name_from_extracted(source_file)
+
+
+def _archive_member_name_from_extracted(value: str) -> str:
+    if value.endswith(".gz.log"):
+        return value[:-4]
+    return value
 
 
 def _build_recognized_log_groups(items: list[InputSourceSummary]) -> tuple[list[dict[str, object]], int]:
