@@ -3,8 +3,15 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from statistics import mean, median
 
-from core.models import NbsStartupEvidence, NbsStartupReport, NbsStartupSegment
+from core.models import (
+    NbsStartupBmInfoCorrelation,
+    NbsStartupEvidence,
+    NbsStartupReport,
+    NbsStartupSegment,
+    NbsStartupStoplistStats,
+)
 
 FULL_TS_RE = re.compile(r"\[(?P<value>20\d{2}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?)\]")
 ISO_TS_RE = re.compile(r"\[(?P<value>20\d{2}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?)\]")
@@ -15,6 +22,14 @@ STOPLIST_DB_MS_RE = re.compile(r"StopListDb:.*?:\s*(?P<value>\d+(?:[.,]\d+)?)\s*
 REFERENCES_SECONDS_RE = re.compile(r"References_nbs_slm:.*?завершена за\s*(?P<value>\d+(?:[.,]\d+)?)\s*сек", re.IGNORECASE)
 READER_STATUS_0_RE = re.compile(r"reader\s+status\s*:?\s*0", re.IGNORECASE)
 BM_STATUS_RE = re.compile(r"bm\s+status\s*:?\s*(?P<value>\d+)", re.IGNORECASE)
+BM_INFO_DURATION_RE = re.compile(r"Info,\s*resp:\s*(?P<value>\d+(?:[.,]\d+)?)(?P<unit>ms|s)\b", re.IGNORECASE)
+TID_RE = re.compile(r"\btid:\s*(?P<value>[0-9a-fA-F]+)")
+DEVICE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("rid", re.compile(r"\brid:\s*(?P<value>\d+)", re.IGNORECASE)),
+    ("BmNumber", re.compile(r"\bBmNumber:\s*(?P<value>\d+)|\bbm\s+number\s*:?\s*(?P<value2>\d+)", re.IGNORECASE)),
+    ("TmSerialNumber", re.compile(r"\bTmSerialNumber:\s*(?P<value>\d+)|\btm\s+serial\s+number\s*:?\s*(?P<value2>\d+)", re.IGNORECASE)),
+    ("reader_id", re.compile(r"\breader(?:\s+id|_id)\s*:?\s*(?P<value>\d+)", re.IGNORECASE)),
+)
 
 VALIDATOR_NEEDLES = (
     "Log started",
@@ -26,6 +41,16 @@ VALIDATOR_NEEDLES = (
     "ServiceBank: getInfo: QR data",
     "InfoWithTimeout",
     "Bm Info:",
+    "Info, req:",
+    "Info, resp:",
+    "TmSerialNumber",
+    "BmNumber",
+    "tm serial number",
+    "bm number",
+    "rid:",
+    "qrData",
+    "Send Commands::settime",
+    "Send Commands::updateConfiguration",
     "StopListDb",
     "References_nbs_slm",
     "используется считыватель",
@@ -41,6 +66,19 @@ STOPPER_NEEDLES = (
     "UpdaterJobOnlyLists: work with db not allowed, skip",
 )
 STOPPER_LOAD_MARKERS = ("Downloading", "BeginLargeWrite", "UpdateByDiffApply", "UpdatePan", "UpdatePar")
+PROBLEM_MODE_VALIDATE_TO_QR_SECONDS = 9.0
+
+
+@dataclass
+class _BmInfoEvent:
+    kind: str
+    source_file: str
+    line_number: int
+    timestamp: datetime | None
+    evidence: NbsStartupEvidence
+    device_ids: dict[str, set[str]] = field(default_factory=dict)
+    tid: str | None = None
+    duration_ms: float | None = None
 
 
 @dataclass
@@ -48,6 +86,7 @@ class _StartupSession:
     source_file: str
     started_at: datetime | None
     reader_type: str | None = None
+    device_ids: dict[str, set[str]] = field(default_factory=dict)
     evidence: list[NbsStartupEvidence] = field(default_factory=list)
     mode_session_closed: NbsStartupEvidence | None = None
     mode_validate: NbsStartupEvidence | None = None
@@ -59,6 +98,7 @@ class _StartupSession:
     info_failed: list[NbsStartupEvidence] = field(default_factory=list)
     info_timeout: list[NbsStartupEvidence] = field(default_factory=list)
     stoplist_searches: list[tuple[float, NbsStartupEvidence]] = field(default_factory=list)
+    qr_state_events: list[NbsStartupEvidence] = field(default_factory=list)
 
 
 class NbsStartupCollector:
@@ -67,11 +107,14 @@ class NbsStartupCollector:
         self._active_by_file: dict[str, _StartupSession] = {}
         self._sessions: list[_StartupSession] = []
         self._stopper_events: list[NbsStartupEvidence] = []
+        self._bm_info_events: list[_BmInfoEvent] = []
 
     def observe_line(self, source_file: str, line_number: int, line: str) -> None:
         if not any(needle in line for needle in (*VALIDATOR_NEEDLES, *STOPPER_NEEDLES)):
             return
         timestamp = _parse_timestamp(line, _date_from_source_file(source_file))
+        if "Info, req:" in line or "Info, resp:" in line:
+            self._observe_bm_info(source_file, line_number, timestamp, line)
         if any(needle in line for needle in STOPPER_NEEDLES):
             self._observe_stopper(source_file, line_number, timestamp, line)
         if not any(needle in line for needle in VALIDATOR_NEEDLES):
@@ -111,6 +154,23 @@ class NbsStartupCollector:
             return
         self._stopper_events.append(_evidence(source_file, line_number, timestamp, label, line))
 
+    def _observe_bm_info(self, source_file: str, line_number: int, timestamp: datetime | None, line: str) -> None:
+        kind = "req" if "Info, req:" in line else "resp"
+        label = "BM Info req" if kind == "req" else "BM Info resp"
+        evidence = _evidence(source_file, line_number, timestamp, label, line)
+        self._bm_info_events.append(
+            _BmInfoEvent(
+                kind=kind,
+                source_file=source_file,
+                line_number=line_number,
+                timestamp=timestamp,
+                evidence=evidence,
+                device_ids=_device_ids_from_line(line),
+                tid=_tid_from_line(line),
+                duration_ms=_bm_info_duration_ms(line),
+            )
+        )
+
     def _observe_validator(self, source_file: str, line_number: int, timestamp: datetime | None, line: str) -> None:
         if "Log started" in line:
             self._close_active(source_file)
@@ -124,6 +184,7 @@ class NbsStartupCollector:
         session = self._active_by_file.get(source_file)
         if session is None:
             return
+        _merge_device_ids(session.device_ids, _device_ids_from_line(line))
         if "MODE::SESSION_CLOSED" in line:
             evidence = _evidence(source_file, line_number, timestamp, "MODE::SESSION_CLOSED", line)
             session.mode_session_closed = evidence
@@ -146,6 +207,11 @@ class NbsStartupCollector:
             session.first_info = session.first_info or evidence
             session.evidence.append(evidence)
             return
+        if qr_evidence := _qr_state_evidence(source_file, line_number, timestamp, line):
+            session.qr_state_events.append(qr_evidence)
+            session.evidence.append(qr_evidence)
+            if qr_evidence.label != "QR data":
+                return
         if "Send Commands::info failed" in line:
             evidence = _evidence(source_file, line_number, timestamp, "Send Commands::info failed", line)
             session.info_failed.append(evidence)
@@ -236,6 +302,13 @@ class NbsStartupCollector:
             for value, evidence in session.stoplist_searches
             if max_search is not None and value == max_search
         ][:3]
+        bm_info_correlation = _build_bm_info_correlation(session, self._bm_info_events)
+        classification, is_problem, classification_reasons, exclusion_reasons = _classify_report(
+            duration,
+            len(stopper_load),
+            _session_phase(session),
+            bm_info_correlation,
+        )
         return NbsStartupReport(
             title=_report_title(session),
             reader_type=_reader_type_from_session(session),
@@ -246,17 +319,27 @@ class NbsStartupCollector:
             first_qr_at=first_qr_at,
             mode_validate_to_qr_seconds=duration,
             source_file=session.source_file,
+            device_ids=_device_ids_payload(session.device_ids),
+            session_phase=_session_phase(session),
             segments=_build_segments(session),
             evidence=_dedupe_evidence(session.evidence),
+            problem_candidate=is_problem,
+            classification=classification,
+            classification_reasons=classification_reasons,
+            exclusion_reasons=exclusion_reasons,
             ready_status_seen=session.first_ready_status is not None,
             info_failure_count=len(session.info_failed),
             info_timeout_count=len(session.info_timeout),
+            bm_info_correlation=bm_info_correlation,
             stopper_load_marker_count=len(stopper_load),
             stopper_reader_configuration_count=len(stopper_reader),
             stopper_skip_count=len(stopper_skip),
             stopper_evidence=_first_last([*stopper_load, *stopper_reader, *stopper_skip], limit=8),
             stoplist_search_max_ms=max_search,
             stoplist_search_evidence=max_search_evidence,
+            stoplist_search_stats=_stoplist_stats(session.stoplist_searches),
+            qr_state_evidence=_dedupe_evidence(session.qr_state_events),
+            qr_state_change_count=sum(1 for item in session.qr_state_events if item.label != "QR data"),
         )
 
 
@@ -304,6 +387,184 @@ def _segment(
         duration_seconds=_duration_seconds(start.timestamp if start else None, end.timestamp if end else None),
         evidence=evidence,
     )
+
+
+def _build_bm_info_correlation(
+    session: _StartupSession,
+    bm_events: list[_BmInfoEvent],
+) -> NbsStartupBmInfoCorrelation:
+    if session.first_info is None or session.first_qr is None:
+        return NbsStartupBmInfoCorrelation(
+            status="missing_nbs_window",
+            reason="Нет первого Send Commands::info или первого QR для окна корреляции.",
+        )
+    started_at = session.first_info.timestamp
+    finished_at = session.first_qr.timestamp
+    if started_at is None or finished_at is None:
+        return NbsStartupBmInfoCorrelation(
+            status="missing_timestamp",
+            reason="Нет timestamp у первого Info или QR.",
+        )
+    window_events = [
+        event
+        for event in bm_events
+        if event.timestamp is not None and started_at <= event.timestamp <= finished_at
+    ]
+    if not window_events:
+        return NbsStartupBmInfoCorrelation(
+            status="not_found",
+            reason="В окне первого Info -> QR не найдены BM Info req/resp.",
+        )
+
+    session_ids = _device_ids_payload(session.device_ids)
+    matched_by_device = [event for event in window_events if _device_ids_match(session.device_ids, event.device_ids)]
+    identity, identity_source = _correlation_identity(session.device_ids, matched_by_device or window_events)
+    if session_ids:
+        if not matched_by_device:
+            return NbsStartupBmInfoCorrelation(
+                status="not_found_for_device",
+                reason="BM Info найден в окне, но device id не совпал с NBS-сценарием.",
+                device_identity=identity,
+                device_identity_source=identity_source,
+                candidate_count=len(window_events),
+            )
+        candidates = matched_by_device
+        status_source = "device_id"
+    else:
+        unique_identities = _unique_event_identities(window_events)
+        if len(unique_identities) == 1:
+            candidates = window_events
+            identity, identity_source = unique_identities[0]
+            status_source = "single_device"
+        else:
+            return NbsStartupBmInfoCorrelation(
+                status="ambiguous",
+                reason="BM Info не сопоставлен: найдено несколько кандидатов без device id NBS-сценария.",
+                candidate_count=len(window_events),
+            )
+
+    req, resp = _first_bm_req_resp_pair(candidates)
+    if req is None and resp is None:
+        return NbsStartupBmInfoCorrelation(
+            status="not_found",
+            reason="В окне нет пары BM Info req/resp после фильтрации кандидатов.",
+            device_identity=identity,
+            device_identity_source=status_source,
+            candidate_count=len(candidates),
+        )
+    evidence = [event.evidence for event in (req, resp) if event is not None]
+    return NbsStartupBmInfoCorrelation(
+        status="matched",
+        reason="BM Info сопоставлен по device id." if status_source == "device_id" else "BM Info сопоставлен, потому что в окне найдено одно устройство.",
+        device_identity=identity,
+        device_identity_source=identity_source or status_source,
+        send_info_at=started_at,
+        bm_info_req_at=req.timestamp if req else None,
+        bm_info_resp_at=resp.timestamp if resp else None,
+        qr_at=finished_at,
+        send_info_to_bm_req_seconds=_duration_seconds(started_at, req.timestamp if req else None),
+        bm_req_to_resp_seconds=_duration_seconds(req.timestamp if req else None, resp.timestamp if resp else None),
+        bm_resp_to_qr_seconds=_duration_seconds(resp.timestamp if resp else None, finished_at),
+        bm_info_duration_ms=resp.duration_ms if resp else None,
+        candidate_count=len(candidates),
+        evidence=evidence,
+    )
+
+
+def _first_bm_req_resp_pair(events: list[_BmInfoEvent]) -> tuple[_BmInfoEvent | None, _BmInfoEvent | None]:
+    ordered = sorted(events, key=lambda item: (item.timestamp or datetime.min, item.line_number))
+    req_by_tid = {event.tid: event for event in ordered if event.kind == "req" and event.tid}
+    first_req = next((event for event in ordered if event.kind == "req"), None)
+    for event in ordered:
+        if event.kind != "resp":
+            continue
+        if event.tid and event.tid in req_by_tid:
+            return req_by_tid[event.tid], event
+        return first_req, event
+    return first_req, None
+
+
+def _stoplist_stats(items: list[tuple[float, NbsStartupEvidence]]) -> NbsStartupStoplistStats:
+    values = sorted(value for value, _ in items)
+    if not values:
+        return NbsStartupStoplistStats()
+    threshold = _outlier_threshold(values)
+    outliers = [
+        evidence
+        for value, evidence in items
+        if threshold is not None and value >= threshold
+    ][:5]
+    return NbsStartupStoplistStats(
+        count=len(values),
+        min_ms=round(values[0], 3),
+        max_ms=round(values[-1], 3),
+        average_ms=round(mean(values), 3),
+        median_ms=round(median(values), 3),
+        p90_ms=round(_percentile(values, 0.90), 3),
+        p95_ms=round(_percentile(values, 0.95), 3),
+        outlier_threshold_ms=threshold,
+        outlier_evidence=outliers,
+    )
+
+
+def _percentile(values: list[float], percentile: float) -> float:
+    if len(values) == 1:
+        return values[0]
+    index = (len(values) - 1) * percentile
+    lower = int(index)
+    upper = min(lower + 1, len(values) - 1)
+    if lower == upper:
+        return values[lower]
+    fraction = index - lower
+    return values[lower] * (1 - fraction) + values[upper] * fraction
+
+
+def _outlier_threshold(values: list[float]) -> float | None:
+    if len(values) < 3:
+        return None
+    med = median(values)
+    threshold = max(med * 3, med + 1000)
+    return round(threshold, 3)
+
+
+def _classify_report(
+    duration: float,
+    stopper_load_count: int,
+    session_phase: str,
+    bm_info_correlation: NbsStartupBmInfoCorrelation,
+) -> tuple[str, bool, list[str], list[str]]:
+    reasons: list[str] = []
+    exclusions: list[str] = []
+    if duration >= PROBLEM_MODE_VALIDATE_TO_QR_SECONDS:
+        reasons.append(f"MODE::VALIDATE -> QR >= {PROBLEM_MODE_VALIDATE_TO_QR_SECONDS:.0f} сек")
+    else:
+        exclusions.append(f"MODE::VALIDATE -> QR < {PROBLEM_MODE_VALIDATE_TO_QR_SECONDS:.0f} сек")
+    if session_phase in {"after_log_started", "after_session_closed"}:
+        reasons.append("сценарий найден после Log started или MODE::SESSION_CLOSED")
+    else:
+        exclusions.append("нет фактической границы Log started или MODE::SESSION_CLOSED")
+    if stopper_load_count == 0:
+        reasons.append("в окне не найдены marker-нагрузки stopper")
+    else:
+        exclusions.append("в окне есть marker-нагрузки stopper")
+    if bm_info_correlation.status == "matched":
+        reasons.append("BM Info сопоставлен с устройством")
+    else:
+        exclusions.append(f"BM Info не сопоставлен с устройством: {bm_info_correlation.status}")
+    is_problem = not exclusions
+    if is_problem:
+        return "problem", True, reasons, exclusions
+    if duration < PROBLEM_MODE_VALIDATE_TO_QR_SECONDS:
+        return "context_short", False, reasons, exclusions
+    return "excluded", False, reasons, exclusions
+
+
+def _session_phase(session: _StartupSession) -> str:
+    if session.mode_session_closed is not None:
+        return "after_session_closed"
+    if session.started_at is not None:
+        return "after_log_started"
+    return "unknown"
 
 
 def _events_in_window(
@@ -406,6 +667,105 @@ def _reader_type_from_line(line: str) -> str | None:
         return "OTI"
     if "/dev/termt" in lowered or "termt:" in lowered or "производитель: tt" in lowered:
         return "TT"
+    return None
+
+
+def _device_ids_from_line(line: str) -> dict[str, set[str]]:
+    result: dict[str, set[str]] = {}
+    for key, pattern in DEVICE_PATTERNS:
+        for match in pattern.finditer(line):
+            value = match.groupdict().get("value") or match.groupdict().get("value2")
+            if value:
+                result.setdefault(key, set()).add(value)
+    return result
+
+
+def _merge_device_ids(target: dict[str, set[str]], source: dict[str, set[str]]) -> None:
+    for key, values in source.items():
+        target.setdefault(key, set()).update(values)
+
+
+def _device_ids_payload(device_ids: dict[str, set[str]]) -> dict[str, list[str]]:
+    return {key: sorted(values) for key, values in sorted(device_ids.items()) if values}
+
+
+def _device_ids_match(left: dict[str, set[str]], right: dict[str, set[str]]) -> bool:
+    if not left or not right:
+        return False
+    for left_key, left_values in left.items():
+        for right_key, right_values in right.items():
+            for left_value in left_values:
+                for right_value in right_values:
+                    if _device_id_values_match(left_key, left_value, right_key, right_value):
+                        return True
+    return False
+
+
+def _device_id_values_match(left_key: str, left_value: str, right_key: str, right_value: str) -> bool:
+    if left_key == right_key and left_value == right_value:
+        return True
+    serial_keys = {"BmNumber", "TmSerialNumber", "rid", "reader_id"}
+    if left_key in serial_keys and right_key in serial_keys:
+        return left_value.endswith(right_value) or right_value.endswith(left_value)
+    return False
+
+
+def _correlation_identity(
+    session_ids: dict[str, set[str]],
+    events: list[_BmInfoEvent],
+) -> tuple[str | None, str | None]:
+    for key in ("rid", "BmNumber", "TmSerialNumber", "reader_id"):
+        if values := session_ids.get(key):
+            return sorted(values)[0], key
+    identities = _unique_event_identities(events)
+    return identities[0] if len(identities) == 1 else (None, None)
+
+
+def _unique_event_identities(events: list[_BmInfoEvent]) -> list[tuple[str, str]]:
+    identities: set[tuple[str, str]] = set()
+    for event in events:
+        for key in ("rid", "BmNumber", "TmSerialNumber", "reader_id"):
+            values = event.device_ids.get(key, set())
+            if values:
+                value = sorted(values)[0]
+                identities.add((value, key))
+                break
+    return sorted(identities)
+
+
+def _tid_from_line(line: str) -> str | None:
+    if match := TID_RE.search(line):
+        return match.group("value")
+    return None
+
+
+def _bm_info_duration_ms(line: str) -> float | None:
+    if not (match := BM_INFO_DURATION_RE.search(line)):
+        return None
+    value = _number(match.group("value"))
+    if value is None:
+        return None
+    return round(value * 1000, 3) if match.group("unit").lower() == "s" else round(value, 3)
+
+
+def _qr_state_evidence(
+    source_file: str,
+    line_number: int,
+    timestamp: datetime | None,
+    line: str,
+) -> NbsStartupEvidence | None:
+    lowered = line.lower()
+    if "servicebank: getinfo: qr data" in lowered:
+        label = "QR data" if "http" in lowered else "QR data empty"
+        return _evidence(source_file, line_number, timestamp, label, line)
+    if "qrdata" in lowered:
+        return _evidence(source_file, line_number, timestamp, "qrData marker", line)
+    if "send commands::updateconfiguration" in lowered:
+        return _evidence(source_file, line_number, timestamp, "updateConfiguration command", line)
+    if "send commands::settime" in lowered:
+        return _evidence(source_file, line_number, timestamp, "settime command", line)
+    if "qr" in lowered and any(marker in lowered for marker in ("clear", "reset", "empty", "очист", "сброс")):
+        return _evidence(source_file, line_number, timestamp, "QR state change marker", line)
     return None
 
 

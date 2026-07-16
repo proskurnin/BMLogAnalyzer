@@ -33,9 +33,11 @@ from core.models import (
     DeviceBootReport,
     DeviceBootSegment,
     InputSourceSummary,
+    NbsStartupBmInfoCorrelation,
     NbsStartupEvidence,
     NbsStartupReport,
     NbsStartupSegment,
+    NbsStartupStoplistStats,
     PaymentEvent,
     PipelineStats,
     ValidatorInfoChainEvidence,
@@ -2016,6 +2018,7 @@ def _nbs_startup_section(reports: list[NbsStartupReport], source_note: str = "")
         return ""
     rendered_reports = []
     for index, report in enumerate(reports[:20], start=1):
+        bm_info_evidence = report.bm_info_correlation.evidence if report.bm_info_correlation else []
         rendered_reports.append(
             "\n".join(
                 [
@@ -2030,8 +2033,11 @@ def _nbs_startup_section(reports: list[NbsStartupReport], source_note: str = "")
                     _nbs_startup_report_head(report),
                     _nbs_startup_segment_table(report.segments),
                     _nbs_startup_evidence_table(report.evidence, title="Ключевые строки ПО валидатора"),
+                    _nbs_startup_evidence_table(bm_info_evidence, title="Сопоставленные строки BM Info"),
                     _nbs_startup_evidence_table(report.stopper_evidence, title="События ПО стоппера в окне запуска"),
                     _nbs_startup_evidence_table(report.stoplist_search_evidence, title="Строки длительности поиска стоп-листов"),
+                    _nbs_startup_evidence_table(report.stoplist_search_stats.outlier_evidence, title="Выбросы StopListDb/References_nbs_slm"),
+                    _nbs_startup_evidence_table(report.qr_state_evidence, title="QR-маркеры"),
                     _nbs_startup_text_report_block(report, index),
                     "</div>",
                     "</details>",
@@ -2051,6 +2057,7 @@ def _nbs_startup_section(reports: list[NbsStartupReport], source_note: str = "")
             '<div class="collapsible-body">',
             _nbs_startup_summary_cards(reports),
             _nbs_startup_overview_table(reports),
+            _nbs_startup_phase_comparison(reports),
             "".join(rendered_reports),
             "</div>",
             "</details>",
@@ -2063,10 +2070,14 @@ def _nbs_startup_summary_cards(reports: list[NbsStartupReport]) -> str:
     if not durations:
         return ""
     no_stopper_load = sum(1 for report in reports if report.stopper_load_marker_count == 0)
+    problem_reports = [report for report in reports if report.problem_candidate and report.mode_validate_to_qr_seconds is not None]
+    problem_durations = [report.mode_validate_to_qr_seconds for report in problem_reports if report.mode_validate_to_qr_seconds is not None]
     facts = [
         ("Запусков", str(len(reports))),
+        ("Проблемных по критериям", str(len(problem_reports))),
         ("Максимум MODE::VALIDATE -> QR", _format_duration(durations[-1])),
         ("Среднее MODE::VALIDATE -> QR", _format_duration(sum(durations) / len(durations))),
+        ("Среднее проблемных", _format_duration(sum(problem_durations) / len(problem_durations)) if problem_durations else "не рассчитано"),
         ("Без загрузки стоп-листов в окне", str(no_stopper_load)),
     ]
     cards = "".join(
@@ -2082,15 +2093,18 @@ def _nbs_startup_summary_cards(reports: list[NbsStartupReport]) -> str:
 def _nbs_startup_overview_table(reports: list[NbsStartupReport]) -> str:
     rows = []
     for report in reports[:12]:
+        correlation = report.bm_info_correlation
         rows.append(
             '<tr class="status-row">'
+            f"<td>{escape(_nbs_startup_classification_label(report))}</td>"
             f"<td>{escape(report.reader_type or 'не найдено')}</td>"
             f"<td>{escape(_format_datetime(report.mode_validate_at))}</td>"
             f"<td>{escape(_format_duration(report.mode_validate_to_qr_seconds))}</td>"
             f"<td>{escape(_format_duration(_nbs_startup_first_info_pause(report)))}</td>"
+            f"<td>{escape(_format_duration(correlation.bm_resp_to_qr_seconds if correlation else None))}</td>"
             f"<td>{escape(str(_nbs_startup_info_failure_count(report)))}</td>"
             f"<td>{escape(str(report.stopper_load_marker_count))}</td>"
-            f"<td>{escape(_format_ms(report.stoplist_search_max_ms))}</td>"
+            f"<td>{escape(_format_ms(report.stoplist_search_stats.max_ms or report.stoplist_search_max_ms))}</td>"
             f"<td><code>{escape(_validator_info_chain_source_short(report.source_file))}</code></td>"
             "</tr>"
         )
@@ -2100,8 +2114,53 @@ def _nbs_startup_overview_table(reports: list[NbsStartupReport]) -> str:
             "<h3>Самые долгие выходы НБС в работу</h3>",
             '<div class="table-wrap">',
             '<table class="status-table status-table--nbs-startup">',
-            '<colgroup><col style="width:8%"><col style="width:14%"><col style="width:14%"><col style="width:12%"><col style="width:10%"><col style="width:10%"><col style="width:12%"><col style="width:20%"></colgroup>',
-            '<thead class="status-table-head"><tr><th>Ридер</th><th>MODE::VALIDATE</th><th>До QR</th><th>До Info</th><th>Ошибки Info</th><th>Загрузки стоп-листов</th><th>Поиск стоп-листов</th><th>Источник</th></tr></thead>',
+            '<colgroup><col style="width:11%"><col style="width:7%"><col style="width:13%"><col style="width:11%"><col style="width:10%"><col style="width:10%"><col style="width:8%"><col style="width:9%"><col style="width:10%"><col style="width:11%"></colgroup>',
+            '<thead class="status-table-head"><tr><th>Класс</th><th>Ридер</th><th>MODE::VALIDATE</th><th>До QR</th><th>До Info</th><th>BM resp -> QR</th><th>Ошибки Info</th><th>Загрузки стоп-листов</th><th>Поиск стоп-листов</th><th>Источник</th></tr></thead>',
+            f"<tbody>{''.join(rows)}</tbody>",
+            "</table>",
+            "</div>",
+            "</section>",
+        ]
+    )
+
+
+def _nbs_startup_phase_comparison(reports: list[NbsStartupReport]) -> str:
+    phase_labels = {
+        "after_log_started": "после Log started",
+        "after_session_closed": "после MODE::SESSION_CLOSED",
+        "unknown": "граница не найдена",
+    }
+    grouped: dict[str, list[NbsStartupReport]] = {}
+    for report in reports:
+        grouped.setdefault(report.session_phase, []).append(report)
+    if len(grouped) < 2 and "after_session_closed" not in grouped:
+        return ""
+    rows = []
+    for phase, items in sorted(grouped.items()):
+        durations = [item.mode_validate_to_qr_seconds for item in items if item.mode_validate_to_qr_seconds is not None]
+        problem_durations = [
+            item.mode_validate_to_qr_seconds
+            for item in items
+            if item.problem_candidate and item.mode_validate_to_qr_seconds is not None
+        ]
+        rows.append(
+            '<tr class="status-row">'
+            f"<td>{escape(phase_labels.get(phase, phase))}</td>"
+            f"<td>{len(items)}</td>"
+            f"<td>{sum(1 for item in items if item.problem_candidate)}</td>"
+            f"<td>{escape(_format_duration(sum(durations) / len(durations)) if durations else 'не рассчитано')}</td>"
+            f"<td>{escape(_format_duration(max(durations)) if durations else 'не рассчитано')}</td>"
+            f"<td>{escape(_format_duration(sum(problem_durations) / len(problem_durations)) if problem_durations else 'не рассчитано')}</td>"
+            "</tr>"
+        )
+    return "\n".join(
+        [
+            '<section class="device-boot-chart">',
+            "<h3>Сравнение по фактическим границам смены</h3>",
+            '<div class="table-wrap">',
+            '<table class="status-table status-table--nbs-startup-phases">',
+            '<colgroup><col style="width:28%"><col style="width:12%"><col style="width:14%"><col style="width:16%"><col style="width:14%"><col style="width:16%"></colgroup>',
+            '<thead class="status-table-head"><tr><th>Группа</th><th>Сценарии</th><th>Проблемные</th><th>Среднее до QR</th><th>Максимум</th><th>Среднее проблемных</th></tr></thead>',
             f"<tbody>{''.join(rows)}</tbody>",
             "</table>",
             "</div>",
@@ -2119,12 +2178,15 @@ def _nbs_startup_report_head(report: NbsStartupReport) -> str:
         ("Первый статус 0/0", _format_datetime(report.first_ready_status_at)),
         ("Первый QR", _format_datetime(report.first_qr_at)),
         ("MODE::VALIDATE -> QR", _format_duration(report.mode_validate_to_qr_seconds)),
+        ("Класс", _nbs_startup_classification_label(report)),
+        ("Device id", _nbs_startup_device_ids_text(report)),
+        ("BM Info", _nbs_startup_correlation_label(report.bm_info_correlation)),
         ("Ошибки Info", str(_nbs_startup_info_failure_count(report))),
         ("InfoWithTimeout", str(report.info_timeout_count)),
         ("Загрузки стоп-листов", str(report.stopper_load_marker_count)),
         ("readerConfiguration", str(report.stopper_reader_configuration_count)),
         ("skip БД стоппера", str(report.stopper_skip_count)),
-        ("Макс. поиск стоп-листов", _format_ms(report.stoplist_search_max_ms)),
+        ("Макс. поиск стоп-листов", _format_ms(report.stoplist_search_stats.max_ms or report.stoplist_search_max_ms)),
     ]
     cards = "".join(
         '<div class="device-boot-fact">'
@@ -2216,11 +2278,15 @@ def _nbs_startup_text_report_block(report: NbsStartupReport, index: int) -> str:
 
 
 def _nbs_startup_text_report(report: NbsStartupReport) -> str:
+    correlation = report.bm_info_correlation
+    stoplist_stats = report.stoplist_search_stats
     lines = [
         _nbs_startup_summary_title(report),
         "",
         f"Источник: {report.source_file}.",
         f"Ридер: {report.reader_type or 'не найдено'}.",
+        f"Класс сценария: {_nbs_startup_classification_label(report)}.",
+        f"Device id: {_nbs_startup_device_ids_text(report)}.",
         f"Log started: {_format_timestamp(report.started_at)}.",
         f"MODE::VALIDATE: {_format_timestamp(report.mode_validate_at)}.",
         f"Первый Send Commands::info: {_format_timestamp(report.first_info_at)}.",
@@ -2237,9 +2303,35 @@ def _nbs_startup_text_report(report: NbsStartupReport) -> str:
         f"- Статус reader/bm 0/0 до первого QR найден: {'да' if report.ready_status_seen else 'нет'}.",
         f"- Send Commands::info failed до первого QR: {report.info_failure_count}.",
         f"- InfoWithTimeout до первого QR: {report.info_timeout_count}.",
+        f"- BM Info корреляция: {_nbs_startup_correlation_label(correlation)}.",
+        f"- StopListDb/References_nbs_slm count/min/max/avg/median/p90/p95: "
+        f"{stoplist_stats.count} / {_format_ms(stoplist_stats.min_ms)} / {_format_ms(stoplist_stats.max_ms)} / "
+        f"{_format_ms(stoplist_stats.average_ms)} / {_format_ms(stoplist_stats.median_ms)} / "
+        f"{_format_ms(stoplist_stats.p90_ms)} / {_format_ms(stoplist_stats.p95_ms)}.",
+        f"- QR-маркеров изменения состояния найдено: {report.qr_state_change_count}.",
         "",
         "Сегменты:",
     ]
+    if report.classification_reasons:
+        lines.extend(["", "Причины включения:"])
+        lines.extend(f"- {reason}" for reason in report.classification_reasons)
+    if report.exclusion_reasons:
+        lines.extend(["", "Причины исключения:"])
+        lines.extend(f"- {reason}" for reason in report.exclusion_reasons)
+    if correlation:
+        lines.extend(
+            [
+                "",
+                "BM Info корреляция:",
+                f"- Статус: {correlation.status}.",
+                f"- Причина: {correlation.reason}",
+                f"- Send Commands::info -> BM Info req: {_format_duration(correlation.send_info_to_bm_req_seconds)}.",
+                f"- BM Info req -> BM Info resp: {_format_duration(correlation.bm_req_to_resp_seconds)}.",
+                f"- BM Info resp -> QR: {_format_duration(correlation.bm_resp_to_qr_seconds)}.",
+                f"- BM Info duration из строки: {_format_ms(correlation.bm_info_duration_ms)}.",
+                f"- Кандидатов BM Info после фильтрации: {correlation.candidate_count}.",
+            ]
+        )
     for segment in report.segments:
         lines.append(
             f"- {segment.title}: {_format_duration(segment.duration_seconds)}, "
@@ -2253,6 +2345,15 @@ def _nbs_startup_text_report(report: NbsStartupReport) -> str:
     if report.stoplist_search_evidence:
         lines.extend(["", "Evidence поиска стоп-листов:"])
         lines.extend(f"- {_nbs_startup_evidence_short_line(item)}" for item in report.stoplist_search_evidence)
+    if correlation and correlation.evidence:
+        lines.extend(["", "Evidence BM Info:"])
+        lines.extend(f"- {_nbs_startup_evidence_short_line(item)}" for item in correlation.evidence)
+    if report.stoplist_search_stats.outlier_evidence:
+        lines.extend(["", "Evidence выбросов StopListDb/References_nbs_slm:"])
+        lines.extend(f"- {_nbs_startup_evidence_short_line(item)}" for item in report.stoplist_search_stats.outlier_evidence)
+    if report.qr_state_evidence:
+        lines.extend(["", "QR-marker evidence:"])
+        lines.extend(f"- {_nbs_startup_evidence_short_line(item)}" for item in report.qr_state_evidence)
     return "\n".join(lines)
 
 
@@ -2267,17 +2368,62 @@ def _nbs_startup_report_payload(report: NbsStartupReport) -> dict[str, object]:
         "first_qr_at": report.first_qr_at.isoformat(sep=" ") if report.first_qr_at else None,
         "mode_validate_to_qr_seconds": report.mode_validate_to_qr_seconds,
         "source_file": report.source_file,
+        "device_ids": report.device_ids,
+        "session_phase": report.session_phase,
+        "problem_candidate": report.problem_candidate,
+        "classification": report.classification,
+        "classification_reasons": report.classification_reasons,
+        "exclusion_reasons": report.exclusion_reasons,
         "segments": [_nbs_startup_segment_payload(item) for item in report.segments],
         "evidence": [_nbs_startup_evidence_payload(item) for item in report.evidence],
         "ready_status_seen": report.ready_status_seen,
         "info_failure_count": report.info_failure_count,
         "info_timeout_count": report.info_timeout_count,
+        "bm_info_correlation": _nbs_startup_bm_info_correlation_payload(report.bm_info_correlation),
         "stopper_load_marker_count": report.stopper_load_marker_count,
         "stopper_reader_configuration_count": report.stopper_reader_configuration_count,
         "stopper_skip_count": report.stopper_skip_count,
         "stopper_evidence": [_nbs_startup_evidence_payload(item) for item in report.stopper_evidence],
         "stoplist_search_max_ms": report.stoplist_search_max_ms,
         "stoplist_search_evidence": [_nbs_startup_evidence_payload(item) for item in report.stoplist_search_evidence],
+        "stoplist_search_stats": _nbs_startup_stoplist_stats_payload(report.stoplist_search_stats),
+        "qr_state_evidence": [_nbs_startup_evidence_payload(item) for item in report.qr_state_evidence],
+        "qr_state_change_count": report.qr_state_change_count,
+    }
+
+
+def _nbs_startup_bm_info_correlation_payload(correlation: NbsStartupBmInfoCorrelation | None) -> dict[str, object] | None:
+    if correlation is None:
+        return None
+    return {
+        "status": correlation.status,
+        "reason": correlation.reason,
+        "device_identity": correlation.device_identity,
+        "device_identity_source": correlation.device_identity_source,
+        "send_info_at": correlation.send_info_at.isoformat(sep=" ") if correlation.send_info_at else None,
+        "bm_info_req_at": correlation.bm_info_req_at.isoformat(sep=" ") if correlation.bm_info_req_at else None,
+        "bm_info_resp_at": correlation.bm_info_resp_at.isoformat(sep=" ") if correlation.bm_info_resp_at else None,
+        "qr_at": correlation.qr_at.isoformat(sep=" ") if correlation.qr_at else None,
+        "send_info_to_bm_req_seconds": correlation.send_info_to_bm_req_seconds,
+        "bm_req_to_resp_seconds": correlation.bm_req_to_resp_seconds,
+        "bm_resp_to_qr_seconds": correlation.bm_resp_to_qr_seconds,
+        "bm_info_duration_ms": correlation.bm_info_duration_ms,
+        "candidate_count": correlation.candidate_count,
+        "evidence": [_nbs_startup_evidence_payload(item) for item in correlation.evidence],
+    }
+
+
+def _nbs_startup_stoplist_stats_payload(stats: NbsStartupStoplistStats) -> dict[str, object]:
+    return {
+        "count": stats.count,
+        "min_ms": stats.min_ms,
+        "max_ms": stats.max_ms,
+        "average_ms": stats.average_ms,
+        "median_ms": stats.median_ms,
+        "p90_ms": stats.p90_ms,
+        "p95_ms": stats.p95_ms,
+        "outlier_threshold_ms": stats.outlier_threshold_ms,
+        "outlier_evidence": [_nbs_startup_evidence_payload(item) for item in stats.outlier_evidence],
     }
 
 
@@ -2309,9 +2455,45 @@ def _nbs_startup_summary_title(report: NbsStartupReport) -> str:
 
 def _nbs_startup_summary_note(report: NbsStartupReport) -> str:
     return (
+        f"Класс: {_nbs_startup_classification_label(report)}. "
         f"Первый Info: {_format_datetime(report.first_info_at)}. "
         f"Загрузки стоп-листов в окне: {report.stopper_load_marker_count}."
     )
+
+
+def _nbs_startup_classification_label(report: NbsStartupReport) -> str:
+    labels = {
+        "problem": "проблемный",
+        "context_short": "короткий контекст",
+        "excluded": "исключён",
+        "context": "контекст",
+    }
+    return labels.get(report.classification, report.classification or "контекст")
+
+
+def _nbs_startup_device_ids_text(report: NbsStartupReport) -> str:
+    if not report.device_ids:
+        return "не найдено"
+    parts = []
+    for key in ("rid", "BmNumber", "TmSerialNumber", "reader_id"):
+        values = report.device_ids.get(key)
+        if values:
+            parts.append(f"{key}: {', '.join(values)}")
+    return "; ".join(parts) if parts else "не найдено"
+
+
+def _nbs_startup_correlation_label(correlation: NbsStartupBmInfoCorrelation | None) -> str:
+    if correlation is None:
+        return "не рассчитано"
+    labels = {
+        "matched": "сопоставлен",
+        "ambiguous": "неоднозначно",
+        "not_found": "не найден",
+        "not_found_for_device": "не найден для device id",
+        "missing_nbs_window": "нет окна NBS",
+        "missing_timestamp": "нет timestamp",
+    }
+    return labels.get(correlation.status, correlation.status)
 
 
 def _nbs_startup_first_info_pause(report: NbsStartupReport) -> float | None:

@@ -266,6 +266,37 @@ class NbsStartupSegment:
 
 
 @dataclass(frozen=True)
+class NbsStartupStoplistStats:
+    count: int = 0
+    min_ms: float | None = None
+    max_ms: float | None = None
+    average_ms: float | None = None
+    median_ms: float | None = None
+    p90_ms: float | None = None
+    p95_ms: float | None = None
+    outlier_threshold_ms: float | None = None
+    outlier_evidence: list[NbsStartupEvidence] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class NbsStartupBmInfoCorrelation:
+    status: str
+    reason: str
+    device_identity: str | None = None
+    device_identity_source: str | None = None
+    send_info_at: datetime | None = None
+    bm_info_req_at: datetime | None = None
+    bm_info_resp_at: datetime | None = None
+    qr_at: datetime | None = None
+    send_info_to_bm_req_seconds: float | None = None
+    bm_req_to_resp_seconds: float | None = None
+    bm_resp_to_qr_seconds: float | None = None
+    bm_info_duration_ms: float | None = None
+    candidate_count: int = 0
+    evidence: list[NbsStartupEvidence] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class NbsStartupReport:
     title: str
     reader_type: str | None
@@ -276,17 +307,27 @@ class NbsStartupReport:
     first_qr_at: datetime | None
     mode_validate_to_qr_seconds: float | None
     source_file: str
+    device_ids: dict[str, list[str]] = field(default_factory=dict)
+    session_phase: str = "unknown"
     segments: list[NbsStartupSegment] = field(default_factory=list)
     evidence: list[NbsStartupEvidence] = field(default_factory=list)
+    problem_candidate: bool = False
+    classification: str = "context"
+    classification_reasons: list[str] = field(default_factory=list)
+    exclusion_reasons: list[str] = field(default_factory=list)
     ready_status_seen: bool = False
     info_failure_count: int = 0
     info_timeout_count: int = 0
+    bm_info_correlation: NbsStartupBmInfoCorrelation | None = None
     stopper_load_marker_count: int = 0
     stopper_reader_configuration_count: int = 0
     stopper_skip_count: int = 0
     stopper_evidence: list[NbsStartupEvidence] = field(default_factory=list)
     stoplist_search_max_ms: float | None = None
     stoplist_search_evidence: list[NbsStartupEvidence] = field(default_factory=list)
+    stoplist_search_stats: NbsStartupStoplistStats = field(default_factory=NbsStartupStoplistStats)
+    qr_state_evidence: list[NbsStartupEvidence] = field(default_factory=list)
+    qr_state_change_count: int = 0
 
 
 @dataclass(frozen=True)
