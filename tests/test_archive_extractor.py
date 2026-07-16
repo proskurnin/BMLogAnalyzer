@@ -87,7 +87,7 @@ def test_extracts_nested_archives_from_zip(tmp_path):
     result = extract_archives(source, extracted)
 
     assert result.extracted_files == [
-        str(extracted / "bm-rotate.log.gz.log"),
+        str(extracted / "logs.zip" / "bm-rotate.log.gz.log"),
         str(extracted / "nested.zip" / "inner" / "a.log"),
     ]
     assert (extracted / "nested.zip" / "inner" / "a.log").read_text(encoding="utf-8") == "nested log\n"
@@ -202,7 +202,7 @@ def test_extracts_log_files_from_rar_with_bsdtar(tmp_path, monkeypatch):
     assert result.source_archives == [str(source)]
     assert result.extracted_files == [
         str(extracted / "logs.rar" / "nested" / "a.log"),
-        str(extracted / "b.log.gz.log"),
+        str(extracted / "logs.rar" / "nested" / "b.log.gz.log"),
     ]
     assert result.skipped_files == []
     assert calls[1] == [

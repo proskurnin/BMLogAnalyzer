@@ -1,4 +1,5 @@
 import io
+import gzip
 import zipfile
 
 from core.pipeline import run_analysis
@@ -146,6 +147,65 @@ def test_pipeline_maps_nested_archives_to_top_level_input_summary(tmp_path):
     assert input_summary.skipped_reasons == {}
 
 
+def test_pipeline_preserves_nested_gzip_paths_with_same_file_names(tmp_path):
+    input_dir = tmp_path / "input"
+    extracted_dir = tmp_path / "extracted"
+    input_dir.mkdir()
+    archive_path = input_dir / "logs.zip"
+    first_line = "2026-04-29 20:50:41.343 PaymentStart, resp: {Code:0 Message:OK} duration=412 ms p: mgt_nbs-oti-4.4.12"
+    second_line = "2026-04-29 20:50:42.343 PaymentStart, resp: {Code:3 Message:Ошибка чтения карты} duration=512 ms p: mgt_nbs-tt-4.4.13"
+    first_gz = io.BytesIO()
+    second_gz = io.BytesIO()
+    with gzip.GzipFile(fileobj=first_gz, mode="wb") as handle:
+        handle.write((first_line + "\n").encode("utf-8"))
+    with gzip.GzipFile(fileobj=second_gz, mode="wb") as handle:
+        handle.write((second_line + "\n").encode("utf-8"))
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("device-a/logs/bm/bm-rotate.log.gz", first_gz.getvalue())
+        archive.writestr("device-b/logs/bm/bm-rotate.log.gz", second_gz.getvalue())
+
+    events, result, stats = run_analysis(input_dir, extracted_dir=extracted_dir)
+
+    assert len(events) == 2
+    assert result.total == 2
+    assert stats.steps[2].details["scanned_files"] == 2
+    assert stats.extracted_files == 2
+    assert len(stats.extracted_file_paths) == 2
+    assert len(stats.analyzed_files) == 2
+    assert len({path for path in stats.analyzed_files}) == 2
+    assert all("device-" in path for path in stats.analyzed_files)
+    input_summary = stats.input_source_summaries[0]
+    assert input_summary.extracted_file_count == 2
+    assert input_summary.analyzed_file_count == 2
+    assert input_summary.skipped_reasons == {}
+
+
+def test_pipeline_extracts_and_scans_stdout_logs_without_extension(tmp_path):
+    input_dir = tmp_path / "input"
+    extracted_dir = tmp_path / "extracted"
+    input_dir.mkdir()
+    archive_path = input_dir / "logs.zip"
+    bm_line = 'time="2026-07-15 10:00:00.000" level=info msg="PaymentStart, resp: 100ms, {Code:0 MessageRus:Проходите} tid: a, p: mgt_nbs-tt-4.5.13"'
+    stopper_line = 'time="2026-07-15 10:00:01.000" level=info msg="readerConfiguration: ReaderConfiguration, req p: stopper-arm7_32-4.5.13"'
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("device/logs/bm-std/bm.20260715-100000-AAAA", bm_line + "\n")
+        archive.writestr("device/logs/stopper-std/stopper.20260715-100001-BBBB", stopper_line + "\n")
+
+    events, result, stats = run_analysis(input_dir, extracted_dir=extracted_dir)
+
+    assert len(events) == 1
+    assert result.total == 1
+    assert stats.steps[2].details["scanned_files"] == 2
+    assert len(stats.extracted_file_paths) == 2
+    assert len(stats.analyzed_files) == 2
+    input_summary = stats.input_source_summaries[0]
+    assert input_summary.log_type_counts == {"bm": 1, "stopper": 1}
+    assert input_summary.log_file_count == 2
+    assert input_summary.extracted_file_count == 2
+    assert input_summary.analyzed_file_count == 2
+    assert input_summary.skipped_reasons == {}
+
+
 def test_pipeline_falls_back_on_invalid_gzip(tmp_path):
     input_dir = tmp_path / "input"
     extracted_dir = tmp_path / "extracted"
@@ -162,7 +222,7 @@ def test_pipeline_falls_back_on_invalid_gzip(tmp_path):
     assert len(events) == 1
     assert result.total == 1
     assert stats.scanned_lines == 1
-    assert stats.analyzed_files == [str(extracted_dir / "broken.log.gz.log")]
+    assert stats.analyzed_files == [str(extracted_dir / "broken.zip" / "broken.log.gz.log")]
 
 
 def test_pipeline_reuses_archive_cache(tmp_path):

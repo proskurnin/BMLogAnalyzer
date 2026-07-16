@@ -30,10 +30,12 @@ def build_input_source_summaries(
     direct_files: list[str],
     source_archives: list[str],
     extracted_file_origins: dict[str, str],
+    analyzed_files: list[str],
     log_inventory: list[LogFileInventory],
     archive_inventory: list[ArchiveInventoryRow] | None = None,
 ) -> list[InputSourceSummary]:
     inventory_by_source = {item.source_file: item for item in log_inventory}
+    analyzed_set = set(analyzed_files)
     extracted_by_origin: dict[str, list[str]] = defaultdict(list)
     for extracted_file, origin in extracted_file_origins.items():
         extracted_by_origin[origin].append(extracted_file)
@@ -55,7 +57,7 @@ def build_input_source_summaries(
                     source_file=source_file,
                     input_kind="archive",
                     related_inventory=related_inventory,
-                    analyzed_files=[item.source_file for item in related_inventory],
+                    analyzed_files=[path for path in extracted_files if path in analyzed_set],
                     extracted_files=extracted_files,
                     archive_rows=archive_rows_by_source.get(source_file, []),
                 )
@@ -68,7 +70,7 @@ def build_input_source_summaries(
                 source_file=source_file,
                 input_kind="log_file",
                 related_inventory=related_inventory,
-                analyzed_files=[item.source_file for item in related_inventory],
+                analyzed_files=[source_file] if source_file in analyzed_set else [],
                 extracted_files=[],
                 archive_rows=[],
             )
@@ -198,8 +200,8 @@ def _skipped_reasons(
 ) -> dict[str, int]:
     reasons: dict[str, int] = {}
     if other_file_count:
-        reasons["прочие файлы в архиве"] = other_file_count
+        reasons["не анализировались: прочие файлы не относятся к log-файлам"] = other_file_count
     not_scanned = max(0, extracted_file_count - analyzed_file_count)
     if not_scanned:
-        reasons["извлечены, но не сканировались"] = not_scanned
+        reasons["не сканировались: путь не попал в поддерживаемые источники сканера"] = not_scanned
     return reasons

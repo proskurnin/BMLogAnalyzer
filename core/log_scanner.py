@@ -21,13 +21,13 @@ def scan_logs(path: Path | str, *, include_archives: bool = True) -> Iterator[Lo
 def iter_log_sources(root: Path | str, *, include_archives: bool = True) -> Iterable[Path]:
     root = Path(root)
     suffixes = SUPPORTED_SUFFIXES if include_archives else {".log"}
-    if root.is_file() and root.suffix.lower() in suffixes and not _is_tar_gz(root):
+    if root.is_file() and _is_supported_source(root, suffixes):
         yield root
         return
 
     if root.is_dir():
         for path in sorted(root.rglob("*")):
-            if path.is_file() and path.suffix.lower() in suffixes and not _is_tar_gz(path):
+            if path.is_file() and _is_supported_source(path, suffixes):
                 yield path
 
 
@@ -44,6 +44,17 @@ def _read_source(path: Path) -> Iterator[LogLine]:
 def _is_tar_gz(path: Path) -> bool:
     name = path.name.lower()
     return name.endswith(".tar.gz") or name.endswith(".tgz")
+
+
+def _is_supported_source(path: Path, suffixes: set[str]) -> bool:
+    if _is_tar_gz(path):
+        return False
+    return path.suffix.lower() in suffixes or _is_stdout_log_path(path)
+
+
+def _is_stdout_log_path(path: Path) -> bool:
+    parts = {part.lower() for part in path.parts}
+    return "bm-std" in parts or "stopper-std" in parts
 
 
 def _read_zip(path: Path) -> Iterator[LogLine]:

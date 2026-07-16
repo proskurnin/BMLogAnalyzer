@@ -304,7 +304,8 @@ def _extract_rar(path: Path, output_root: Path) -> list[str]:
 
 
 def _extract_gz(path: Path, output_root: Path) -> Path:
-    target_path = output_root / f"{_safe_stem(path)}.log"
+    target_path = _gz_target_path(path, output_root)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with gzip.open(path, "rb") as source, target_path.open("wb") as target:
             shutil.copyfileobj(source, target)
@@ -312,6 +313,14 @@ def _extract_gz(path: Path, output_root: Path) -> Path:
         with path.open("rb") as source, target_path.open("wb") as target:
             shutil.copyfileobj(source, target)
     return target_path
+
+
+def _gz_target_path(path: Path, output_root: Path) -> Path:
+    try:
+        relative = path.relative_to(output_root)
+    except ValueError:
+        return output_root / f"{_safe_stem(path)}.log"
+    return output_root / relative.with_name(f"{relative.name}.log")
 
 
 def _archive_cache_key(path: Path) -> str:
@@ -387,7 +396,12 @@ def _file_size(path: Path) -> int:
 def _is_supported_log_member(path: Path) -> bool:
     if not _is_safe_member_path(path):
         return False
-    return path.suffix.lower() == ".log" or _is_archive_candidate(path)
+    return path.suffix.lower() == ".log" or _is_stdout_log_member(path) or _is_archive_candidate(path)
+
+
+def _is_stdout_log_member(path: Path) -> bool:
+    parts = {part.lower() for part in path.parts}
+    return "bm-std" in parts or "stopper-std" in parts
 
 
 def _is_safe_member_path(path: Path) -> bool:

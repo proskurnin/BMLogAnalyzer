@@ -122,9 +122,11 @@ def run_analysis(
     validator_info_chain_collector = ValidatorInfoChainCollector()
     nbs_startup_collector = NbsStartupCollector()
     scanned_lines = 0
+    scanned_source_files: set[str] = set()
 
     with _Stage("scan_and_parse_logs", progress_callback) as stage:
         for scan_root, include_archives in scan_roots:
+            scanned_source_files.update(str(path) for path in iter_log_sources(scan_root, include_archives=include_archives))
             for log_line in scan_logs(scan_root, include_archives=include_archives):
                 scanned_lines += 1
                 inventory_collector.observe_line(log_line.source_file, log_line.text)
@@ -165,6 +167,7 @@ def run_analysis(
                 errors=len(diagnostics),
                 details={
                     "scan_roots": len(scan_roots),
+                    "scanned_files": len(scanned_source_files),
                     "scanned_lines": scanned_lines,
                     "parsed_events": len(events),
                     "malformed_payment_lines": len(diagnostics),
@@ -198,6 +201,7 @@ def run_analysis(
             direct_files=input_direct_files,
             source_archives=extraction.source_archives,
             extracted_file_origins=extraction.extracted_file_origins,
+            analyzed_files=sorted(scanned_source_files),
             log_inventory=log_inventory,
             archive_inventory=archive_inventory,
         )
@@ -221,7 +225,7 @@ def run_analysis(
         extracted_files=len(extraction.extracted_files),
         skipped_archives=len(extraction.skipped_files),
         input_files=sorted([*input_direct_files, *extraction.source_archives]),
-        analyzed_files=sorted(file_stats),
+        analyzed_files=sorted(scanned_source_files),
         extracted_file_paths=sorted(extraction.extracted_files),
         skipped_archive_paths=sorted(extraction.skipped_files),
         diagnostics=diagnostics,
