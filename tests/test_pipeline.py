@@ -228,6 +228,9 @@ def test_pipeline_reclassifies_other_log_like_files_from_content_without_losing_
     assert input_summary.log_file_count == 3
     assert input_summary.extracted_file_count == 3
     assert input_summary.analyzed_file_count == 3
+    assert stats.extracted_files == input_summary.log_file_count
+    assert stats.steps[2].details["scanned_files"] == input_summary.log_file_count
+    assert sum(input_summary.log_type_counts.values()) == input_summary.log_file_count
     assert input_summary.log_type_counts == {"bm": 1, "validator_app": 1, "system": 1}
     assert input_summary.log_type_labels == ["БМ", "ПО валидатора", "операционной системы"]
     assert input_summary.skipped_reasons == {}

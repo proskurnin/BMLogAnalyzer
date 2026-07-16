@@ -88,9 +88,11 @@ def _build_summary(
     reportable_archive_file_count = max(log_file_count, archive_file_count - processed_archive_container_count)
     other_file_count = max(0, reportable_archive_file_count - log_file_count)
     skipped_reasons = _skipped_reasons(
+        log_file_count=log_file_count,
         other_file_count=other_file_count,
         extracted_file_count=len(extracted_unique),
         analyzed_file_count=len(analyzed_unique),
+        extraction_required=input_kind == "archive",
     )
     return InputSourceSummary(
         source_file=source_file,
@@ -231,13 +233,18 @@ def _is_archive_container(file_name: str) -> bool:
 
 def _skipped_reasons(
     *,
+    log_file_count: int,
     other_file_count: int,
     extracted_file_count: int,
     analyzed_file_count: int,
+    extraction_required: bool,
 ) -> dict[str, int]:
     reasons: dict[str, int] = {}
     if other_file_count:
         reasons["не анализировались: прочие файлы не относятся к log-файлам"] = other_file_count
+    not_extracted = max(0, log_file_count - extracted_file_count) if extraction_required else 0
+    if not_extracted:
+        reasons["не извлечены: log-файлы найдены в inventory архива, но отсутствуют в результате распаковки"] = not_extracted
     not_scanned = max(0, extracted_file_count - analyzed_file_count)
     if not_scanned:
         reasons["не сканировались: путь не попал в поддерживаемые источники сканера"] = not_scanned
