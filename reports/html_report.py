@@ -20,6 +20,7 @@ from analytics.device_boot_diagnostics import (
 from analytics.protocol_scenarios import load_protocol_scenarios, run_protocol_scenarios
 from analytics.suspicious import suspicious_line_payloads
 from core.contracts import REPORT_MANIFEST_SCHEMA_VERSION
+from core.log_types import archive_log_group_specs, log_type_label, log_type_sort_key
 from core.models import (
     AnalysisResult,
     ArchiveInventoryRow,
@@ -46,34 +47,8 @@ from core.models import (
 from core.version import __version__
 from reports.section_registry import build_section_sources
 
-LOG_GROUP_SPECS: list[tuple[str, set[str]]] = [
-    ("BM logs", {"BM rotate", "BM stdout"}),
-    ("Stopper logs", {"Stopper rotate", "Stopper stdout"}),
-    ("VIL logs", {"VIL logs"}),
-    ("Validator app logs", {"Validator app logs"}),
-    ("Reader logs", {"Reader logs"}),
-    ("System logs", {"System logs"}),
-    ("Unclassified log files", {"Other log-like"}),
-]
+LOG_GROUP_SPECS: list[tuple[str, set[str]]] = archive_log_group_specs()
 LOG_CATEGORIES: set[str] = {category for _, categories in LOG_GROUP_SPECS for category in categories}
-LOG_TYPE_LABELS: dict[str, str] = {
-    "bm": "БМ",
-    "stopper": "ПО стоппера",
-    "reader": "ридера",
-    "oti_reader_library": "библиотеки ридера ОТИ",
-    "validator_app": "ПО валидатора",
-    "system": "операционной системы",
-    "other": "неопределённые",
-}
-LOG_TYPE_ORDER: dict[str, int] = {
-    "bm": 0,
-    "stopper": 1,
-    "reader": 2,
-    "oti_reader_library": 3,
-    "validator_app": 4,
-    "system": 5,
-    "other": 99,
-}
 
 
 def write_html_report(
@@ -119,8 +94,11 @@ def render_html_report(
 ) -> str:
     archive_inventory = stats.archive_inventory if stats else []
     archive_log_groups, archive_log_total = _build_log_groups(archive_inventory)
+    inventory_log_groups, inventory_log_total = _build_inventory_log_groups(stats.log_inventory if stats else [], archive_inventory)
     other_groups, other_total = _build_other_groups(archive_inventory)
     input_source_summaries = stats.input_source_summaries if stats else []
+    input_log_total = sum(item.log_file_count for item in input_source_summaries)
+    upload_log_total = archive_log_total or input_log_total
     bm_summary_count = _recognized_log_type_count(input_source_summaries, {"bm"}) if input_source_summaries else bm_log_count(archive_inventory)
     reader_summary_count = (
         _recognized_log_type_count(input_source_summaries, {"reader", "oti_reader_library"})
@@ -133,8 +111,15 @@ def render_html_report(
         else explicit_system_log_count(archive_inventory)
     )
     recognized_log_groups, recognized_log_total = _build_recognized_log_groups(input_source_summaries)
-    visible_log_groups = recognized_log_groups if recognized_log_total else archive_log_groups
-    visible_log_total = recognized_log_total if recognized_log_total else archive_log_total
+    if inventory_log_total and (not archive_log_total or inventory_log_total >= archive_log_total):
+        visible_log_groups = inventory_log_groups
+        visible_log_total = inventory_log_total
+    elif archive_log_total:
+        visible_log_groups = archive_log_groups
+        visible_log_total = archive_log_total
+    else:
+        visible_log_groups = recognized_log_groups
+        visible_log_total = recognized_log_total
     bm_summary_groups = (
         _recognized_log_type_groups(input_source_summaries, {"bm"})
         if input_source_summaries
@@ -253,7 +238,7 @@ def render_html_report(
         _upload_composition_section(
             input_source_summaries,
             visible_log_groups,
-            visible_log_total,
+            upload_log_total,
             other_groups,
             other_total,
             section_sources,
@@ -336,11 +321,21 @@ def render_html_report_manifest(
 ) -> dict[str, object]:
     archive_inventory = stats.archive_inventory if stats else []
     archive_log_groups, archive_log_total = _build_log_groups(archive_inventory)
+    inventory_log_groups, inventory_log_total = _build_inventory_log_groups(stats.log_inventory if stats else [], archive_inventory)
     other_groups, other_total = _build_other_groups(archive_inventory)
     input_source_summaries = stats.input_source_summaries if stats else []
+    input_log_total = sum(item.log_file_count for item in input_source_summaries)
+    upload_log_total = archive_log_total or input_log_total
     recognized_log_groups, recognized_log_total = _build_recognized_log_groups(input_source_summaries)
-    visible_log_groups = recognized_log_groups if recognized_log_total else archive_log_groups
-    visible_log_total = recognized_log_total if recognized_log_total else archive_log_total
+    if inventory_log_total and (not archive_log_total or inventory_log_total >= archive_log_total):
+        visible_log_groups = inventory_log_groups
+        visible_log_total = inventory_log_total
+    elif archive_log_total:
+        visible_log_groups = archive_log_groups
+        visible_log_total = archive_log_total
+    else:
+        visible_log_groups = recognized_log_groups
+        visible_log_total = recognized_log_total
     bm_summary_count = _recognized_log_type_count(input_source_summaries, {"bm"}) if input_source_summaries else bm_log_count(archive_inventory)
     reader_summary_count = (
         _recognized_log_type_count(input_source_summaries, {"reader", "oti_reader_library"})
@@ -440,7 +435,7 @@ def render_html_report_manifest(
         "stable_sections": stable_sections,
         "counts": {
             "archives": len(stats.input_files) if stats else 0,
-            "log_files": visible_log_total,
+            "log_files": upload_log_total,
             "other_files": other_total,
             "bm_logs": bm_summary_count,
             "reader_logs": reader_summary_count,
@@ -689,14 +684,14 @@ def _upload_log_type_detection(items: list[InputSourceSummary]) -> str:
             "<summary>",
             "<span>",
             "<strong>Распознанные типы логов</strong>",
-            "<em>Evidence по правилам классификации файлов.</em>",
+            "<em>Признаки, по которым файл отнесён к типу лога.</em>",
             "</span>",
             "</summary>",
             '<div class="collapsible-body">',
             '<div class="table-wrap">',
             '<table class="status-table status-table--log-type-detection">',
             '<colgroup><col style="width:20%"><col style="width:18%"><col style="width:10%"><col style="width:52%"></colgroup>',
-            '<thead class="status-table-head"><tr><th>Источник</th><th>Тип лога</th><th>Файлов</th><th>Evidence</th></tr></thead>',
+            '<thead class="status-table-head"><tr><th>Источник</th><th>Тип лога</th><th>Файлов</th><th>Признак распознавания</th></tr></thead>',
             f"<tbody>{''.join(rows)}</tbody>",
             "</table>",
             "</div>",
@@ -722,13 +717,13 @@ def _section_source_matrix(section_sources: dict[str, dict[str, object]]) -> str
             continue
         matched = [str(item) for item in source.get("matched_log_type_labels", [])]
         missing = [str(item) for item in source.get("missing_log_type_labels", [])]
+        availability = _section_source_availability(required, matched, missing)
         status = str(source.get("status", ""))
         rows.append(
             '<tr class="status-row">'
             f"<td>{escape(str(source.get('title') or section_id))}</td>"
             f"<td>{escape(', '.join(required) or 'не требуется')}</td>"
-            f"<td>{escape(', '.join(matched) or 'нет')}</td>"
-            f"<td>{escape(', '.join(missing) or 'нет')}</td>"
+            f"<td>{availability}</td>"
             f'<td><span class="source-status source-status--{escape(status)}">{escape(_section_source_status_label(status))}</span></td>'
             "</tr>"
         )
@@ -747,7 +742,7 @@ def _section_source_matrix(section_sources: dict[str, dict[str, object]]) -> str
             '<div class="table-wrap">',
             '<table class="status-table status-table--section-sources">',
             "<thead class=\"status-table-head\"><tr>"
-            "<th>Раздел</th><th>Нужны логи</th><th>Найдены</th><th>Не найдены</th><th>Статус</th>"
+            "<th>Раздел</th><th>Нужны логи</th><th>Найдены</th><th>Статус</th>"
             "</tr></thead>",
             f"<tbody>{''.join(rows)}</tbody>",
             "</table>",
@@ -771,6 +766,18 @@ def _section_source_matrix_order() -> list[str]:
         "unclassified_diagnostics",
         "validator_analytics",
     ]
+
+
+def _section_source_availability(required: list[str], matched: list[str], missing: list[str]) -> str:
+    if not required:
+        return "не требуется"
+    matched_set = set(matched)
+    missing_set = set(missing)
+    items = []
+    for label in required:
+        icon = "✅" if label in matched_set and label not in missing_set else "❌"
+        items.append(f'<span class="section-source-mark">{icon} {escape(label)}</span>')
+    return "<br>".join(items)
 
 
 def _section_source_status_label(status: str) -> str:
@@ -816,7 +823,7 @@ def _input_kind_label(input_kind: str) -> str:
 
 def _input_source_summary_text(item: InputSourceSummary) -> str:
     name = Path(item.source_file).name
-    labels = _known_log_type_labels(item)
+    labels = _known_log_type_labels(item, include_other=item.input_kind == "archive")
     if item.input_kind == "archive":
         if labels:
             return f"Загружен архив {name}. Распознано типов логов: {len(labels)}."
@@ -829,11 +836,11 @@ def _input_source_summary_text(item: InputSourceSummary) -> str:
     return f"Загружен файл {name}. Тип лога не определён."
 
 
-def _known_log_type_labels(item: InputSourceSummary) -> list[str]:
+def _known_log_type_labels(item: InputSourceSummary, *, include_other: bool = False) -> list[str]:
     return [
         label
         for log_type, label in zip(item.log_types, item.log_type_labels, strict=False)
-        if log_type != "other"
+        if include_other or log_type != "other"
     ]
 
 
@@ -951,10 +958,96 @@ def _build_log_groups(archive_inventory: list[ArchiveInventoryRow]) -> tuple[lis
     return rows, total
 
 
+def _build_inventory_log_groups(
+    inventory: list,
+    archive_inventory: list[ArchiveInventoryRow],
+) -> tuple[list[dict[str, object]], int]:
+    if not inventory:
+        return [], 0
+
+    archive_names = sorted({Path(row.archive).name for row in archive_inventory})
+    size_lookup = _archive_size_lookup(archive_inventory)
+    groups: dict[str, dict[str, object]] = {}
+    total = 0
+    for item in inventory:
+        log_type = str(item.log_type or "other")
+        archive_name = _inventory_archive_name(item.source_file, archive_names)
+        member_name = _inventory_member_name(item.source_file, archive_name)
+        size_bytes = size_lookup.get((archive_name, member_name), 0)
+        group = groups.setdefault(
+            log_type,
+            {
+                "label": log_type_label(log_type),
+                "count": 0,
+                "size_bytes": 0,
+                "archives": defaultdict(lambda: {"archive": "", "count": 0, "size_bytes": 0, "files": [], "file_details": []}),
+            },
+        )
+        archive_group = group["archives"][archive_name]
+        archive_group["archive"] = archive_name
+        archive_group["count"] += 1
+        archive_group["size_bytes"] += size_bytes
+        archive_group["files"].append(member_name)
+        archive_group["file_details"].append(
+            {
+                "path": member_name,
+                "size_bytes": size_bytes,
+                "category": log_type_label(log_type),
+                "reason": item.evidence or "тип определён правилами классификации логов",
+            }
+        )
+        group["count"] += 1
+        group["size_bytes"] += size_bytes
+        total += 1
+
+    rows: list[dict[str, object]] = []
+    for log_type in sorted(groups, key=log_type_sort_key):
+        group = groups[log_type]
+        payload = []
+        for archive_name in sorted(group["archives"]):
+            archive_group = group["archives"][archive_name]
+            payload.append(
+                {
+                    "archive": archive_group["archive"],
+                    "count": archive_group["count"],
+                    "size_bytes": archive_group["size_bytes"],
+                    "files": sorted({str(name) for name in archive_group["files"] if name}),
+                    "file_details": sorted(archive_group["file_details"], key=lambda value: str(value["path"])),
+                }
+            )
+        rows.append({"label": group["label"], "count": group["count"], "size_bytes": group["size_bytes"], "payload": payload})
+    return rows, total
+
+
+def _archive_size_lookup(archive_inventory: list[ArchiveInventoryRow]) -> dict[tuple[str, str], int]:
+    lookup: dict[tuple[str, str], int] = {}
+    for row in archive_inventory:
+        archive_name = Path(row.archive).name
+        for file_name, size_bytes in row.file_sizes.items():
+            lookup[(archive_name, str(file_name))] = int(size_bytes)
+    return lookup
+
+
+def _inventory_archive_name(source_file: str, archive_names: list[str]) -> str:
+    normalized = source_file.replace("\\", "/")
+    for archive_name in archive_names:
+        if f"/{archive_name}/" in normalized:
+            return archive_name
+    return Path(source_file).name
+
+
+def _inventory_member_name(source_file: str, archive_name: str) -> str:
+    normalized = source_file.replace("\\", "/")
+    marker = f"/{archive_name}/"
+    if marker in normalized:
+        return normalized.split(marker, 1)[1]
+    return source_file
+
+
 def _build_recognized_log_groups(items: list[InputSourceSummary]) -> tuple[list[dict[str, object]], int]:
     log_types = sorted(
         {log_type for item in items for log_type in item.log_types if log_type != "other"},
-        key=lambda value: (LOG_TYPE_ORDER.get(value, 50), value),
+        key=log_type_sort_key,
     )
     rows = [_recognized_log_type_group(items, {log_type}, label=_log_type_display_label(log_type)) for log_type in log_types]
     rows = [row for row in rows if int(row["count"]) > 0]
@@ -1014,11 +1107,11 @@ def _source_files_from_evidence(evidence_rows: list[str]) -> list[str]:
 
 
 def _log_type_display_label(log_type: str) -> str:
-    return LOG_TYPE_LABELS.get(log_type, log_type)
+    return log_type_label(log_type)
 
 
 def _joined_log_type_label(log_types: set[str]) -> str:
-    labels = [_log_type_display_label(log_type) for log_type in sorted(log_types, key=lambda value: (LOG_TYPE_ORDER.get(value, 50), value))]
+    labels = [_log_type_display_label(log_type) for log_type in sorted(log_types, key=log_type_sort_key)]
     return ", ".join(labels)
 
 
@@ -3009,11 +3102,12 @@ def _aggregate_archive_categories(
         if row.category not in categories:
             continue
         archive_name = Path(row.archive).name
-        item = grouped.setdefault(archive_name, {"archive": archive_name, "count": 0, "size_bytes": 0, "files": []})
+        item = grouped.setdefault(archive_name, {"archive": archive_name, "count": 0, "size_bytes": 0, "files": [], "file_details": []})
         item["count"] += row.count
         item["size_bytes"] += row.size_bytes
         files = row.files or list(row.file_sizes.keys()) or row.examples
         item["files"].extend(files)
+        item["file_details"].extend(_archive_file_details(row, files))
         count += row.count
         size_bytes += row.size_bytes
     payload = [
@@ -3022,10 +3116,52 @@ def _aggregate_archive_categories(
             "count": grouped[archive_name]["count"],
             "size_bytes": grouped[archive_name]["size_bytes"],
             "files": sorted({str(name) for name in grouped[archive_name]["files"] if name}),
+            "file_details": sorted(grouped[archive_name]["file_details"], key=lambda value: str(value["path"])),
         }
         for archive_name in sorted(grouped)
     ]
     return payload, count, size_bytes
+
+
+def _archive_file_details(row: ArchiveInventoryRow, files: list[str]) -> list[dict[str, object]]:
+    details = []
+    for file_name in files:
+        details.append(
+            {
+                "path": str(file_name),
+                "size_bytes": int(row.file_sizes.get(file_name, 0)),
+                "category": row.category,
+                "reason": _archive_category_reason(row.category, str(file_name)),
+            }
+        )
+    return details
+
+
+def _archive_category_reason(category: str, file_name: str) -> str:
+    name = file_name.lower()
+    if category == "BM rotate":
+        return "путь или имя файла соответствует BM rotate"
+    if category == "BM stdout":
+        return "путь logs/bm-std соответствует stdout-логу БМ"
+    if category == "Stopper rotate":
+        return "путь или имя файла соответствует Stopper rotate"
+    if category == "Stopper stdout":
+        return "путь logs/stopper-std соответствует stdout-логу ПО стоппера"
+    if category == "VIL logs":
+        return "путь содержит vil.logs"
+    if category == "Validator app logs":
+        return "путь соответствует логам ПО валидатора"
+    if category == "Reader logs":
+        return "путь или имя файла соответствует логам ридера"
+    if category == "System logs":
+        return "путь или имя файла соответствует системным логам"
+    if category == "Other log-like":
+        if name.endswith(".log.gz"):
+            return "файл похож на gzip-log, но компонент не распознан"
+        if name.endswith(".log"):
+            return "файл похож на log, но компонент не распознан"
+        return "файл похож на лог, но компонент не распознан"
+    return "категория определена по структуре архива"
 
 
 def _bm_status_section(
@@ -4164,6 +4300,12 @@ def _is_executable(path: str, name: str) -> bool:
 
 
 def _format_size(size_bytes: int) -> str:
+    if size_bytes <= 0:
+        return "0 KB"
+    if size_bytes < 1024 * 1024:
+        kb = max(size_bytes / 1024, 0.1)
+        text = f"{kb:.1f}".rstrip("0").rstrip(".")
+        return f"{text} KB"
     mb = size_bytes / (1024 * 1024)
     text = f"{mb:.1f}".rstrip("0").rstrip(".")
     return f"{text} MB"
@@ -4330,7 +4472,14 @@ def _script() -> str:
           ${nested}
         </div>`;
       }
-      const files = (item.files || []).map((value) => `<li>${escapeHtml(String(value))}</li>`).join('');
+      const details = item.file_details || [];
+      const files = details.length
+        ? details.map((value) => `
+            <li>
+              <span>${escapeHtml(String(value.path || ''))}</span>
+              <small class="modal-file-meta">${escapeHtml(formatSize(value.size_bytes || 0))} · ${escapeHtml(String(value.reason || value.category || ''))}</small>
+            </li>`).join('')
+        : (item.files || []).map((value) => `<li>${escapeHtml(String(value))}</li>`).join('');
       return `
         <div class="modal-item">
           <div class="modal-item-head">
@@ -5244,7 +5393,15 @@ def _script() -> str:
   }
 
   function formatSize(bytes) {
-    const mb = bytes / (1024 * 1024);
+    const value = Number(bytes || 0);
+    if (value <= 0) {
+      return '0 KB';
+    }
+    if (value < 1024 * 1024) {
+      const kb = Math.max(value / 1024, 0.1);
+      return `${kb.toFixed(1).replace(/\.0$/, '')} KB`;
+    }
+    const mb = value / (1024 * 1024);
     return `${mb.toFixed(1).replace(/\.0$/, '')} MB`;
   }
 
@@ -5308,6 +5465,9 @@ h1, h2, p { margin: 0; }
 .upload-composition-part h3 { margin: 0 0 4px; font-size: 15px; line-height: 1.2; }
 .upload-composition-part p { margin-bottom: 10px; }
 .status-table--log-type-detection code { display: inline-block; max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
+.status-table--log-type-detection tbody tr:nth-child(even) td { background: #f6f8fb; }
+.status-table--log-type-detection tbody tr:nth-child(odd) td { background: #ffffff; }
+.section-source-mark { display: inline-block; white-space: nowrap; margin: 0 10px 4px 0; }
 .source-status { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 999px; padding: 3px 8px; font-size: 12px; white-space: nowrap; background: var(--soft); }
 .source-status--available { color: #137752; background: #eef8ee; border-color: #c9ddc9; }
 .source-status--partial { color: #9a6700; background: #fff8e6; border-color: #ead7a0; }
@@ -5549,6 +5709,7 @@ h1, h2, p { margin: 0; }
 .modal-back:hover { background: #f6f8fb; }
 .modal-files, .modal-lines { margin: 10px 0 0; padding-left: 18px; color: var(--text); max-height: 44vh; overflow: auto; }
 .modal-files li, .modal-lines li { margin-top: 4px; word-break: break-word; }
+.modal-file-meta { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; line-height: 1.35; }
 .modal-line-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; margin-bottom: 4px; }
 .modal-line-head span { font-weight: 600; }
 .modal-line-head em { color: var(--muted); font-style: normal; font-size: 12px; white-space: nowrap; }

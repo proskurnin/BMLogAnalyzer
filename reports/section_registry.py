@@ -4,18 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from core.log_types import log_type_label
 from core.models import PaymentEvent, PipelineStats
-
-
-LOG_TYPE_LABELS: dict[str, str] = {
-    "bm": "БМ",
-    "reader": "ридера",
-    "oti_reader_library": "библиотеки ридера ОТИ",
-    "stopper": "ПО стоппера",
-    "validator_app": "ПО валидатора",
-    "system": "операционной системы",
-    "other": "прочие логи",
-}
 
 
 @dataclass(frozen=True)
@@ -129,7 +119,7 @@ def _join_labels(log_types: list[str]) -> str:
 
 
 def _log_type_label(log_type: str) -> str:
-    return LOG_TYPE_LABELS.get(log_type, log_type)
+    return log_type_label(log_type)
 
 
 def _apply_upload_composition_sources(payload: dict[str, dict[str, object]], stats: PipelineStats | None) -> None:

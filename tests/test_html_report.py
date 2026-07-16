@@ -126,7 +126,7 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert "Даты" in html
     assert "id=\"bm-filter-root\"" in html
     assert "BM logs" in html
-    assert "Stopper logs" in html
+    assert "ПО стоппера" in html
     assert "Reader logs" in html
     assert "class=\"bar-chart\"" in html
     assert "class=\"bar-row\"" in html
@@ -145,7 +145,7 @@ def test_writes_html_report_with_archive_inventory_chart(tmp_path):
     assert "class=\"line-chart\"" in html
     assert "class=\"chart-legend\"" in html
     assert "Динамика по датам" in html
-    assert "data-label=\"BM logs\"" in html
+    assert "data-label=\"БМ\"" in html
     assert "data-label=\"Прошивки ридеров\"" in html
     assert "data-label=\"Конфиги\"" in html
     assert "data-kind=\"metric\"" in html
@@ -549,6 +549,11 @@ def test_writes_upload_composition_in_report_header_and_manifest(tmp_path):
     assert "прочие файлы в архиве: 1" in html
     assert "content:PaymentStart" in html
     assert "content:validator_app" in html
+    assert "Признак распознавания" in html
+    assert "Evidence по правилам классификации файлов" not in html
+    assert ".status-table--log-type-detection tbody tr:nth-child(even) td" in html
+    assert "<th>Не найдены</th>" not in html
+    assert "✅" in html
     assert "Скорость загрузки устройства" in html
     assert "BM-статусы" in html
     assert "доступен" in html
@@ -588,6 +593,24 @@ def test_upload_composition_log_type_chart_uses_all_recognized_types(tmp_path):
         malformed_payment_lines=0,
         extracted_files=2,
         input_files=["input/13-07-2026.zip"],
+        archive_inventory=[
+            ArchiveInventoryRow(
+                archive="input/13-07-2026.zip",
+                category="BM rotate",
+                count=2,
+                size_bytes=1536,
+                files=["bm/a.log", "bm/b.log"],
+                file_sizes={"bm/a.log": 512, "bm/b.log": 1024},
+            ),
+            ArchiveInventoryRow(
+                archive="input/13-07-2026.zip",
+                category="Stopper rotate",
+                count=1,
+                size_bytes=2 * 1024 * 1024,
+                files=["stopper/a.log"],
+                file_sizes={"stopper/a.log": 2 * 1024 * 1024},
+            ),
+        ],
         analyzed_files=[
             "_workdir/extracted/13-07-2026.zip/bm/a.log",
             "_workdir/extracted/13-07-2026.zip/validator/start.log",
@@ -629,10 +652,14 @@ def test_upload_composition_log_type_chart_uses_all_recognized_types(tmp_path):
     assert "Загружен архив 13-07-2026.zip. Распознано типов логов: 4." in html
     assert 'data-label="БМ"' in html
     assert 'data-label="ПО стоппера"' in html
-    assert 'data-label="библиотеки ридера ОТИ"' in html
-    assert 'data-label="ПО валидатора"' in html
-    assert manifest["counts"]["log_files"] == 4
-    assert manifest["log_groups"] == ["БМ", "ПО стоппера", "библиотеки ридера ОТИ", "ПО валидатора"]
+    assert 'data-label="библиотеки ридера ОТИ"' not in html
+    assert 'data-label="ПО валидатора"' not in html
+    assert "2 (66.67%) 1.5 KB" in html
+    assert "1 (33.33%) 2 MB" in html
+    assert "bm/a.log" in html
+    assert "bm/b.log" in html
+    assert manifest["counts"]["log_files"] == 3
+    assert manifest["log_groups"] == ["БМ", "ПО стоппера"]
 
 
 def test_upload_composition_does_not_show_extracted_nested_archives_as_other_files(tmp_path):

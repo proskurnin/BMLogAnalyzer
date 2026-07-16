@@ -3,26 +3,8 @@ from __future__ import annotations
 from collections import Counter
 from collections import defaultdict
 
+from core.log_types import archive_category_is_log, archive_category_log_type, log_type_label, log_type_sort_key
 from core.models import ArchiveInventoryRow, InputSourceSummary, LogFileInventory
-
-LOG_TYPE_LABELS = {
-    "bm": "БМ",
-    "stopper": "ПО стоппера",
-    "reader": "ридера",
-    "oti_reader_library": "библиотеки ридера ОТИ",
-    "validator_app": "ПО валидатора",
-    "system": "операционной системы",
-    "other": "неопределённые",
-}
-LOG_TYPE_ORDER = {
-    "bm": 0,
-    "stopper": 1,
-    "reader": 2,
-    "oti_reader_library": 3,
-    "validator_app": 4,
-    "system": 5,
-    "other": 99,
-}
 
 
 def build_input_source_summaries(
@@ -88,16 +70,8 @@ def _build_summary(
     extracted_files: list[str],
     archive_rows: list[ArchiveInventoryRow],
 ) -> InputSourceSummary:
-    log_types = sorted(
-        {item.log_type for item in related_inventory},
-        key=lambda value: (LOG_TYPE_ORDER.get(value, 50), value),
-    )
-    log_type_counts = dict(
-        sorted(
-            Counter(item.log_type for item in related_inventory).items(),
-            key=lambda entry: (LOG_TYPE_ORDER.get(entry[0], 50), entry[0]),
-        )
-    )
+    log_type_counts = _log_type_counts(related_inventory, archive_rows)
+    log_types = sorted(log_type_counts, key=log_type_sort_key)
     log_type_evidence = _log_type_evidence(related_inventory)
     analyzed_unique = sorted(set(analyzed_files))
     extracted_unique = sorted(set(extracted_files))
@@ -121,7 +95,7 @@ def _build_summary(
         source_file=source_file,
         input_kind=input_kind,
         log_types=log_types,
-        log_type_labels=[LOG_TYPE_LABELS.get(log_type, log_type) for log_type in log_types],
+        log_type_labels=[log_type_label(log_type) for log_type in log_types],
         log_type_counts=log_type_counts,
         log_type_evidence=log_type_evidence,
         analyzed_files=analyzed_unique,
@@ -143,6 +117,33 @@ def _build_summary(
     )
 
 
+def _log_type_counts(
+    related_inventory: list[LogFileInventory],
+    archive_rows: list[ArchiveInventoryRow],
+) -> dict[str, int]:
+    if archive_rows:
+        archive_log_file_count = sum(row.count for row in archive_rows if archive_category_is_log(row.category))
+        if related_inventory and len(related_inventory) >= archive_log_file_count:
+            return _inventory_log_type_counts(related_inventory)
+        counts: Counter[str] = Counter()
+        for row in archive_rows:
+            log_type = archive_category_log_type(row.category)
+            if log_type:
+                counts[log_type] += row.count
+        return dict(sorted(counts.items(), key=lambda entry: log_type_sort_key(entry[0])))
+
+    return _inventory_log_type_counts(related_inventory)
+
+
+def _inventory_log_type_counts(related_inventory: list[LogFileInventory]) -> dict[str, int]:
+    return dict(
+        sorted(
+            Counter(item.log_type for item in related_inventory).items(),
+            key=lambda entry: log_type_sort_key(entry[0]),
+        )
+    )
+
+
 def _log_type_evidence(inventory: list[LogFileInventory]) -> dict[str, list[str]]:
     grouped: dict[str, list[str]] = defaultdict(list)
     for item in inventory:
@@ -155,22 +156,12 @@ def _log_type_evidence(inventory: list[LogFileInventory]) -> dict[str, list[str]
             bucket.append(row)
     return {
         log_type: values[:5]
-        for log_type, values in sorted(grouped.items(), key=lambda entry: (LOG_TYPE_ORDER.get(entry[0], 50), entry[0]))
+        for log_type, values in sorted(grouped.items(), key=lambda entry: log_type_sort_key(entry[0]))
     }
 
 
 def _is_log_inventory_category(category: str) -> bool:
-    return category in {
-        "BM rotate",
-        "BM stdout",
-        "Stopper rotate",
-        "Stopper stdout",
-        "VIL logs",
-        "Validator app logs",
-        "Reader logs",
-        "System logs",
-        "Other log-like",
-    }
+    return archive_category_is_log(category)
 
 
 def _processed_archive_container_count(rows: list[ArchiveInventoryRow]) -> int:
