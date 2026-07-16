@@ -124,6 +124,9 @@ def test_pipeline_builds_device_boot_speed_report(tmp_path):
     assert "copyTextBlock" in html
     assert "device_boot_speed" in manifest["stable_sections"]
     assert manifest["device_boot_speed"][0]["validator_serial"] == "59757"
+    assert manifest["device_boot_speed"][0]["device_context"]["status"] == "confirmed"
+    assert manifest["device_boot_speed"][0]["device_context"]["device_id"] == "59757"
+    assert manifest["device_boot_speed"][0]["device_context"]["title"] == "Валидатор АСКП с ридером ОТИ"
     assert [item["diagnostic_id"] for item in manifest["device_boot_speed"][0]["diagnostics"]] == [
         "long_qr_search",
         "fixed_bm_wait",

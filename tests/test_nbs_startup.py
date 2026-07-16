@@ -112,6 +112,8 @@ def test_pipeline_builds_nbs_startup_report(tmp_path):
     assert manifest["nbs_startup"][0]["classification"] == "problem"
     assert manifest["nbs_startup"][0]["session_phase"] == "after_log_started"
     assert manifest["nbs_startup"][0]["problem_candidate"] is True
+    assert manifest["nbs_startup"][0]["device_context"]["status"] == "unconfirmed"
+    assert manifest["nbs_startup"][0]["device_context"]["title"] == "Устройство не подтверждено логами запуска"
     assert manifest["nbs_startup"][0]["device_ids"]["BmNumber"] == ["2113001847384"]
     assert manifest["nbs_startup"][0]["bm_info_correlation"]["status"] == "matched"
     assert manifest["nbs_startup"][0]["bm_info_correlation"]["bm_resp_to_qr_seconds"] == 3.979

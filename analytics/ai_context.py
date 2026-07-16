@@ -7,6 +7,7 @@ import re
 
 from analytics.bm_statuses import bm_status_summary_rows
 from analytics.check_cases import run_builtin_checks
+from analytics.device_profiles import DeviceProfile, DeviceProfileEvidence, build_device_profiles
 from analytics.protocol_scenarios import run_protocol_scenarios
 from analytics.repeats import repeat_attempt_rows
 from analytics.suspicious import suspicious_line_payloads
@@ -27,6 +28,7 @@ def build_ai_context(
     repeat_rows = [row for row in repeat_attempt_rows(events) if row.get("repeat_found_within_3s")][:MAX_CONTEXT_ROWS]
     check_rows = [_json_ready(asdict(row)) for row in run_builtin_checks(events)[:MAX_CONTEXT_ROWS]]
     protocol_rows = [_json_ready(asdict(row)) for row in run_protocol_scenarios(events)[:MAX_CONTEXT_ROWS]]
+    device_profiles = build_device_profiles(events, stats.device_boot_reports if stats else [])
     return {
         "schema_version": "bm-log-analyzer.ai-context.v1",
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -63,10 +65,120 @@ def build_ai_context(
             "malformed_payment_lines": stats.malformed_payment_lines if stats else 0,
         },
         "input_sources": [_input_source_context(item) for item in (stats.input_source_summaries if stats else [])],
+        "device_profiles": [_device_profile_context(item) for item in device_profiles],
+        "device_links": _device_links_context(stats, device_profiles),
         "limits": {
             "max_rows_per_section": MAX_CONTEXT_ROWS,
             "raw_log_lines_are_truncated_to_selected_evidence": True,
         },
+    }
+
+
+def _device_links_context(stats: PipelineStats | None, profiles: list[DeviceProfile]) -> dict[str, object]:
+    if not stats:
+        return {"device_boot_speed": [], "nbs_startup": [], "card_reading_speed": []}
+    return {
+        "device_boot_speed": [
+            {
+                "title": report.title,
+                "started_at": report.started_at.isoformat(sep=" ") if report.started_at else None,
+                "device_context": _device_context_for_boot_report(report, profiles),
+            }
+            for report in stats.device_boot_reports[:MAX_CONTEXT_ROWS]
+        ],
+        "nbs_startup": [
+            {
+                "title": report.title,
+                "source_file": report.source_file,
+                "mode_validate_at": report.mode_validate_at.isoformat(sep=" ") if report.mode_validate_at else None,
+                "device_context": _device_context_for_sources([report.source_file], profiles),
+            }
+            for report in stats.nbs_startup_reports[:MAX_CONTEXT_ROWS]
+        ],
+        "card_reading_speed": [
+            {
+                "started_at": report.started_at.isoformat(sep=" ") if report.started_at else None,
+                "card_id": report.card_id,
+                "source_files": report.source_files,
+                "device_context": _device_context_for_sources(report.source_files, profiles),
+            }
+            for report in stats.card_reading_reports[:MAX_CONTEXT_ROWS]
+        ],
+    }
+
+
+def _device_context_for_boot_report(report, profiles: list[DeviceProfile]) -> dict[str, object]:
+    for profile in profiles:
+        if report.validator_serial and profile.device_id == report.validator_serial:
+            return _device_context(profile, "confirmed")
+    return _unconfirmed_device_context()
+
+
+def _device_context_for_sources(source_files: list[str], profiles: list[DeviceProfile]) -> dict[str, object]:
+    source_set = set(source_files)
+    for profile in profiles:
+        if source_set.intersection(profile.source_files):
+            return _device_context(profile, "confirmed")
+    if len(profiles) == 1:
+        return _device_context(profiles[0], "single_confirmed_device")
+    return _unconfirmed_device_context()
+
+
+def _device_context(profile: DeviceProfile, status: str) -> dict[str, object]:
+    return {
+        "status": status,
+        "device_id": profile.device_id,
+        "title": _device_title(profile),
+        "carrier": profile.carrier,
+        "reader_type": profile.reader_type,
+        "source_files": profile.source_files,
+    }
+
+
+def _unconfirmed_device_context() -> dict[str, object]:
+    return {
+        "status": "unconfirmed",
+        "device_id": "",
+        "title": "Устройство не подтверждено логами запуска",
+        "carrier": None,
+        "reader_type": None,
+        "source_files": [],
+    }
+
+
+def _device_title(profile: DeviceProfile) -> str:
+    carrier = profile.carrier or "перевозчик не определён"
+    reader = {"OTI": "ОТИ", "TT": "ТТ"}.get(profile.reader_type or "", profile.reader_type or "")
+    if not reader:
+        return f"Валидатор {carrier}; ридер не подтверждён"
+    return f"Валидатор {carrier} с ридером {reader}"
+
+
+def _device_profile_context(profile: DeviceProfile) -> dict[str, object]:
+    return {
+        "device_id": profile.device_id,
+        "carrier": profile.carrier,
+        "carrier_source": profile.carrier_source,
+        "reader_type": profile.reader_type,
+        "reader_source": profile.reader_source,
+        "validator_versions": profile.validator_versions,
+        "bm_versions": profile.bm_versions,
+        "routes": profile.routes,
+        "package_reader_types": profile.package_reader_types,
+        "source_files": profile.source_files,
+        "boot_report_count": profile.boot_report_count,
+        "payment_event_count": profile.payment_event_count,
+        "evidence": [_device_profile_evidence_context(item) for item in profile.evidence[:5]],
+    }
+
+
+def _device_profile_evidence_context(item: DeviceProfileEvidence) -> dict[str, object]:
+    return {
+        "source_file": item.source_file,
+        "line_number": item.line_number,
+        "timestamp": item.timestamp.isoformat(sep=" ") if item.timestamp else None,
+        "label": item.label,
+        "raw_line": item.raw_line,
     }
 
 

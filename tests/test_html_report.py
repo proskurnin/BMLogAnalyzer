@@ -306,8 +306,21 @@ def test_html_report_uses_device_boot_facts_instead_of_bm_package_platform(tmp_p
     write_html_report([event], analyze_events([event]), tmp_path / "analysis_report.html", stats=stats)
 
     html = (tmp_path / "analysis_report.html").read_text(encoding="utf-8")
+    manifest = json.loads((tmp_path / "analysis_report.json").read_text(encoding="utf-8"))
     ai_context = json.loads((tmp_path / "analysis_report.ai_context.json").read_text(encoding="utf-8"))
     report_data = json.loads(html.split('<script id="report-data" type="application/json">', 1)[1].split("</script>", 1)[0])
+    assert "Устройства в архиве" in html
+    assert "Валидатор АСКП с ридером ОТИ" in html
+    assert "Package-маркеры" in html
+    assert manifest["counts"]["device_profiles"] == 1
+    assert manifest["device_profiles"][0]["device_id"] == "59757"
+    assert manifest["device_profiles"][0]["carrier"] == "АСКП"
+    assert manifest["device_profiles"][0]["carrier_source"] == "device_boot"
+    assert manifest["device_profiles"][0]["reader_type"] == "OTI"
+    assert manifest["device_profiles"][0]["reader_source"] == "device_boot"
+    assert manifest["device_profiles"][0]["package_reader_types"] == ["TT"]
+    assert ai_context["device_profiles"][0]["reader_type"] == "OTI"
+    assert ai_context["device_profiles"][0]["package_reader_types"] == ["TT"]
     assert report_data["events"][0]["reader"] == "ОТИ"
     assert report_data["events"][0]["carriers"] == ["АСКП"]
     assert report_data["meta"]["carriers"][0]["carrier"] == "АСКП"
@@ -345,11 +358,15 @@ def test_html_report_uses_bm_package_reader_as_fallback_without_device_boot(tmp_
     write_html_report([oti_event, tt_event], analyze_events([oti_event, tt_event]), tmp_path / "analysis_report.html")
 
     html = (tmp_path / "analysis_report.html").read_text(encoding="utf-8")
+    manifest = json.loads((tmp_path / "analysis_report.json").read_text(encoding="utf-8"))
     ai_context = json.loads((tmp_path / "analysis_report.ai_context.json").read_text(encoding="utf-8"))
     report_data = json.loads(html.split('<script id="report-data" type="application/json">', 1)[1].split("</script>", 1)[0])
     assert [item["reader"] for item in report_data["meta"]["readers"]] == ["ОТИ", "ТТ"]
     assert report_data["events"][0]["reader"] == "ОТИ"
     assert report_data["events"][1]["reader"] == "ТТ"
+    assert manifest["counts"]["device_profiles"] == 0
+    assert "device_profiles" not in manifest["stable_sections"]
+    assert ai_context["device_profiles"] == []
     assert ai_context["summary"]["physical_reader_types"] == {}
     assert ai_context["summary"]["package_reader_types"] == {"OTI": 1, "TT": 1}
 

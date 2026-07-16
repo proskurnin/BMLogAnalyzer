@@ -162,7 +162,7 @@ class DeviceBootSpeedCollector:
         if timestamp and session.base_date is None:
             session.base_date = timestamp.date()
 
-        _observe_metadata(session, line)
+        _observe_metadata(session, source_file, line_number, timestamp, line)
         self._observe_validator_marker(source_file, line_number, timestamp, line)
         self._observe_bm_marker(source_file, line_number, timestamp, line)
         self._observe_info_context(source_file, line_number, timestamp, line)
@@ -299,15 +299,38 @@ class DeviceBootSpeedCollector:
                     break
 
 
-def _observe_metadata(session: _BootSession, line: str) -> None:
+def _observe_metadata(
+    session: _BootSession,
+    source_file: str,
+    line_number: int,
+    timestamp: datetime | None,
+    line: str,
+) -> None:
     if match := VERSION_RE.search(line):
-        session.version_parts[match.group("part").lower()] = match.group("value")
+        part = match.group("part").lower()
+        session.version_parts[part] = match.group("value")
+        session.events.setdefault(
+            f"version_{part}",
+            DeviceBootEvidence(source_file, line_number, timestamp, f"version_{part}", line.rstrip("\n")),
+        )
     if match := SERIAL_RE.search(line):
         session.serial = session.serial or match.group("value")
+        session.events.setdefault(
+            "serial",
+            DeviceBootEvidence(source_file, line_number, timestamp, "serial", line.rstrip("\n")),
+        )
     if match := ROUTE_RE.search(line):
         session.route = session.route or match.group("value")
+        session.events.setdefault(
+            "route",
+            DeviceBootEvidence(source_file, line_number, timestamp, "route", line.rstrip("\n")),
+        )
     if match := READER_TYPE_RE.search(line):
         session.reader_type = match.group("value").upper()
+        session.events.setdefault(
+            "reader_type",
+            DeviceBootEvidence(source_file, line_number, timestamp, "reader type", line.rstrip("\n")),
+        )
 
 
 def _is_boot_relevant_line(line: str) -> bool:
@@ -420,7 +443,7 @@ def _build_segments(session: _BootSession) -> list[DeviceBootSegment]:
             "Активация справочников и загрузка настроек устройства.",
             "validator_started",
             "settings_ok",
-            ["activate_references", "settings_ok"],
+            ["validator_started", "version_major", "version_middle", "version_minor", "version_build", "serial", "route", "activate_references", "settings_ok"],
         ),
         _segment(
             session,
@@ -428,7 +451,7 @@ def _build_segments(session: _BootSession) -> list[DeviceBootSegment]:
             "Подключение socket и старт ридера.",
             "settings_ok",
             "reader_start_end",
-            ["socket_error", "socket_connected", "reader_open_success", "reader_start_end"],
+            ["reader_type", "socket_error", "socket_connected", "reader_open_success", "reader_start_end"],
         ),
         _segment(
             session,

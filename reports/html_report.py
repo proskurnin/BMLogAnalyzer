@@ -17,6 +17,7 @@ from analytics.device_boot_diagnostics import (
     diagnose_device_boot,
     diagnose_device_boot_report,
 )
+from analytics.device_profiles import DeviceProfile, DeviceProfileEvidence, build_device_profiles
 from analytics.protocol_scenarios import load_protocol_scenarios, run_protocol_scenarios
 from analytics.suspicious import suspicious_line_payloads
 from core.contracts import REPORT_MANIFEST_SCHEMA_VERSION
@@ -143,6 +144,7 @@ def render_html_report(
     card_reading_reports = stats.card_reading_reports if stats else []
     validator_info_chain_reports = stats.validator_info_chain_reports if stats else []
     nbs_startup_reports = stats.nbs_startup_reports if stats else []
+    device_profiles = build_device_profiles(events, device_boot_reports)
     report_carriers = _report_carriers_from_device_boot(device_boot_reports)
     reader_device_profiles = _reader_device_profiles(events, device_boot_reports)
     event_reader_overrides = _event_reader_overrides(reader_device_profiles)
@@ -247,6 +249,7 @@ def render_html_report(
             _section_source_text(section_sources, "log_files"),
             _section_source_text(section_sources, "other_files"),
         ),
+        _device_profiles_section(device_profiles, _section_source_text(section_sources, "device_profiles")),
         '<section class="section">',
         f'<div class="summary-grid">{summary_cards}</div>',
         "</section>",
@@ -278,6 +281,7 @@ def render_html_report(
             _device_boot_speed_section(
                 device_boot_reports,
                 _section_source_text(section_sources, "device_boot_speed"),
+                device_profiles=device_profiles,
                 thresholds=device_boot_thresholds,
             ),
             _validator_info_chains_section(
@@ -287,10 +291,12 @@ def render_html_report(
             _nbs_startup_section(
                 nbs_startup_reports,
                 _section_source_text(section_sources, "nbs_startup"),
+                device_profiles=device_profiles,
             ),
             _card_reading_speed_section(
                 card_reading_reports,
                 _section_source_text(section_sources, "card_reading_speed"),
+                device_profiles=device_profiles,
             ),
             _bm_status_section(
                 events,
@@ -357,6 +363,7 @@ def render_html_report_manifest(
     card_reading_reports = stats.card_reading_reports if stats else []
     validator_info_chain_reports = stats.validator_info_chain_reports if stats else []
     nbs_startup_reports = stats.nbs_startup_reports if stats else []
+    device_profiles = build_device_profiles(events, device_boot_reports)
     suspicious_rows = suspicious_line_payloads(events)
     check_cases = [check for check in load_check_cases() if check.enabled]
     check_results = run_builtin_checks(events, checks=check_cases)
@@ -374,6 +381,9 @@ def render_html_report_manifest(
         stable_sections.insert(2, "log_files")
     if input_source_summaries:
         stable_sections.insert(1, "upload_composition")
+    if device_profiles:
+        insert_at = stable_sections.index("bm_meta")
+        stable_sections.insert(insert_at, "device_profiles")
     if other_total:
         insert_at = stable_sections.index("log_files") + 1 if visible_log_total else stable_sections.index("bm_meta") + 1
         stable_sections.insert(insert_at, "other_files")
@@ -426,6 +436,7 @@ def render_html_report_manifest(
             "validation_checks",
             "protocol_scenarios",
             "protocol_scenario_results",
+            "device_profiles",
             "device_boot_speed",
             "validator_info_chains",
             "nbs_startup",
@@ -455,6 +466,7 @@ def render_html_report_manifest(
             "validator_info_chain_reports": len(validator_info_chain_reports),
             "nbs_startup_reports": len(nbs_startup_reports),
             "card_reading_reports": len(card_reading_reports),
+            "device_profiles": len(device_profiles),
             "input_sources": len(input_source_summaries),
         },
         "sections": stable_sections,
@@ -468,13 +480,14 @@ def render_html_report_manifest(
         "validation_check_catalog": [_check_case_payload(item) for item in check_cases],
         "validation_checks": [_check_result_payload(item) for item in check_results],
         "protocol_scenario_results": [_protocol_scenario_result_payload(item) for item in protocol_results],
+        "device_profiles": [_device_profile_payload(item) for item in device_profiles],
         "device_boot_speed": [
-            _device_boot_report_payload(item, diagnostics=diagnostics)
+            _device_boot_report_payload(item, diagnostics=diagnostics, device_profiles=device_profiles)
             for item, diagnostics in _device_boot_reports_with_diagnostics(device_boot_reports, device_boot_thresholds)
         ],
         "validator_info_chains": [_validator_info_chain_payload(item) for item in validator_info_chain_reports],
-        "nbs_startup": [_nbs_startup_report_payload(item) for item in nbs_startup_reports],
-        "card_reading_speed": [_card_reading_report_payload(item) for item in card_reading_reports],
+        "nbs_startup": [_nbs_startup_report_payload(item, device_profiles=device_profiles) for item in nbs_startup_reports],
+        "card_reading_speed": [_card_reading_report_payload(item, device_profiles=device_profiles) for item in card_reading_reports],
         "section_sources": section_sources,
         "pipeline_steps": [_pipeline_step_payload(item) for item in (stats.steps if stats else [])],
         "extraction_archives": [_extraction_archive_payload(item) for item in (stats.extraction_archive_stats if stats else [])],
@@ -758,6 +771,7 @@ def _section_source_matrix(section_sources: dict[str, dict[str, object]]) -> str
 def _section_source_matrix_order() -> list[str]:
     return [
         "bm_meta",
+        "device_profiles",
         "validation_checks",
         "suspicious",
         "protocol_scenarios",
@@ -866,6 +880,175 @@ def _input_source_summary_payload(item: InputSourceSummary) -> dict[str, object]
         "analyzed_file_count": item.analyzed_file_count,
         "skipped_file_count": item.skipped_file_count,
         "skipped_reasons": item.skipped_reasons,
+    }
+
+
+def _device_profiles_section(profiles: list[DeviceProfile], source_note: str = "") -> str:
+    if not profiles:
+        return ""
+    rows = []
+    for profile in profiles:
+        rows.append(
+            '<tr class="status-row">'
+            f"<td><strong>{escape(_device_profile_title(profile))}</strong><br><span class=\"muted\">ID: {escape(profile.device_id)}</span></td>"
+            f"<td>{escape(_device_profile_value(profile.carrier))}<br><span class=\"muted\">{escape(_device_profile_source_label(profile.carrier_source))}</span></td>"
+            f"<td>{escape(_reader_type_label(profile.reader_type))}<br><span class=\"muted\">{escape(_device_profile_source_label(profile.reader_source))}</span></td>"
+            f"<td>{escape(_join_or_missing(profile.package_reader_types))}</td>"
+            f"<td>{escape(_join_or_missing(profile.validator_versions))}</td>"
+            f"<td>{escape(_join_or_missing(profile.bm_versions))}</td>"
+            f"<td>{escape(_join_or_missing(profile.routes))}</td>"
+            f"<td>{profile.boot_report_count}</td>"
+            f"<td>{profile.payment_event_count}</td>"
+            f"<td>{_device_profile_evidence_html(profile.evidence)}</td>"
+            "</tr>"
+        )
+    summary = _device_profiles_summary(profiles)
+    return "\n".join(
+        [
+            '<details class="collapsible collapsible--device-profiles" open>',
+            "<summary>",
+            "<span>",
+            "<strong>Устройства в архиве</strong>",
+            f"<em>{escape(summary)} {escape(source_note)}</em>",
+            "</span>",
+            "</summary>",
+            '<div class="collapsible-body">',
+            '<div class="table-wrap">',
+            '<table class="status-table status-table--device-profiles">',
+            '<colgroup><col style="width:18%"><col style="width:11%"><col style="width:11%"><col style="width:10%"><col style="width:10%"><col style="width:10%"><col style="width:8%"><col style="width:7%"><col style="width:7%"><col style="width:18%"></colgroup>',
+            "<thead class=\"status-table-head\"><tr>"
+            "<th>Устройство</th><th>Перевозчик</th><th>Ридер устройства</th><th>Package-маркеры</th>"
+            "<th>ПО валидатора</th><th>Версия БМ</th><th>Маршрут</th><th>Запусков</th><th>BM событий</th><th>Evidence</th>"
+            "</tr></thead>",
+            f"<tbody>{''.join(rows)}</tbody>",
+            "</table>",
+            "</div>",
+            "</div>",
+            "</details>",
+        ]
+    )
+
+
+def _device_context_for_boot_report(report: DeviceBootReport, profiles: list[DeviceProfile]) -> dict[str, object]:
+    for profile in profiles:
+        if report.validator_serial and profile.device_id == report.validator_serial:
+            return _device_context_payload(profile, "confirmed")
+    return _unconfirmed_device_context()
+
+
+def _device_context_for_sources(source_files: list[str], profiles: list[DeviceProfile]) -> dict[str, object]:
+    source_set = set(source_files)
+    for profile in profiles:
+        if source_set.intersection(profile.source_files):
+            return _device_context_payload(profile, "confirmed")
+    if len(profiles) == 1:
+        return _device_context_payload(profiles[0], "single_confirmed_device")
+    return _unconfirmed_device_context()
+
+
+def _device_context_payload(profile: DeviceProfile, status: str) -> dict[str, object]:
+    return {
+        "status": status,
+        "device_id": profile.device_id,
+        "title": _device_profile_title(profile),
+        "carrier": profile.carrier,
+        "carrier_source": profile.carrier_source,
+        "reader_type": profile.reader_type,
+        "reader_source": profile.reader_source,
+        "source_files": profile.source_files,
+    }
+
+
+def _unconfirmed_device_context() -> dict[str, object]:
+    return {
+        "status": "unconfirmed",
+        "device_id": "",
+        "title": "Устройство не подтверждено логами запуска",
+        "carrier": None,
+        "carrier_source": "missing",
+        "reader_type": None,
+        "reader_source": "missing",
+        "source_files": [],
+    }
+
+
+def _device_context_title(context: dict[str, object]) -> str:
+    return str(context.get("title") or "Устройство не подтверждено логами запуска")
+
+
+def _device_profiles_summary(profiles: list[DeviceProfile]) -> str:
+    confirmed_readers = sum(1 for profile in profiles if profile.reader_source == "device_boot")
+    confirmed_carriers = sum(1 for profile in profiles if profile.carrier_source == "device_boot")
+    return f"Устройств: {len(profiles)}. Перевозчик подтверждён: {confirmed_carriers}. Ридер подтверждён: {confirmed_readers}."
+
+
+def _device_profile_title(profile: DeviceProfile) -> str:
+    carrier = profile.carrier or "перевозчик не определён"
+    if not profile.reader_type:
+        return f"Валидатор {carrier}; ридер не подтверждён"
+    reader = _reader_type_label(profile.reader_type)
+    return f"Валидатор {carrier} с ридером {reader}"
+
+
+def _device_profile_value(value: str | None) -> str:
+    return value or "не определён"
+
+
+def _reader_type_label(value: str | None) -> str:
+    return {"OTI": "ОТИ", "TT": "ТТ"}.get(value or "", value or "не подтверждён")
+
+
+def _device_profile_source_label(source: str) -> str:
+    if source == "device_boot":
+        return "подтверждено логами запуска"
+    if source == "conflict":
+        return "конфликт фактов"
+    return "нет подтверждения"
+
+
+def _join_or_missing(values: list[str]) -> str:
+    return ", ".join(values) if values else "не найдено"
+
+
+def _device_profile_evidence_html(rows: list[DeviceProfileEvidence]) -> str:
+    if not rows:
+        return '<span class="muted">evidence не найден</span>'
+    return "<br>".join(f"<code>{escape(_device_profile_evidence_line(item))}</code>" for item in rows[:5])
+
+
+def _device_profile_evidence_line(item: DeviceProfileEvidence) -> str:
+    line = f"{item.source_file}:{item.line_number or ''}".rstrip(":")
+    timestamp = item.timestamp.isoformat(sep=" ") if item.timestamp else ""
+    prefix = f"{line} {timestamp} {item.label}".strip()
+    return f"{prefix}: {item.raw_line}"
+
+
+def _device_profile_payload(profile: DeviceProfile) -> dict[str, object]:
+    return {
+        "device_id": profile.device_id,
+        "title": _device_profile_title(profile),
+        "carrier": profile.carrier,
+        "carrier_source": profile.carrier_source,
+        "reader_type": profile.reader_type,
+        "reader_source": profile.reader_source,
+        "validator_versions": profile.validator_versions,
+        "bm_versions": profile.bm_versions,
+        "routes": profile.routes,
+        "package_reader_types": profile.package_reader_types,
+        "source_files": profile.source_files,
+        "boot_report_count": profile.boot_report_count,
+        "payment_event_count": profile.payment_event_count,
+        "evidence": [_device_profile_evidence_payload(item) for item in profile.evidence],
+    }
+
+
+def _device_profile_evidence_payload(item: DeviceProfileEvidence) -> dict[str, object]:
+    return {
+        "source_file": item.source_file,
+        "line_number": item.line_number,
+        "timestamp": item.timestamp.isoformat(sep=" ") if item.timestamp else None,
+        "label": item.label,
+        "raw_line": item.raw_line,
     }
 
 
@@ -1551,14 +1734,17 @@ def _device_boot_speed_section(
     reports: list[DeviceBootReport],
     source_note: str = "",
     *,
+    device_profiles: list[DeviceProfile] | None = None,
     thresholds: DeviceBootDiagnosticThresholds | None = None,
 ) -> str:
     if not reports:
         return ""
     diagnostics_by_report = diagnose_device_boot(reports, thresholds=thresholds)
     rendered_reports = []
+    profiles = device_profiles or []
     for index, report in enumerate(reports, start=1):
         report_diagnostics = diagnostics_by_report.get(_device_boot_report_key(report), [])
+        device_context = _device_context_for_boot_report(report, profiles)
         rendered_reports.append(
             "\n".join(
                 [
@@ -1570,7 +1756,7 @@ def _device_boot_speed_section(
                     "</span>",
                     "</summary>",
                     '<div class="collapsible-body">',
-                    _device_boot_report_head(report),
+                    _device_boot_report_head(report, device_context),
                     _device_boot_diagnostics_table(report_diagnostics),
                     _device_boot_segment_table(report.segments),
                     _device_boot_text_report_block(report, index),
@@ -1593,7 +1779,7 @@ def _device_boot_speed_section(
             _device_boot_summary_cards(reports),
             _device_boot_overview_chart(reports),
             _device_boot_slowest_segments(reports),
-            _device_boot_diagnostics_overview(reports, diagnostics_by_report),
+            _device_boot_diagnostics_overview(reports, diagnostics_by_report, profiles),
             "".join(rendered_reports),
             "</div>",
             "</details>",
@@ -1601,8 +1787,10 @@ def _device_boot_speed_section(
     )
 
 
-def _device_boot_report_head(report: DeviceBootReport) -> str:
+def _device_boot_report_head(report: DeviceBootReport, device_context: dict[str, object] | None = None) -> str:
+    context = device_context or _unconfirmed_device_context()
     facts = [
+        ("Устройство", _device_context_title(context)),
         ("АСКП", report.validator_version or "не найдено"),
         ("БМ", report.bm_version or "не найдено"),
         ("Ридер", report.reader_type or "не найдено"),
@@ -1858,10 +2046,13 @@ def _device_boot_report_payload(
     report: DeviceBootReport,
     *,
     diagnostics: list[DeviceBootDiagnostic] | None = None,
+    device_profiles: list[DeviceProfile] | None = None,
 ) -> dict[str, object]:
     resolved_diagnostics = diagnostics if diagnostics is not None else diagnose_device_boot_report(report)
+    device_context = _device_context_for_boot_report(report, device_profiles or [])
     return {
         "title": report.title,
+        "device_context": device_context,
         "validator_serial": report.validator_serial,
         "route": report.route,
         "validator_version": report.validator_version,
@@ -1881,13 +2072,17 @@ def _device_boot_report_payload(
 def _device_boot_diagnostics_overview(
     reports: list[DeviceBootReport],
     diagnostics_by_report: dict[str, list[DeviceBootDiagnostic]],
+    device_profiles: list[DeviceProfile] | None = None,
 ) -> str:
     rows = []
+    profiles = device_profiles or []
     for report in reports:
+        device_context = _device_context_for_boot_report(report, profiles)
         for diagnostic in diagnostics_by_report.get(_device_boot_report_key(report), []):
             rows.append(
                 '<tr class="status-row">'
                 f"<td>{escape(_device_boot_short_title(report))}</td>"
+                f"<td>{escape(_device_context_title(device_context))}</td>"
                 f"<td><strong>{escape(diagnostic.title)}</strong><br><span class=\"muted\">{escape(diagnostic.severity)}</span></td>"
                 f"<td>{escape(_format_duration(diagnostic.duration_seconds))}</td>"
                 f"<td>{escape(diagnostic.fact)}</td>"
@@ -1903,8 +2098,8 @@ def _device_boot_diagnostics_overview(
             comparisons,
             '<div class="table-wrap">',
             '<table class="status-table status-table--device-boot-diagnostics">',
-            '<colgroup><col style="width:18%"><col style="width:22%"><col style="width:12%"><col style="width:48%"></colgroup>',
-            '<thead class="status-table-head"><tr><th>Запуск</th><th>Вывод</th><th>Длительность</th><th>Факт из логов</th></tr></thead>',
+            '<colgroup><col style="width:16%"><col style="width:20%"><col style="width:20%"><col style="width:12%"><col style="width:32%"></colgroup>',
+            '<thead class="status-table-head"><tr><th>Запуск</th><th>Устройство</th><th>Вывод</th><th>Длительность</th><th>Факт из логов</th></tr></thead>',
             f"<tbody>{''.join(rows)}</tbody>",
             "</table>",
             "</div>",
@@ -2220,12 +2415,19 @@ def _validator_info_chain_evidence_short_line(evidence: ValidatorInfoChainEviden
     return f"{evidence.source_file}:{evidence.line_number} [{timestamp}] {evidence.raw_line}"
 
 
-def _nbs_startup_section(reports: list[NbsStartupReport], source_note: str = "") -> str:
+def _nbs_startup_section(
+    reports: list[NbsStartupReport],
+    source_note: str = "",
+    *,
+    device_profiles: list[DeviceProfile] | None = None,
+) -> str:
     if not reports:
         return ""
     rendered_reports = []
+    profiles = device_profiles or []
     for index, report in enumerate(reports[:20], start=1):
         bm_info_evidence = report.bm_info_correlation.evidence if report.bm_info_correlation else []
+        device_context = _device_context_for_sources([report.source_file], profiles)
         rendered_reports.append(
             "\n".join(
                 [
@@ -2237,7 +2439,7 @@ def _nbs_startup_section(reports: list[NbsStartupReport], source_note: str = "")
                     "</span>",
                     "</summary>",
                     '<div class="collapsible-body">',
-                    _nbs_startup_report_head(report),
+                    _nbs_startup_report_head(report, device_context),
                     _nbs_startup_segment_table(report.segments),
                     _nbs_startup_evidence_table(report.evidence, title="Ключевые строки ПО валидатора"),
                     _nbs_startup_evidence_table(bm_info_evidence, title="Сопоставленные строки BM Info"),
@@ -2263,7 +2465,7 @@ def _nbs_startup_section(reports: list[NbsStartupReport], source_note: str = "")
             "</summary>",
             '<div class="collapsible-body">',
             _nbs_startup_summary_cards(reports),
-            _nbs_startup_overview_table(reports),
+            _nbs_startup_overview_table(reports, profiles),
             _nbs_startup_phase_comparison(reports),
             "".join(rendered_reports),
             "</div>",
@@ -2297,13 +2499,16 @@ def _nbs_startup_summary_cards(reports: list[NbsStartupReport]) -> str:
     return f'<div class="device-boot-facts device-boot-facts--summary">{cards}</div>'
 
 
-def _nbs_startup_overview_table(reports: list[NbsStartupReport]) -> str:
+def _nbs_startup_overview_table(reports: list[NbsStartupReport], device_profiles: list[DeviceProfile] | None = None) -> str:
     rows = []
+    profiles = device_profiles or []
     for report in reports[:12]:
         correlation = report.bm_info_correlation
+        device_context = _device_context_for_sources([report.source_file], profiles)
         rows.append(
             '<tr class="status-row">'
             f"<td>{escape(_nbs_startup_classification_label(report))}</td>"
+            f"<td>{escape(_device_context_title(device_context))}</td>"
             f"<td>{escape(report.reader_type or 'не найдено')}</td>"
             f"<td>{escape(_format_datetime(report.mode_validate_at))}</td>"
             f"<td>{escape(_format_duration(report.mode_validate_to_qr_seconds))}</td>"
@@ -2321,8 +2526,8 @@ def _nbs_startup_overview_table(reports: list[NbsStartupReport]) -> str:
             "<h3>Самые долгие выходы НБС в работу</h3>",
             '<div class="table-wrap">',
             '<table class="status-table status-table--nbs-startup">',
-            '<colgroup><col style="width:11%"><col style="width:7%"><col style="width:13%"><col style="width:11%"><col style="width:10%"><col style="width:10%"><col style="width:8%"><col style="width:9%"><col style="width:10%"><col style="width:11%"></colgroup>',
-            '<thead class="status-table-head"><tr><th>Класс</th><th>Ридер</th><th>MODE::VALIDATE</th><th>До QR</th><th>До Info</th><th>BM resp -> QR</th><th>Ошибки Info</th><th>Загрузки стоп-листов</th><th>Поиск стоп-листов</th><th>Источник</th></tr></thead>',
+            '<colgroup><col style="width:9%"><col style="width:17%"><col style="width:7%"><col style="width:12%"><col style="width:10%"><col style="width:9%"><col style="width:9%"><col style="width:7%"><col style="width:8%"><col style="width:9%"><col style="width:10%"></colgroup>',
+            '<thead class="status-table-head"><tr><th>Класс</th><th>Устройство</th><th>Ридер</th><th>MODE::VALIDATE</th><th>До QR</th><th>До Info</th><th>BM resp -> QR</th><th>Ошибки Info</th><th>Загрузки стоп-листов</th><th>Поиск стоп-листов</th><th>Источник</th></tr></thead>',
             f"<tbody>{''.join(rows)}</tbody>",
             "</table>",
             "</div>",
@@ -2376,8 +2581,10 @@ def _nbs_startup_phase_comparison(reports: list[NbsStartupReport]) -> str:
     )
 
 
-def _nbs_startup_report_head(report: NbsStartupReport) -> str:
+def _nbs_startup_report_head(report: NbsStartupReport, device_context: dict[str, object] | None = None) -> str:
+    context = device_context or _unconfirmed_device_context()
     facts = [
+        ("Устройство", _device_context_title(context)),
         ("Ридер", report.reader_type or "не найдено"),
         ("Log started", _format_datetime(report.started_at)),
         ("MODE::VALIDATE", _format_datetime(report.mode_validate_at)),
@@ -2564,9 +2771,15 @@ def _nbs_startup_text_report(report: NbsStartupReport) -> str:
     return "\n".join(lines)
 
 
-def _nbs_startup_report_payload(report: NbsStartupReport) -> dict[str, object]:
+def _nbs_startup_report_payload(
+    report: NbsStartupReport,
+    *,
+    device_profiles: list[DeviceProfile] | None = None,
+) -> dict[str, object]:
+    device_context = _device_context_for_sources([report.source_file], device_profiles or [])
     return {
         "title": report.title,
+        "device_context": device_context,
         "reader_type": report.reader_type,
         "started_at": report.started_at.isoformat(sep=" ") if report.started_at else None,
         "mode_validate_at": report.mode_validate_at.isoformat(sep=" ") if report.mode_validate_at else None,
@@ -2718,11 +2931,18 @@ def _nbs_startup_evidence_short_line(evidence: NbsStartupEvidence) -> str:
     return f"{evidence.source_file}:{evidence.line_number} [{timestamp}] {evidence.raw_line}"
 
 
-def _card_reading_speed_section(reports: list[CardReadingReport], source_note: str = "") -> str:
+def _card_reading_speed_section(
+    reports: list[CardReadingReport],
+    source_note: str = "",
+    *,
+    device_profiles: list[DeviceProfile] | None = None,
+) -> str:
     if not reports:
         return ""
     rendered_reports = []
+    profiles = device_profiles or []
     for index, report in enumerate(reports, start=1):
+        device_context = _device_context_for_sources(report.source_files, profiles)
         rendered_reports.append(
             "\n".join(
                 [
@@ -2734,7 +2954,7 @@ def _card_reading_speed_section(reports: list[CardReadingReport], source_note: s
                     "</span>",
                     "</summary>",
                     '<div class="collapsible-body">',
-                    _card_reading_report_head(report),
+                    _card_reading_report_head(report, device_context),
                     _card_reading_component_table(report.components),
                     _card_reading_evidence_table(report.evidence),
                     _card_reading_text_report_block(report, index),
@@ -2755,7 +2975,7 @@ def _card_reading_speed_section(reports: list[CardReadingReport], source_note: s
             "</summary>",
             '<div class="collapsible-body">',
             _card_reading_summary_cards(reports),
-            _card_reading_overview_table(reports),
+            _card_reading_overview_table(reports, profiles),
             "".join(rendered_reports),
             "</div>",
             "</details>",
@@ -2763,8 +2983,10 @@ def _card_reading_speed_section(reports: list[CardReadingReport], source_note: s
     )
 
 
-def _card_reading_report_head(report: CardReadingReport) -> str:
+def _card_reading_report_head(report: CardReadingReport, device_context: dict[str, object] | None = None) -> str:
+    context = device_context or _unconfirmed_device_context()
     facts = [
+        ("Устройство", _device_context_title(context)),
         ("Ридер", report.reader_type or "не найдено"),
         ("Карта", report.card_id or "не найдено"),
         ("Начало", _format_datetime(report.started_at)),
@@ -2814,11 +3036,14 @@ def _card_reading_summary_cards(reports: list[CardReadingReport]) -> str:
     return f'<div class="device-boot-facts device-boot-facts--summary">{cards}</div>'
 
 
-def _card_reading_overview_table(reports: list[CardReadingReport]) -> str:
+def _card_reading_overview_table(reports: list[CardReadingReport], device_profiles: list[DeviceProfile] | None = None) -> str:
     rows = []
+    profiles = device_profiles or []
     for report in sorted(reports, key=lambda item: item.total_seconds or 0, reverse=True)[:12]:
+        device_context = _device_context_for_sources(report.source_files, profiles)
         rows.append(
             '<tr class="status-row">'
+            f"<td>{escape(_device_context_title(device_context))}</td>"
             f"<td>{escape(report.reader_type or 'не найдено')}</td>"
             f"<td>{escape(_format_datetime(report.started_at))}</td>"
             f"<td>{escape(report.card_id or 'не найдено')}</td>"
@@ -2832,8 +3057,8 @@ def _card_reading_overview_table(reports: list[CardReadingReport]) -> str:
             "<h3>Самые долгие кейсы</h3>",
             '<div class="table-wrap">',
             '<table class="status-table status-table--card-reading-overview">',
-            '<colgroup><col style="width:10%"><col style="width:18%"><col style="width:20%"><col style="width:14%"><col style="width:38%"></colgroup>',
-            '<thead class="status-table-head"><tr><th>Ридер</th><th>Начало</th><th>Карта</th><th>Время</th><th>Результат</th></tr></thead>',
+            '<colgroup><col style="width:22%"><col style="width:10%"><col style="width:16%"><col style="width:18%"><col style="width:12%"><col style="width:22%"></colgroup>',
+            '<thead class="status-table-head"><tr><th>Устройство</th><th>Ридер</th><th>Начало</th><th>Карта</th><th>Время</th><th>Результат</th></tr></thead>',
             f"<tbody>{''.join(rows)}</tbody>",
             "</table>",
             "</div>",
@@ -2934,8 +3159,14 @@ def _card_reading_text_report(report: CardReadingReport) -> str:
     return "\n".join(lines).strip()
 
 
-def _card_reading_report_payload(report: CardReadingReport) -> dict[str, object]:
+def _card_reading_report_payload(
+    report: CardReadingReport,
+    *,
+    device_profiles: list[DeviceProfile] | None = None,
+) -> dict[str, object]:
+    device_context = _device_context_for_sources(report.source_files, device_profiles or [])
     return {
+        "device_context": device_context,
         "reader_type": report.reader_type,
         "card_id": report.card_id,
         "started_at": report.started_at.isoformat(sep=" ") if report.started_at else None,
