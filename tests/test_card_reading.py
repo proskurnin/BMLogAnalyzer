@@ -57,7 +57,10 @@ def test_pipeline_builds_slow_card_reading_report(tmp_path):
     assert "Долгое чтение и валидация карт" in html
     assert "Кейсов дольше 3 сек: 1" in html
     assert "ЛИБА vil_api/libcore" in html
+    assert "Подтверждение устройств" in html
+    assert "Группировка чтения карт по устройствам" in html
     assert "card_reading_speed" in manifest["stable_sections"]
+    assert manifest["counts"]["device_confirmation_diagnostics"] == 1
     assert manifest["card_reading_speed"][0]["device_context"]["status"] == "unconfirmed"
     assert manifest["card_reading_speed"][0]["device_context"]["title"] == "Устройство не подтверждено логами запуска"
     assert manifest["card_reading_speed"][0]["card_id"] == "1581273837315100"

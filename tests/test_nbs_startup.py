@@ -104,10 +104,15 @@ def test_pipeline_builds_nbs_startup_report(tmp_path):
     assert "Send Commands::info failed до первого QR: 1." in html
     assert "InfoWithTimeout до первого QR: 1." in html
     assert "BM Info корреляция: сопоставлен." in html
+    assert "Подтверждение устройств" in html
+    assert "Устройства не подтверждены логами запуска" in html
+    assert "Группировка НБС по устройствам" in html
     assert "StopListDb/References_nbs_slm count/min/max/avg/median/p90/p95" in html
     assert "nbs_startup" in manifest["stable_fields"]
     assert "nbs_startup" in manifest["stable_sections"]
     assert manifest["counts"]["nbs_startup_reports"] == 1
+    assert manifest["counts"]["device_confirmation_diagnostics"] == 1
+    assert manifest["device_confirmation_diagnostics"][0]["status"] == "unconfirmed"
     assert manifest["nbs_startup"][0]["mode_validate_to_qr_seconds"] == 128.123
     assert manifest["nbs_startup"][0]["classification"] == "problem"
     assert manifest["nbs_startup"][0]["session_phase"] == "after_log_started"

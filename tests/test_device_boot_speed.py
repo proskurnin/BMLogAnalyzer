@@ -106,6 +106,7 @@ def test_pipeline_builds_device_boot_speed_report(tmp_path):
     assert "UpdateSuccess: true" in html
     assert "Время запусков" in html
     assert "Самые долгие этапы" in html
+    assert "Группировка запусков по устройствам" in html
     assert "Выводы по долгим запускам" in html
     assert "По ридеру" in html
     assert "По ПО валидатора" in html
@@ -127,6 +128,8 @@ def test_pipeline_builds_device_boot_speed_report(tmp_path):
     assert manifest["device_boot_speed"][0]["device_context"]["status"] == "confirmed"
     assert manifest["device_boot_speed"][0]["device_context"]["device_id"] == "59757"
     assert manifest["device_boot_speed"][0]["device_context"]["title"] == "Валидатор АСКП с ридером ОТИ"
+    assert manifest["device_boot_speed_device_groups"][0]["device_id"] == "59757"
+    assert manifest["device_boot_speed_device_groups"][0]["status"] == "confirmed"
     assert [item["diagnostic_id"] for item in manifest["device_boot_speed"][0]["diagnostics"]] == [
         "long_qr_search",
         "fixed_bm_wait",

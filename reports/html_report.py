@@ -145,6 +145,14 @@ def render_html_report(
     validator_info_chain_reports = stats.validator_info_chain_reports if stats else []
     nbs_startup_reports = stats.nbs_startup_reports if stats else []
     device_profiles = build_device_profiles(events, device_boot_reports)
+    device_confirmation_diagnostics = _device_confirmation_diagnostics(
+        events,
+        device_profiles,
+        device_boot_reports,
+        nbs_startup_reports,
+        card_reading_reports,
+        input_source_summaries,
+    )
     report_carriers = _report_carriers_from_device_boot(device_boot_reports)
     reader_device_profiles = _reader_device_profiles(events, device_boot_reports)
     event_reader_overrides = _event_reader_overrides(reader_device_profiles)
@@ -183,6 +191,7 @@ def render_html_report(
         protocol_results=protocol_results,
         validator_info_chain_reports=validator_info_chain_reports,
         nbs_startup_reports=nbs_startup_reports,
+        device_profiles=device_profiles,
         report_carriers=report_carriers,
         event_reader_overrides=event_reader_overrides,
     )
@@ -250,6 +259,10 @@ def render_html_report(
             _section_source_text(section_sources, "other_files"),
         ),
         _device_profiles_section(device_profiles, _section_source_text(section_sources, "device_profiles")),
+        _device_confirmation_diagnostics_section(
+            device_confirmation_diagnostics,
+            _section_source_text(section_sources, "device_confirmation_diagnostics"),
+        ),
         '<section class="section">',
         f'<div class="summary-grid">{summary_cards}</div>',
         "</section>",
@@ -364,6 +377,13 @@ def render_html_report_manifest(
     validator_info_chain_reports = stats.validator_info_chain_reports if stats else []
     nbs_startup_reports = stats.nbs_startup_reports if stats else []
     device_profiles = build_device_profiles(events, device_boot_reports)
+    device_confirmation_diagnostics = _device_confirmation_diagnostics(
+        events,
+        device_profiles,
+        device_boot_reports,
+        nbs_startup_reports,
+        card_reading_reports,
+    )
     suspicious_rows = suspicious_line_payloads(events)
     check_cases = [check for check in load_check_cases() if check.enabled]
     check_results = run_builtin_checks(events, checks=check_cases)
@@ -384,6 +404,9 @@ def render_html_report_manifest(
     if device_profiles:
         insert_at = stable_sections.index("bm_meta")
         stable_sections.insert(insert_at, "device_profiles")
+    if device_confirmation_diagnostics:
+        insert_at = stable_sections.index("bm_meta")
+        stable_sections.insert(insert_at, "device_confirmation_diagnostics")
     if other_total:
         insert_at = stable_sections.index("log_files") + 1 if visible_log_total else stable_sections.index("bm_meta") + 1
         stable_sections.insert(insert_at, "other_files")
@@ -430,6 +453,7 @@ def render_html_report_manifest(
             "log_groups",
             "other_groups",
             "upload_composition",
+            "device_confirmation_diagnostics",
             "validator_sections",
             "suspicious_lines",
             "validation_check_catalog",
@@ -438,9 +462,12 @@ def render_html_report_manifest(
             "protocol_scenario_results",
             "device_profiles",
             "device_boot_speed",
+            "device_boot_speed_device_groups",
             "validator_info_chains",
             "nbs_startup",
+            "nbs_startup_device_groups",
             "card_reading_speed",
+            "card_reading_speed_device_groups",
             "section_sources",
             "pipeline_steps",
             "extraction_archives",
@@ -467,6 +494,7 @@ def render_html_report_manifest(
             "nbs_startup_reports": len(nbs_startup_reports),
             "card_reading_reports": len(card_reading_reports),
             "device_profiles": len(device_profiles),
+            "device_confirmation_diagnostics": len(device_confirmation_diagnostics),
             "input_sources": len(input_source_summaries),
         },
         "sections": stable_sections,
@@ -475,6 +503,7 @@ def render_html_report_manifest(
         "log_groups": [str(group["label"]) for group in visible_log_groups],
         "other_groups": [str(group["label"]) for group in other_groups],
         "upload_composition": [_input_source_summary_payload(item) for item in input_source_summaries],
+        "device_confirmation_diagnostics": device_confirmation_diagnostics,
         "validator_sections": [str(item["validator"]) for item in validator_sections],
         "suspicious_lines": suspicious_rows,
         "validation_check_catalog": [_check_case_payload(item) for item in check_cases],
@@ -485,9 +514,18 @@ def render_html_report_manifest(
             _device_boot_report_payload(item, diagnostics=diagnostics, device_profiles=device_profiles)
             for item, diagnostics in _device_boot_reports_with_diagnostics(device_boot_reports, device_boot_thresholds)
         ],
+        "device_boot_speed_device_groups": _device_context_group_payload(
+            [_device_context_for_boot_report(item, device_profiles) for item in device_boot_reports]
+        ),
         "validator_info_chains": [_validator_info_chain_payload(item) for item in validator_info_chain_reports],
         "nbs_startup": [_nbs_startup_report_payload(item, device_profiles=device_profiles) for item in nbs_startup_reports],
+        "nbs_startup_device_groups": _device_context_group_payload(
+            [_device_context_for_sources([item.source_file], device_profiles) for item in nbs_startup_reports]
+        ),
         "card_reading_speed": [_card_reading_report_payload(item, device_profiles=device_profiles) for item in card_reading_reports],
+        "card_reading_speed_device_groups": _device_context_group_payload(
+            [_device_context_for_sources(item.source_files, device_profiles) for item in card_reading_reports]
+        ),
         "section_sources": section_sources,
         "pipeline_steps": [_pipeline_step_payload(item) for item in (stats.steps if stats else [])],
         "extraction_archives": [_extraction_archive_payload(item) for item in (stats.extraction_archive_stats if stats else [])],
@@ -929,6 +967,81 @@ def _device_profiles_section(profiles: list[DeviceProfile], source_note: str = "
     )
 
 
+def _device_confirmation_diagnostics(
+    events: list[PaymentEvent],
+    profiles: list[DeviceProfile],
+    boot_reports: list[DeviceBootReport],
+    nbs_reports: list[NbsStartupReport],
+    card_reports: list[CardReadingReport],
+    input_items: list[InputSourceSummary] | None = None,
+) -> list[dict[str, object]]:
+    if profiles or boot_reports:
+        return []
+    has_archive_input = any(item.input_kind == "archive" for item in (input_items or []))
+    if not has_archive_input and not nbs_reports and not card_reports:
+        return []
+    package_counts: dict[str, int] = defaultdict(int)
+    for event in events:
+        if reader := _event_package_reader_type(event):
+            package_counts[reader] += 1
+    if not package_counts and not nbs_reports and not card_reports:
+        return []
+    return [
+        {
+            "diagnostic_id": "devices_not_confirmed_by_boot_logs",
+            "title": "Устройства не подтверждены логами запуска",
+            "status": "unconfirmed",
+            "fact": (
+                "В загрузке не найдено подтверждённых запусков валидатора, поэтому физические устройства "
+                "и ридеры не определяются по package-маркерам."
+            ),
+            "what_to_check": "Добавить в загрузку логи ПО валидатора с [VALIDATOR] STARTED, serial и reader type.",
+            "package_reader_types": dict(sorted(package_counts.items())),
+            "nbs_startup_reports": len(nbs_reports),
+            "card_reading_reports": len(card_reports),
+        }
+    ]
+
+
+def _device_confirmation_diagnostics_section(rows: list[dict[str, object]], source_note: str = "") -> str:
+    if not rows:
+        return ""
+    rendered_rows = []
+    for row in rows:
+        package_readers = row.get("package_reader_types") or {}
+        rendered_rows.append(
+            '<tr class="status-row status-row--check-warning">'
+            f"<td><strong>{escape(str(row.get('title') or ''))}</strong><br><span class=\"muted\">{escape(str(row.get('diagnostic_id') or ''))}</span></td>"
+            f"<td>{escape(str(row.get('fact') or ''))}</td>"
+            f"<td>{escape(_format_counter({str(key): int(value) for key, value in dict(package_readers).items()})) or 'нет'}</td>"
+            f"<td>{int(row.get('nbs_startup_reports') or 0)}</td>"
+            f"<td>{int(row.get('card_reading_reports') or 0)}</td>"
+            f"<td>{escape(str(row.get('what_to_check') or ''))}</td>"
+            "</tr>"
+        )
+    return "\n".join(
+        [
+            '<details class="collapsible collapsible--device-confirmation" open>',
+            "<summary>",
+            "<span>",
+            "<strong>Подтверждение устройств</strong>",
+            f"<em>Найдены диагностики без подтверждённых логов запуска. {escape(source_note)}</em>",
+            "</span>",
+            "</summary>",
+            '<div class="collapsible-body">',
+            '<div class="table-wrap">',
+            '<table class="status-table status-table--device-confirmation">',
+            '<colgroup><col style="width:20%"><col style="width:30%"><col style="width:14%"><col style="width:10%"><col style="width:10%"><col style="width:16%"></colgroup>',
+            '<thead class="status-table-head"><tr><th>Диагностика</th><th>Факт из отчёта</th><th>Package-маркеры</th><th>НБС</th><th>Карты</th><th>Что проверить</th></tr></thead>',
+            f"<tbody>{''.join(rendered_rows)}</tbody>",
+            "</table>",
+            "</div>",
+            "</div>",
+            "</details>",
+        ]
+    )
+
+
 def _device_context_for_boot_report(report: DeviceBootReport, profiles: list[DeviceProfile]) -> dict[str, object]:
     for profile in profiles:
         if report.validator_serial and profile.device_id == report.validator_serial:
@@ -974,6 +1087,75 @@ def _unconfirmed_device_context() -> dict[str, object]:
 
 def _device_context_title(context: dict[str, object]) -> str:
     return str(context.get("title") or "Устройство не подтверждено логами запуска")
+
+
+def _device_context_status_label(status: str) -> str:
+    if status == "confirmed":
+        return "подтверждено"
+    if status == "single_confirmed_device":
+        return "единственное подтверждённое устройство"
+    if status == "unconfirmed":
+        return "не подтверждено"
+    return status or "не подтверждено"
+
+
+def _device_context_group_table(contexts: list[dict[str, object]], *, title: str, count_label: str) -> str:
+    if not contexts:
+        return ""
+    grouped: dict[tuple[str, str, str], int] = defaultdict(int)
+    for context in contexts:
+        key = (
+            str(context.get("status") or "unconfirmed"),
+            str(context.get("device_id") or ""),
+            _device_context_title(context),
+        )
+        grouped[key] += 1
+    rows = []
+    for (status, device_id, device_title), count in sorted(grouped.items(), key=lambda item: (item[0][0], item[0][2])):
+        rows.append(
+            '<tr class="status-row">'
+            f"<td>{escape(device_title)}</td>"
+            f"<td>{escape(_device_context_status_label(status))}</td>"
+            f"<td>{escape(device_id or 'не найдено')}</td>"
+            f"<td>{count}</td>"
+            "</tr>"
+        )
+    return "\n".join(
+        [
+            '<section class="device-boot-chart">',
+            f"<h3>{escape(title)}</h3>",
+            '<div class="table-wrap">',
+            '<table class="status-table status-table--device-context-groups">',
+            '<colgroup><col style="width:42%"><col style="width:24%"><col style="width:20%"><col style="width:14%"></colgroup>',
+            f'<thead class="status-table-head"><tr><th>Устройство</th><th>Статус связи</th><th>Device id</th><th>{escape(count_label)}</th></tr></thead>',
+            f"<tbody>{''.join(rows)}</tbody>",
+            "</table>",
+            "</div>",
+            "</section>",
+        ]
+    )
+
+
+def _device_context_group_payload(contexts: list[dict[str, object]]) -> list[dict[str, object]]:
+    grouped: dict[tuple[str, str, str], int] = defaultdict(int)
+    for context in contexts:
+        grouped[
+            (
+                str(context.get("status") or "unconfirmed"),
+                str(context.get("device_id") or ""),
+                _device_context_title(context),
+            )
+        ] += 1
+    return [
+        {
+            "status": status,
+            "status_label": _device_context_status_label(status),
+            "device_id": device_id,
+            "title": title,
+            "count": count,
+        }
+        for (status, device_id, title), count in sorted(grouped.items(), key=lambda item: (item[0][0], item[0][2]))
+    ]
 
 
 def _device_profiles_summary(profiles: list[DeviceProfile]) -> str:
@@ -1742,9 +1924,11 @@ def _device_boot_speed_section(
     diagnostics_by_report = diagnose_device_boot(reports, thresholds=thresholds)
     rendered_reports = []
     profiles = device_profiles or []
+    device_contexts = []
     for index, report in enumerate(reports, start=1):
         report_diagnostics = diagnostics_by_report.get(_device_boot_report_key(report), [])
         device_context = _device_context_for_boot_report(report, profiles)
+        device_contexts.append(device_context)
         rendered_reports.append(
             "\n".join(
                 [
@@ -1777,6 +1961,7 @@ def _device_boot_speed_section(
             "</summary>",
             '<div class="collapsible-body">',
             _device_boot_summary_cards(reports),
+            _device_context_group_table(device_contexts, title="Группировка запусков по устройствам", count_label="Запусков"),
             _device_boot_overview_chart(reports),
             _device_boot_slowest_segments(reports),
             _device_boot_diagnostics_overview(reports, diagnostics_by_report, profiles),
@@ -2425,9 +2610,11 @@ def _nbs_startup_section(
         return ""
     rendered_reports = []
     profiles = device_profiles or []
+    device_contexts = []
     for index, report in enumerate(reports[:20], start=1):
         bm_info_evidence = report.bm_info_correlation.evidence if report.bm_info_correlation else []
         device_context = _device_context_for_sources([report.source_file], profiles)
+        device_contexts.append(device_context)
         rendered_reports.append(
             "\n".join(
                 [
@@ -2465,6 +2652,7 @@ def _nbs_startup_section(
             "</summary>",
             '<div class="collapsible-body">',
             _nbs_startup_summary_cards(reports),
+            _device_context_group_table(device_contexts, title="Группировка НБС по устройствам", count_label="Сценариев"),
             _nbs_startup_overview_table(reports, profiles),
             _nbs_startup_phase_comparison(reports),
             "".join(rendered_reports),
@@ -2941,8 +3129,10 @@ def _card_reading_speed_section(
         return ""
     rendered_reports = []
     profiles = device_profiles or []
+    device_contexts = []
     for index, report in enumerate(reports, start=1):
         device_context = _device_context_for_sources(report.source_files, profiles)
+        device_contexts.append(device_context)
         rendered_reports.append(
             "\n".join(
                 [
@@ -2975,6 +3165,7 @@ def _card_reading_speed_section(
             "</summary>",
             '<div class="collapsible-body">',
             _card_reading_summary_cards(reports),
+            _device_context_group_table(device_contexts, title="Группировка чтения карт по устройствам", count_label="Кейсов"),
             _card_reading_overview_table(reports, profiles),
             "".join(rendered_reports),
             "</div>",
@@ -3363,6 +3554,7 @@ def _report_data(
     protocol_results: list[object],
     validator_info_chain_reports: list[ValidatorInfoChainReport] | None = None,
     nbs_startup_reports: list[NbsStartupReport] | None = None,
+    device_profiles: list[DeviceProfile] | None = None,
     report_carriers: list[str] | None = None,
     event_reader_overrides: dict[int, str] | None = None,
 ) -> dict[str, object]:
@@ -3411,7 +3603,7 @@ def _report_data(
             for item in (validator_info_chain_reports or [])
         ],
         "nbs_startup": [
-            _nbs_startup_report_payload(item)
+            _nbs_startup_report_payload(item, device_profiles=device_profiles or [])
             for item in (nbs_startup_reports or [])
         ],
         "events": event_rows,

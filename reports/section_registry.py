@@ -20,6 +20,7 @@ SECTION_DEFINITIONS: tuple[ReportSectionDefinition, ...] = (
     ReportSectionDefinition("summary", "Сводка", data_source="сводные показатели анализа"),
     ReportSectionDefinition("upload_composition", "Состав загрузки", data_source="загруженные файлы"),
     ReportSectionDefinition("device_profiles", "Устройства в архиве", ("validator_app",)),
+    ReportSectionDefinition("device_confirmation_diagnostics", "Подтверждение устройств", data_source="device_context"),
     ReportSectionDefinition("bm_meta", "BM сведения", ("bm",)),
     ReportSectionDefinition("log_files", "Состав загрузки / Log-файлы", data_source="раздел Состав загрузки"),
     ReportSectionDefinition("other_files", "Состав загрузки / Прочие файлы", data_source="раздел Состав загрузки"),
